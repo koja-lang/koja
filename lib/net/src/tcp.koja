@@ -1,4 +1,8 @@
+alias IO.Descriptor.Interest
+alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
 alias IO.Ready as IOReady
+alias IO.Writer.Options as WriterOptions
 alias Net.Socket.Address as SocketAddress
 alias Net.Socket.Error as SocketError
 alias Net.Socket.Kind as SocketKind
@@ -15,22 +19,27 @@ establish a client connection by hostname, or `connect_addr` to connect
 to a specific `SocketAddress`. Server-side `TCPSocket` values are returned
 by `TCPListener.accept`.
 
-Connections can be secured with TLS: `connect_tls` establishes a verified
-client connection, `upgrade_tls` / `accept_tls` perform handshakes on an
-existing connection, and `read`/`write`/`close` transparently use the TLS
-session when one is active.
+Connections can be secured with TLS. `connect_tls` establishes a
+verified client connection, `upgrade_tls` and `accept_tls` perform
+handshakes on an existing connection, and the reads, writes, and
+`close` use the TLS session when one is active.
 
-`read_timeout` and `write_timeout` bound each read and write. A wait
-that passes its limit fails with `SocketError.TimedOut`. `Option.None`
-waits without limit. Set them with `with_read_timeout` and
-`with_write_timeout`, or through `TCPListener.Options` for accepted
-connections.
+Reads and writes come from the `IO.Reader` and `IO.Writer`
+conformances below, so `read` returns bytes and `read_string` and
+`read_line` decode. Connection setup (`connect*`,
+`TCPListener.accept`) fails with `SocketError`. Once connected, every
+read and write fails with `IOError | TLSError`, the `TLSError` half for
+a record the TLS layer rejected or a peer that left without a
+`close_notify`, and `close` fails with `IOError`.
+
+Every wait takes its bound per call. The reads take
+`IO.Reader.Options`, `write` takes `IO.Writer.Options`, and the TLS
+handshakes take a `timeout`. A wait that passes its limit fails with
+`IOError.TimedOut`. `Option.None` waits without limit.
 """
 struct TCPSocket
   socket: Socket
   tls: Option<TLSSession>
-  read_timeout: Option<Duration> = Option.None
-  write_timeout: Option<Duration> = Option.None
 
   @doc """
   Connects to a remote host by resolving the hostname via DNS and
@@ -42,7 +51,7 @@ struct TCPSocket
   fn connect(host: String, port: Int, timeout: Option<Duration> = Option.None)
     -> TCPSocket ! SocketError
 
-    addrs = Socket.resolve(host) rescue _ -> fail SocketError.last()
+    addrs = try Socket.resolve(host)
 
     if addrs.empty?()
       fail SocketError.NameNotFound
@@ -61,8 +70,8 @@ struct TCPSocket
   fn connect_addr(addr: SocketAddress, timeout: Option<Duration> = Option.None)
     -> TCPSocket ! SocketError
 
-    sock = Socket.create(SocketKind.Stream) rescue _ -> fail SocketError.last()
-    connected = sock.connect(addr, timeout) rescue _ -> fail SocketError.last()
+    sock = try Socket.create(SocketKind.Stream)
+    connected = try sock.connect(addr, timeout)
     TCPSocket{socket: connected, tls: Option.None}
   end
 
@@ -70,13 +79,15 @@ struct TCPSocket
   Connects to a remote host and secures the connection with a verified
   TLS handshake (certificate chain and hostname are both checked).
   Equivalent to `connect` followed by `upgrade_tls` with the default
-  client configuration. `timeout` bounds the TCP handshake only.
+  client configuration. `timeout` bounds the TCP handshake and then,
+  measured anew, the TLS handshake. Connection setup fails with
+  `SocketError`, the TLS handshake with `IOError` or `TLSError`.
   """
   fn connect_tls(
     host: String,
     port: Int,
     timeout: Option<Duration> = Option.None,
-  ) -> TCPSocket ! SocketError | TLSError
+  ) -> TCPSocket ! SocketError | IOError | TLSError
 
     try TCPSocket.connect_tls_with(host, port, TLSConfig.client(), timeout)
   end
@@ -85,61 +96,56 @@ struct TCPSocket
   Connects to a remote host and secures the connection with a TLS
   handshake using the given configuration. Use `TLSConfig.insecure()`
   to skip certificate verification (testing only). `timeout` bounds
-  the TCP handshake only.
+  the TCP handshake and then, measured anew, the TLS handshake.
   """
   fn connect_tls_with(
     host: String,
     port: Int,
     config: TLSConfig,
     timeout: Option<Duration> = Option.None,
-  ) -> TCPSocket ! SocketError | TLSError
+  ) -> TCPSocket ! SocketError | IOError | TLSError
 
     socket = try TCPSocket.connect(host, port, timeout)
-    try socket.upgrade_tls(host, config)
+    try socket.upgrade_tls(host, config, timeout)
   end
 
   @doc """
   Performs a client-side TLS handshake on an established connection.
   `hostname` is sent for SNI and checked against the server certificate
-  when verification is enabled. Returns the upgraded socket. The
-  handshake waits are bounded by `read_timeout` and `write_timeout`.
+  when verification is enabled. Returns the upgraded socket. `timeout`
+  bounds the whole handshake, and a wait past it fails with
+  `IOError.TimedOut`.
   """
-  fn upgrade_tls(self, hostname: String, config: TLSConfig)
-    -> TCPSocket ! SocketError | TLSError
+  fn upgrade_tls(
+    self,
+    hostname: String,
+    config: TLSConfig,
+    timeout: Option<Duration> = Option.None,
+  ) -> TCPSocket ! IOError | TLSError
 
     session = try TLSSession.connect(
-      self.socket.fd,
+      self.socket.descriptor,
       hostname,
       config,
-      self.read_timeout,
-      self.write_timeout,
+      timeout,
     )
-    TCPSocket{
-      socket: self.socket,
-      tls: Option.Some(session),
-      read_timeout: self.read_timeout,
-      write_timeout: self.write_timeout,
-    }
+    TCPSocket{socket: self.socket, tls: Option.Some(session)}
   end
 
   @doc """
   Performs a server-side TLS handshake on an accepted connection using
   the certificate and key from `config`. Returns the upgraded socket.
-  The handshake waits are bounded by `read_timeout` and `write_timeout`.
+  `timeout` bounds the whole handshake, and a wait past it fails with
+  `IOError.TimedOut`.
   """
-  fn accept_tls(self, config: TLSConfig) -> TCPSocket ! SocketError | TLSError
-    session = try TLSSession.accept(
-      self.socket.fd,
-      config,
-      self.read_timeout,
-      self.write_timeout,
-    )
-    TCPSocket{
-      socket: self.socket,
-      tls: Option.Some(session),
-      read_timeout: self.read_timeout,
-      write_timeout: self.write_timeout,
-    }
+  fn accept_tls(
+    self,
+    config: TLSConfig,
+    timeout: Option<Duration> = Option.None,
+  ) -> TCPSocket ! IOError | TLSError
+
+    session = try TLSSession.accept(self.socket.descriptor, config, timeout)
+    TCPSocket{socket: self.socket, tls: Option.Some(session)}
   end
 
   @doc """
@@ -150,98 +156,53 @@ struct TCPSocket
   end
 
   @doc """
-  Returns a copy of the connection whose reads wait at most `limit`.
-  `Option.None` removes the limit.
-  """
-  fn with_read_timeout(self, limit: Option<Duration>) -> TCPSocket
-    TCPSocket{
-      socket: self.socket,
-      tls: self.tls,
-      read_timeout: limit,
-      write_timeout: self.write_timeout,
-    }
-  end
-
-  @doc """
-  Returns a copy of the connection whose writes wait at most `limit`.
-  `Option.None` removes the limit.
-  """
-  fn with_write_timeout(self, limit: Option<Duration>) -> TCPSocket
-    TCPSocket{
-      socket: self.socket,
-      tls: self.tls,
-      read_timeout: self.read_timeout,
-      write_timeout: limit,
-    }
-  end
-
-  @doc """
-  Reads up to `count` bytes from the connection. Returns the data
-  as a string or an error if the read fails. Fails with
-  `SocketError.TimedOut` when `read_timeout` passes with no data.
-  """
-  fn read(self, count: Int) -> String ! SocketError | TLSError
-    bytes = try self.read_binary(count)
-    bytes.to_string() rescue _ -> fail SocketError.InvalidUTF8
-  end
-
-  @doc """
-  Reads up to `count` raw bytes from the connection. Suitable for
-  binary protocols where the data is not UTF-8 text. Returns the bytes
-  or an error if the read fails. Fails with `SocketError.TimedOut`
-  when `read_timeout` passes with no data.
-  """
-  fn read_binary(self, count: Int) -> Binary ! SocketError | TLSError
-    match self.tls
-      Option.Some(session) ->
-        try session.read_binary(self.socket.fd, count, self.read_timeout)
-      Option.None ->
-        self.socket.fd.read_binary(count, self.read_timeout)
-          rescue _ -> fail SocketError.last()
-    end
-  end
-
-  @doc """
-  Writes data to the connection. Accepts either a `String` (encoded as
-  UTF-8) or a `Binary` for raw wire protocols. Returns the number of
-  bytes written or an error if the write fails. Fails with
-  `SocketError.TimedOut` when `write_timeout` passes with the
-  connection still not writable. Some bytes may already be written.
-  """
-  fn write(self, data: Binary | String) -> Int ! SocketError | TLSError
-    match self.tls
-      Option.Some(session) ->
-        try session.write(self.socket.fd, data, self.write_timeout)
-      Option.None ->
-        self.socket.fd.write(data, self.write_timeout)
-          rescue _ -> fail SocketError.last()
-    end
-  end
-
-  @doc """
   Closes the TCP connection, shutting down the TLS session first when
   one is active.
   """
-  fn close(self) -> Bool ! SocketError
+  fn close(self) ! IOError
     match self.tls
       Option.Some(session) -> session.shutdown()
       Option.None -> ()
     end
 
-    self.socket.close() rescue _ -> fail SocketError.last()
-    true
+    try self.socket.close()
   end
 end
 
-@doc """
-Timeouts for a `TCPListener`. `accept_timeout` bounds each `accept`.
-`read_timeout` and `write_timeout` are copied onto every accepted
-`TCPSocket`. `Option.None` waits without limit.
-"""
-struct TCPListener.Options
-  read_timeout: Option<Duration> = Option.None
-  write_timeout: Option<Duration> = Option.None
-  accept_timeout: Option<Duration> = Option.None
+impl IO.Reader<IOError | TLSError> for TCPSocket
+  @doc """
+  Reads up to `count` bytes from the connection. Returns an empty
+  binary at end of stream. Fails with `IOError.TimedOut` when
+  `options.timeout` passes with no data.
+  """
+  fn read(self, count: Int, options: ReaderOptions)
+    -> Binary ! IOError | TLSError
+
+    match self.tls
+      Option.Some(session) ->
+        try session.read(self.socket.descriptor, count, options.timeout)
+      Option.None -> try self.socket.descriptor.read(count, options)
+    end
+  end
+end
+
+impl IO.Writer<IOError | TLSError> for TCPSocket
+  @doc """
+  Writes data to the connection. Accepts either a `String` (encoded as
+  UTF-8) or a `Binary` for raw wire protocols. Returns the number of
+  bytes written. Fails with `IOError.TimedOut` when `options.timeout`
+  passes with the connection still not writable. Some bytes may
+  already be written.
+  """
+  fn write(self, data: Binary | String, options: WriterOptions)
+    -> Int ! IOError | TLSError
+
+    match self.tls
+      Option.Some(session) ->
+        try session.write(self.socket.descriptor, data, options.timeout)
+      Option.None -> try self.socket.descriptor.write(data, options)
+    end
+  end
 end
 
 @doc """
@@ -252,91 +213,57 @@ to listen on a specific address. Each call to `accept` returns a
 """
 struct TCPListener
   socket: Socket
-  options: TCPListener.Options = TCPListener.Options{}
 
   @doc """
   Binds to the given port on all interfaces (0.0.0.0), sets
   `SO_REUSEADDR`, and starts listening with a backlog of 128.
-  Returns the listener or an error if any step fails. `options`
-  sets the accept timeout and the timeouts of accepted connections.
+  Returns the listener or an error if any step fails.
   """
-  fn bind(port: Int, options: TCPListener.Options = TCPListener.Options{})
-    -> TCPListener ! SocketError
-
-    try TCPListener.bind_addr(
-      SocketAddress{ip: IPAddress.ANY, port: port},
-      options,
-    )
+  fn bind(port: Int) -> TCPListener ! SocketError
+    try TCPListener.bind_addr(SocketAddress{ip: IPAddress.ANY, port: port})
   end
 
   @doc """
   Binds to a specific `SocketAddress`, sets `SO_REUSEADDR`, and
   starts listening with a backlog of 128. Returns the listener or
-  an error if any step fails. `options` sets the accept timeout and
-  the timeouts of accepted connections.
+  an error if any step fails.
   """
-  fn bind_addr(
-    addr: SocketAddress,
-    options: TCPListener.Options = TCPListener.Options{},
-  ) -> TCPListener ! SocketError
-
-    sock = Socket.create(SocketKind.Stream) rescue _ -> fail SocketError.last()
-    sock = sock.set_reuse_addr() rescue _ -> fail SocketError.last()
-    sock = sock.bind(addr) rescue _ -> fail SocketError.last()
-    sock = sock.listen(128) rescue _ -> fail SocketError.last()
-    TCPListener{socket: sock, options: options}
+  fn bind_addr(addr: SocketAddress) -> TCPListener ! SocketError
+    sock = try Socket.create(SocketKind.Stream)
+    sock = try sock.set_reuse_addr()
+    sock = try sock.bind(addr)
+    sock = try sock.listen(128)
+    TCPListener{socket: sock}
   end
 
   @doc """
   Accepts an incoming TCP connection. Blocks until a client connects,
-  or fails with `SocketError.TimedOut` once `accept_timeout` passes.
-  Returns a `TCPSocket` for the new connection, carrying the
-  listener's `read_timeout` and `write_timeout`, or an error if the
-  accept fails.
+  or fails with `SocketError.TimedOut` once `timeout` passes.
+  `Option.None` waits without limit, and `Duration.ZERO` polls, so a
+  pending connection returns at once and an empty backlog fails with
+  `TimedOut` without waiting. Returns a `TCPSocket` for the new
+  connection, or an error if the accept fails.
   """
-  fn accept(self) -> TCPSocket ! SocketError
-    fd = self.socket.accept(self.options.accept_timeout)
-      rescue _ -> fail SocketError.last()
-    TCPSocket{
-      socket: Socket{fd: fd},
-      tls: Option.None,
-      read_timeout: self.options.read_timeout,
-      write_timeout: self.options.write_timeout,
-    }
+  fn accept(self, timeout: Option<Duration> = Option.None)
+    -> TCPSocket ! SocketError
+
+    descriptor = try self.socket.accept(timeout)
+    TCPSocket{socket: Socket{descriptor: descriptor}, tls: Option.None}
   end
 
   @doc """
-  Non-blocking accept: returns `Option.Some(socket)` if a connection is
-  immediately available, or `Option.None` if no connection is pending.
+  Returns the underlying file descriptor, for `IO.Descriptor.watch` and
+  `IO.Descriptor.block`.
   """
-  fn try_accept(self) -> Option<TCPSocket>
-    raw = self.socket.try_accept_raw()
-
-    if raw >= 0
-      Option.Some(TCPSocket{
-        socket: Socket{fd: Fd{descriptor: raw}},
-        tls: Option.None,
-        read_timeout: self.options.read_timeout,
-        write_timeout: self.options.write_timeout,
-      })
-    else
-      Option.None
-    end
-  end
-
-  @doc """
-  Returns the underlying file descriptor for use with `Fd.watch`.
-  """
-  fn fd(self) -> Fd
-    self.socket.fd
+  fn descriptor(self) -> IO.Descriptor
+    self.socket.descriptor
   end
 
   @doc """
   Closes the listener and stops accepting new connections.
   """
-  fn close(self) -> Bool ! SocketError
-    self.socket.close() rescue _ -> fail SocketError.last()
-    true
+  fn close(self) ! IOError
+    try self.socket.close()
   end
 end
 
@@ -345,7 +272,7 @@ Events delivered to a process that spawns a `TCPServer`.
 """
 enum TCPServer.Event
   Connected(TCPSocket)
-  Closed(Fd)
+  Closed(IO.Descriptor)
   Error(SocketError)
 end
 
@@ -387,7 +314,7 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
   fn start(config: TCPServerConfig) -> Self ! StopReason
     match TCPListener.bind(config.port)
       Result.Ok(listener) ->
-        listener.fd().watch(0)
+        listener.descriptor().watch(Interest.Readable)
         TCPServer{listener: listener, owner: config.owner}
 
       Result.Err(e) ->
@@ -443,19 +370,28 @@ extend TCPServer
         Step.Done(StopReason.Shutdown)
 
       _ ->
-        self.listener.fd().watch(0)
+        self.listener.descriptor().watch(Interest.Readable)
         Step.Continue(self)
     end
   end
 
+  # Accepts every pending connection, then arms the listener for the
+  # next wakeup. A zero bound makes `accept` a poll, so `TimedOut`
+  # means the backlog is empty. Any other error goes to the owner and
+  # the listener stays up.
   priv fn drain_accepts(self) -> Step<Self>
-    match self.listener.try_accept()
-      Option.Some(client) ->
+    match self.listener.accept(Option.Some(Duration.ZERO))
+      Result.Ok(client) ->
         self.owner.cast(TCPEvent.Connected(client))
         self.drain_accepts()
 
-      Option.None ->
-        self.listener.fd().watch(0)
+      Result.Err(SocketError.TimedOut) ->
+        self.listener.descriptor().watch(Interest.Readable)
+        Step.Continue(self)
+
+      Result.Err(e) ->
+        self.owner.cast(TCPEvent.Error(e))
+        self.listener.descriptor().watch(Interest.Readable)
         Step.Continue(self)
     end
   end

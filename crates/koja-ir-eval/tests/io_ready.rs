@@ -46,7 +46,7 @@ const WATCH_ENTRY: &str = r#"
 
     impl Process<App, AppMsg | IOReady, ()> for App
       fn start(config: App) -> Result<Self, StopReason>
-        Fd{descriptor: __FD__}.watch(0)
+        IO.Descriptor{raw: __FD__}.watch(IO.Descriptor.Interest.Readable)
         Result.Ok(config)
       end
 

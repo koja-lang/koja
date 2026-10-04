@@ -83,12 +83,13 @@ pub(crate) enum Compatible {
     /// the slot, preserved verbatim for diagnostics.
     NumericWiden { target: ResolvedType },
     /// The actual expression's type is one member of the expected
-    /// union. Caller stamps `expr.coercion =
-    /// Some(Coercion::UnionWiden(target))` so IR lowering emits a
-    /// `UnionWrap` against the target union shape. `target` is the
-    /// (possibly aliased) union expected type as declared at the
-    /// slot, preserved verbatim so diagnostics and downstream IR
-    /// see the user's name when an alias was used.
+    /// union, or a union whose members are all members of it. Caller
+    /// stamps `expr.coercion = Some(Coercion::UnionWiden(target))` so
+    /// IR lowering emits a `UnionWrap` against the target union
+    /// shape, one per source member when the source is a union.
+    /// `target` is the (possibly aliased) union expected type as
+    /// declared at the slot, preserved verbatim so diagnostics and
+    /// downstream IR see the user's name when an alias was used.
     UnionWiden { target: ResolvedType },
     /// The actual expression is a numeric literal whose value does
     /// NOT fit the expected type's range. Caller emits a precise
@@ -381,6 +382,22 @@ pub fn narrow_numeric_target(
     }
 }
 
+/// Does `actual_ty` widen into a union with `members`? A member type
+/// does, and so does a union whose every member is one of `members`,
+/// so a `! A | B` callee propagates through a `! A | B | C` caller.
+/// Equality of the two unions is `Strict` and handled before this.
+fn widens_into_union(
+    actual_ty: &ResolvedType,
+    members: &[ResolvedType],
+    registry: &GlobalRegistry,
+) -> bool {
+    let is_member = |ty: &ResolvedType| members.iter().any(|m| types_equivalent(ty, m, registry));
+    match peel_alias(actual_ty, registry) {
+        ResolvedType::Union(actual_members) => actual_members.iter().all(is_member),
+        other => is_member(&other),
+    }
+}
+
 /// Decide compatibility of an actual expression flowing into a
 /// slot whose declared type is `expected_ty`. The `actual_ty`
 /// argument is the resolved type of the source expression
@@ -402,9 +419,7 @@ pub(crate) fn check_compatible(
         };
     }
     if let ResolvedType::Union(members) = peel_alias(expected_ty, registry)
-        && members
-            .iter()
-            .any(|m| types_equivalent(actual_ty, m, registry))
+        && widens_into_union(actual_ty, &members, registry)
     {
         return Compatible::UnionWiden {
             target: expected_ty.clone(),

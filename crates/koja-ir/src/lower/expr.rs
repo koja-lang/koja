@@ -41,6 +41,7 @@ use super::package::resolved_type_to_ir_type;
 use super::process::{lower_receive, lower_spawn};
 use super::structs::{lower_field_access, lower_struct_construction};
 use super::tuples::lower_tuple_literal;
+use super::unions::{emit_union_widen, emit_union_wrap};
 
 pub(super) fn lower_expr(
     expr: &Expr,
@@ -85,41 +86,10 @@ fn apply_value_coercion(
         Coercion::UnionWiden(target) => {
             let target_ir =
                 resolved_type_to_ir_type(target, ctx.registry, &mut ctx.output.instantiations);
-            let IRType::Union { members, .. } = &target_ir else {
-                panic!(
-                    "IR lower: Coercion::UnionWiden target lowered to non-Union \
-                     `{target_ir:?}` (typecheck invariant violation)",
-                );
-            };
-            let member_type = ctx.type_of(value).clone();
-            let member_index = members
-                .iter()
-                .position(|m| m == &member_type)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "IR lower: Coercion::UnionWiden source type `{member_type:?}` \
-                         is not a member of target union `{target_ir:?}`, typecheck \
-                         invariant violation",
-                    )
-                }) as u8;
-            let dest = ctx.fresh_value(target_ir.clone());
-            ctx.cfg.append(
-                block,
-                IRInstruction::UnionWrap {
-                    dest,
-                    member_index,
-                    member_type,
-                    ty: target_ir,
-                    value,
-                },
-            );
-            // The wrap aliases the member's storage without an
-            // acquire, so an owned source moves into the union.
-            // Transfer the ownership stamp or the temp's release site
-            // never sees it and the widened value leaks.
-            if ctx.is_owned(value) {
-                ctx.mark_owned(dest);
+            if matches!(ctx.type_of(value), IRType::Union { .. }) {
+                return emit_union_widen(expr, value, target_ir, ctx, block);
             }
+            let dest = emit_union_wrap(value, &target_ir, ctx, block);
             (dest, block)
         }
     }

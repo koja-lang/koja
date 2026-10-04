@@ -1,3 +1,4 @@
+alias IO.Error as IOError
 alias Net.Socket.Error as SocketError
 alias Net.TCPSocket
 alias Net.TLSError
@@ -158,15 +159,29 @@ priv fn read_response(socket: TCPSocket) -> Response ! Error
   try Parser.parse_response(data)
 end
 
-priv fn net_error_message(e: SocketError | TLSError) -> String
+priv fn net_error_message(
+  e: SocketError | IOError | TLSError | String.ConversionError,
+) -> String
+
   match e
-    socket_error: SocketError -> socket_error.message()
-    tls_error: TLSError -> tls_error.message()
+    socket_error: SocketError ->
+      socket_error.message()
+
+    io_error: IOError ->
+      io_error.message()
+
+    tls_error: TLSError ->
+      tls_error.message()
+
+    conversion: String.ConversionError ->
+      match conversion
+        String.ConversionError.InvalidUTF8 -> "response is not valid UTF-8"
+      end
   end
 end
 
 priv fn read_all(socket: TCPSocket, acc: String) -> String ! Error
-  chunk = socket.read(8192)
+  chunk = socket.read_string(8192)
     rescue e -> fail Error.ConnectionFailed("read failed: " <>
       net_error_message(e))
 

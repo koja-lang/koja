@@ -1,0 +1,163 @@
+alias IO.Descriptor.Interest
+alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
+alias IO.Writer.Options as WriterOptions
+
+@doc """
+The readiness a process waits for on a descriptor, either `Readable`
+or `Writable`. `IO.Descriptor.block` and `IO.Descriptor.watch` take
+one.
+"""
+enum IO.Descriptor.Interest
+  Readable
+  Writable
+end
+
+@doc """
+An open file descriptor. `File.open` returns one for a file, `STDIN`,
+`STDOUT`, and `STDERR` name the standard streams, and the socket types
+wrap one. `raw` is the integer the operating system knows it by.
+Reads and writes come from the `IO.Reader` and `IO.Writer`
+conformances below, and every operation on an open descriptor fails
+with `IO.Error`.
+
+`block`, `watch`, and `unwatch` are for processes that drive a
+descriptor directly. Reads and writes wait for readiness on their own,
+so most code never calls them.
+"""
+struct IO.Descriptor
+  raw: Int32
+
+  @doc """
+  Suspends the current process until this file descriptor is ready for
+  `interest` or `timeout` passes. Returns `true` when the wait ended on
+  the timeout, `false` when the I/O reactor detected readiness.
+  """
+  fn block(self, interest: Interest, timeout: Option<Duration> = Option.None)
+    -> Bool
+
+    timed_out = koja_io_block(
+      self.raw,
+      interest_code(interest),
+      timeout_ms(timeout),
+    )
+
+    timed_out == 1
+  end
+
+  @doc """
+  Closes the file descriptor.
+  """
+  fn close(self) ! IOError
+    if koja_fd_close(self.raw) != 0
+      fail IOError.last()
+    end
+  end
+
+  @doc """
+  Removes this file descriptor from I/O readiness monitoring. No
+  further `IO.Ready` messages arrive for it.
+  """
+  fn unwatch(self)
+    koja_rt_unwatch_fd(self.raw)
+  end
+
+  @doc """
+  Registers this file descriptor for one readiness notification. When
+  the descriptor becomes ready for `interest`, an `IO.Ready` message
+  arrives in the mailbox of the current process. The registration
+  fires once, so call `watch` again after each message to keep
+  receiving them.
+  """
+  fn watch(self, interest: Interest)
+    koja_rt_watch_fd(self.raw, interest_code(interest))
+  end
+
+  priv fn interest_code(interest: Interest) -> Int
+    match interest
+      Interest.Readable -> 0
+      Interest.Writable -> 1
+    end
+  end
+
+  priv fn timeout_ms(timeout: Option<Duration>) -> Int
+    match timeout
+      Option.None -> -1
+      Option.Some(duration) -> duration.to_milliseconds()
+    end
+  end
+
+  @extern "C"
+  priv fn koja_fd_close(fd: Int32) -> Int32
+
+  @extern "C"
+  priv fn koja_fd_read(fd: Int32, count: Int64, timeout_ms: Int64)
+    -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn koja_fd_write(
+    fd: Int32,
+    data: CPtr<UInt8>,
+    len: Int64,
+    timeout_ms: Int64,
+  ) -> Int64
+
+  @extern "C"
+  priv fn koja_io_block(fd: Int32, interest: Int64, timeout_ms: Int64) -> Int64
+
+  @extern "C"
+  priv fn koja_rt_unwatch_fd(fd: Int32)
+
+  @extern "C"
+  priv fn koja_rt_watch_fd(fd: Int32, interest: Int64)
+end
+
+impl IO.Reader<IOError> for IO.Descriptor
+  @doc """
+  Reads up to `count` bytes from the file descriptor. Returns an empty
+  binary at end of stream. With `options.timeout` set, the read fails
+  with `IO.Error.TimedOut` once that much time passes with no data.
+  """
+  fn read(self, count: Int, options: ReaderOptions) -> Binary ! IOError
+    ptr = IO.Descriptor.koja_fd_read(
+      self.raw,
+      count,
+      IO.Descriptor.timeout_ms(options.timeout),
+    )
+
+    if ptr.null?()
+      fail IOError.last()
+    end
+
+    RuntimeBlock.adopt_binary(ptr)
+  end
+end
+
+impl IO.Writer<IOError> for IO.Descriptor
+  @doc """
+  Writes `data` to the file descriptor and returns the number of bytes
+  written. With `options.timeout` set, the write fails with
+  `IO.Error.TimedOut` once that much time passes with the descriptor
+  still not writable.
+  """
+  fn write(self, data: Binary | String, options: WriterOptions) -> Int ! IOError
+    bytes =
+      match data
+        b: Binary -> b
+        s: String -> s.to_binary()
+      end
+
+    result = IO.Descriptor.koja_fd_write(
+      self.raw,
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+      IO.Descriptor.timeout_ms(options.timeout),
+    )
+
+    if result < 0
+      fail IOError.last()
+    end
+
+    result
+  end
+end

@@ -192,10 +192,10 @@ hazard for other types remain until the general lowering lands.
 
 ---
 
-## `Fd` lacks random access, durability, and locking
+## `IO.Descriptor` lacks random access, durability, and locking
 
-Found 2026-08-09 while building embedded storage. `Fd` reads only move
-forward: there is no `seek` or positioned read, no `stat` or file size,
+Found 2026-08-09 while building embedded storage. `IO.Descriptor` reads
+only move forward: there is no `seek` or positioned read, no `stat` or file size,
 and no `truncate`. Any page-oriented file format (an on-disk B-tree, an
 archive reader, a large-file parser) must instead load the whole file
 with `File.read_binary`, which caps the dataset at available memory.
@@ -210,10 +210,12 @@ Two adjacent holes make the durability story worse:
   ownership of its file. Two processes opening the same database
   corrupt it silently, and `flock` is unreachable without FFI.
 
-**Fix path:** one "Fd random access and durability" pass. Runtime
-shims for `pread`/`lseek`, `fstat`, `ftruncate`, `fsync` (with the
-Darwin fcntl behind it), and `flock`, surfaced as `Fd.read_at`,
-`Fd.size`, `Fd.truncate`, `Fd.sync`, and `Fd.lock`/`try_lock`.
+**Fix path:** one "descriptor random access and durability" pass.
+Runtime shims for `pread`/`lseek`, `fstat`, `ftruncate`, `fsync` (with
+the Darwin fcntl behind it), and `flock`, surfaced as
+`IO.Descriptor.read_at`, `IO.Descriptor.size`,
+`IO.Descriptor.truncate`, `IO.Descriptor.sync`, and
+`IO.Descriptor.lock`/`try_lock`.
 
 ---
 
@@ -277,7 +279,7 @@ shell. That works, but it makes libc the real stdlib for CLI work.
 **Fix path:** two intrinsic families. `System.cmd(program, args)`
 returns captured output plus exit status and must park the calling
 process rather than block a scheduler thread. `File.ls(path)` returns
-directory entries. Per-entry metadata can ride the `Fd`
+directory entries. Per-entry metadata can ride the `IO.Descriptor`
 random-access pass tracked above, which already owns `stat`.
 
 ---
@@ -310,13 +312,6 @@ Found 2026-08-28. None blocking, each with a workaround:
   insertion sort or a shell-side `sort`. A comparator-closure
   `sort` works today. A `Comparable` conformance can follow when
   the protocol exists (see the `Binary` ordering entry).
-- **`IO.gets` cannot distinguish end of input from an empty
-  line.** Both return `""`, so a line-oriented filter reading
-  stdin cannot tell where input stops. Workaround is reading
-  `STDIN` directly and treating an empty read as end of input.
-  [IO.md](IO.md) changes `gets` to return `Option<String>` over a
-  caller-supplied reader, which also moves the `io_gets` lang
-  fixture into the stdlib test suite.
 
 ---
 
@@ -536,3 +531,140 @@ symbols exist before codegen. The first needs a union hash strategy
 in the backend, most simply a member dispatch that hashes the tag
 and then the active member. Once both land, the three `Codegen`
 sites in `resolve_hash_eq` become seal invariant panics.
+
+## `rescue` handlers cannot `return`
+
+Found 2026-10-04 while splitting `File` out of `fd.koja`.
+LANGUAGE.md says a `rescue` handler must produce the success type or
+diverge, and names `fail` and a panic as the diverging forms. `return`
+is the third diverging form and the compiler rejects it there with
+"`return` is only valid as a statement". The parser reads the handler
+with `parse_expr_bp(BP_RESCUE_R)` in `koja-parser/src/expr.rs`, so it
+is one expression and never statement position, even though resolve
+lowers it to a `match` arm body where `return` would be legal. The
+same limit keeps a handler to one expression, so a handler that must
+release a resource before it fails has no place to do so.
+
+Consequence: `File.dir?` and `File.exists?` keep a four-line `match`
+to turn a bad path into `false` where `rescue _ -> return false` reads
+as the intent. `File.rename` keeps a `match` so it can free the first
+`CString` before it fails on the second.
+
+**Fix path (agreed 2026-10-04, to land as one branch):** the model
+is the closure pair, a short form and a block form. The `->` in a
+short closure and in `rescue e -> handler` introduces a one-statement
+body, so both take an expression or a diverging `return`, `break`, or
+`fail`. `fail` is "return on the error channel" and becomes
+`Statement::Fail`, rejected by the parser in expression position the
+way `return` is, instead of an `ExprKind` that typecheck rejects
+late. `body_tail_type` treats `break` as divergent like `return`, so
+a `match`, `if`, or `cond` arm may end in `break`. A block handler
+for the multi-statement case comes after, with its own terminator
+design. A stash on `fix/nested-type-unions` holds a first cut of the
+`rescue` half (handler as `Box<Statement>`, parser dispatch on
+`return` and `break`, tests, docs).
+
+## Diagnostics render a nested type by its leaf name
+
+Found 2026-10-04 while adding `File.Error` beside `IO.Error`.
+`display_resolution` in `koja-typecheck/src/pipeline/resolve/types.rs`
+renders a `Global` head as `entry.identifier.last()`, the last path
+segment. A top-level type reads as expected (`Option<Int>`), but every
+nested type loses its owner, so `File.Error` and `IO.Error` both print
+as `Error` and `IO.Reader.Options` prints as `Options`. The same string
+was the sort and dedup key in `canonical_union` until the structural
+dedup landed, which is how `File.Error | IO.Error` once collapsed to
+one member. Identity is now structural there, so this is a reporting
+gap only. Every other use of the string is diagnostic text.
+
+Consequence: a mismatch between two same-leaf nested types reads as
+"annotation says `Error`, but the right-hand side has type `Error`",
+and a union of them prints as `Error | Error`. The user has to guess
+which owner each side means.
+
+**Fix path:** render the path under the package, so the `Global(id)`
+arm joins `identifier.path()` with dots. Top-level types keep their
+current text and nested types gain their owner. Typecheck tests that
+assert a message mentioning a nested type need their expected text
+updated, and the display-ordered union member list changes order only
+where same-leaf members already tie.
+
+## A static and an instance method with one name and arity collide
+
+Found 2026-10-04 while giving `File` an `impl IO.Writer`. The registry
+keys a function by owner, name, and arity. `insert_function` in
+`koja-typecheck/src/registry/mod.rs` reports a collision when
+`NameEntries.functions` already holds that arity, and nothing in the
+key says whether the function takes `self`. LANGUAGE.md documents the
+rule, and `&name/arity` references depend on it. So a static
+`File.write(path, content)` and an instance `write(self, data)` are
+the same function to the registry.
+
+The protocol default adapter made this silent. A defaulted parameter
+becomes an exact-arity adapter function, and
+`synthesize_default_method` in
+`pipeline/lift_signatures/impls.rs` registers each adapter with
+`insert_function` and returns without a diagnostic when the outcome is
+not `Fresh`. The two-argument adapter for `write(self, data)` lost to
+the static, so `file.write(line)` reported "cannot call static method
+`Global.File.write` on a value" at the call site, three steps away
+from the cause.
+
+Consequence: a type cannot offer a static and an instance method
+under one name at one arity. The stdlib met it once and resolved it
+by design, since `File` became a path module with no instance methods
+and `IO.Descriptor` is the handle. User code that hits it gets a
+misleading error at a call site.
+
+**Fix path:** two parts. First, `synthesize_default_method` reports
+the collision, naming the adapter it tried to register and the
+function it collided with, so the cause is at the declaration. Second,
+if the rule itself should change, the registry key gains a dispatch
+axis and about 25 lookup sites across typecheck, IR, and query
+resolve through it. That is its own branch and a LANGUAGE.md change
+to the identity rule.
+
+## A protocol argument is not inferred from a bound
+
+Found 2026-10-04 while making `IO.Reader<E>` generic in its error.
+Call inference binds a function's type parameters from the argument
+types it is given. A parameter that appears only inside a bound on
+another parameter never gets a value:
+
+```koja
+fn drain<S: IO.Reader<E>, E>(source: S) -> Int ! E
+  bytes = try source.read(4096)
+  bytes.byte_size()
+end
+
+drain(socket)
+# error: typecheck cannot infer type parameter `E` of `drain` from
+# the supplied arguments
+# error: type `TCPSocket` does not implement protocol
+# `IO.Reader<<unresolved>>`
+```
+
+`S` binds to `TCPSocket` from the argument. `E` has no argument to
+bind from, and `finalize_inference` in
+`koja-typecheck/src/pipeline/resolve/inference.rs` reports the empty
+slot. The information is in the registry. `TCPSocket` has exactly one
+conformance to `IO.Reader`, with `protocol_args` of
+`[IO.Error | TLSError]`, and `conformance_args` in
+`registry/conformance.rs` returns it. The `for` statement already uses
+that lookup to find the `Enumeration` arguments of its subject.
+
+Consequence: a generic consumer of `IO.Reader<E>` or `IO.Writer<E>`
+must name a concrete error in its bound,
+`fn drain<S: IO.Reader<IO.Error | TLSError>>(source: S)`, and so
+cannot be written once for every stream. A `BufferedReader<R, E>`
+over any reader is the first thing blocked. Implementors and call
+sites are unaffected, since `impl IO.Reader<IO.Error> for IO.Descriptor`
+names its argument and `socket.read_line()` dispatches on the receiver.
+
+**Fix path:** after the argument pass binds what it can, walk the
+unfilled slots. For each one that appears as an argument of a protocol
+bound whose bounded parameter is filled, look up that parameter's
+conformance to the protocol and unify the bound's argument list with
+the conformance's `protocol_args`. One conformance per type and
+protocol makes the answer unique. A slot still empty after that pass
+reports as it does today.

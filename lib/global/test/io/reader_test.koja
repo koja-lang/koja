@@ -1,0 +1,112 @@
+alias File.Mode as FileMode
+alias IO.Reader.Options as ReaderOptions
+alias Test.require
+
+# `IO.Reader` text helpers over a file descriptor, the one reader a
+# test can fill with known bytes. Each read is a separate `require` so
+# a wrong `None` or a stray error names the read that produced it.
+
+test "read_line stops on the newline and returns None at end of input"
+  fd = try open_with("reader_line_eof", "a\n")
+
+  assert try require(fd.read_line()) == Option.Some("a")
+  assert try require(fd.read_line()) == Option.None
+  assert try require(fd.read_line()) == Option.None
+  _ = fd.close()
+end
+
+test "read_line keeps an empty line apart from end of input"
+  fd = try open_with("reader_line_blank", "a\n\nb")
+
+  assert try require(fd.read_line()) == Option.Some("a")
+  assert try require(fd.read_line()) == Option.Some("")
+  assert try require(fd.read_line()) == Option.Some("b")
+  assert try require(fd.read_line()) == Option.None
+  _ = fd.close()
+end
+
+test "read_line decodes a multi-byte character split across reads"
+  fd = try open_with("reader_line_utf8", "héllo wörld\n")
+
+  assert try require(fd.read_line()) == Option.Some("héllo wörld")
+  assert try require(fd.read_line()) == Option.None
+  _ = fd.close()
+end
+
+test "read_line on an empty stream is None"
+  fd = try open_with("reader_line_empty", "")
+
+  assert try require(fd.read_line()) == Option.None
+  _ = fd.close()
+end
+
+test "read_string decodes the bytes it read"
+  fd = try open_with("reader_string", "abcdef")
+
+  assert try require(fd.read_string(3)) == "abc"
+  assert try require(fd.read_string(16)) == "def"
+  assert try require(fd.read_string(16)) == ""
+  _ = fd.close()
+end
+
+test "read returns raw bytes and an empty binary at end of stream"
+  fd = try open_with("reader_raw", <<0, 255, 10>>)
+
+  assert try require(fd.read(2)) == <<0, 255>>
+  assert try require(fd.read(2, ReaderOptions{})) == <<10>>
+  assert try require(fd.read(2)) == <<>>
+  _ = fd.close()
+end
+
+test "read_string fails with InvalidUTF8 on bad bytes"
+  fd = try open_with("reader_string_invalid", <<255>>)
+  result = fd.read_string(1)
+  _ = fd.close()
+
+  match result
+    Result.Ok(text) ->
+      fail "expected InvalidUTF8, got: #{text}"
+
+    Result.Err(conversion: String.ConversionError) ->
+      match conversion
+        String.ConversionError.InvalidUTF8 -> ()
+      end
+
+    Result.Err(e) ->
+      fail "expected InvalidUTF8, got: #{e}"
+  end
+end
+
+test "read_line fails with InvalidUTF8 on bad bytes"
+  fd = try open_with("reader_line_invalid", <<97, 255, 10>>)
+  result = fd.read_line()
+  _ = fd.close()
+
+  match result
+    Result.Ok(line) ->
+      fail "expected InvalidUTF8, got: #{line}"
+
+    Result.Err(conversion: String.ConversionError) ->
+      match conversion
+        String.ConversionError.InvalidUTF8 -> ()
+      end
+
+    Result.Err(e) ->
+      fail "expected InvalidUTF8, got: #{e}"
+  end
+end
+
+# Writes `content` to a temp file named after the test and opens it for
+# reading. The file is deleted at once, so the open descriptor is the
+# only reference and no cleanup step can be skipped by a failing
+# assertion.
+priv fn open_with(name: String, content: Binary | String)
+  -> IO.Descriptor ! Test.Failure
+
+  path = "/tmp/koja_io_#{name}.txt"
+
+  try require(File.write(path, content))
+  fd = try require(File.open(path, FileMode.Read))
+  try require(File.delete(path))
+  fd
+end

@@ -12,6 +12,7 @@ mod platform {
     pub const SO_ERROR: i32 = 0x1007;
     pub const O_NONBLOCK: i32 = 0x0004;
     pub const EAGAIN: i32 = 35;
+    pub const EBADF: i32 = 9;
     pub const EINPROGRESS: i32 = 36;
     pub const EINTR: i32 = 4;
     pub const EINVAL: i32 = 22;
@@ -25,6 +26,7 @@ mod platform {
     pub const SO_ERROR: i32 = 4;
     pub const O_NONBLOCK: i32 = 0x800;
     pub const EAGAIN: i32 = 11;
+    pub const EBADF: i32 = 9;
     pub const EINPROGRESS: i32 = 115;
     pub const EINTR: i32 = 4;
     pub const EINVAL: i32 = 22;

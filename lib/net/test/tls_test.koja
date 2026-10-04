@@ -1,7 +1,8 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
+alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
 alias Net.Socket.Address as SocketAddress
-alias Net.Socket.Error as SocketError
 alias Test.require
 
 # Self-signed test certificate (CN=localhost, 100-year expiry).
@@ -57,8 +58,8 @@ test "verifying client rejects a self-signed server certificate"
         _ -> fail "expected verification failure, got: #{tls_error.message()}"
       end
 
-    Result.Err(socket_error: SocketError) ->
-      fail "expected verification failure, got: #{socket_error.message()}"
+    Result.Err(io_error: IOError) ->
+      fail "expected verification failure, got: #{io_error.message()}"
   end
 end
 
@@ -80,7 +81,7 @@ test "TLS read fails with TimedOut when the peer is silent"
     end
 
   limit = Duration{unit: Duration.Unit.Milliseconds, value: 50}
-  result = client.with_read_timeout(Option.Some(limit)).read(16)
+  result = client.read(16, ReaderOptions{timeout: Option.Some(limit)})
 
   match client.close()
     _ -> ()
@@ -98,10 +99,10 @@ test "TLS read fails with TimedOut when the peer is silent"
     Result.Ok(_) ->
       fail "expected read to time out"
 
-    Result.Err(socket_error: SocketError) ->
-      match socket_error
-        SocketError.TimedOut -> ()
-        _ -> fail "expected TimedOut, got: #{socket_error.message()}"
+    Result.Err(io_error: IOError) ->
+      match io_error
+        IOError.TimedOut -> ()
+        _ -> fail "expected TimedOut, got: #{io_error.message()}"
       end
 
     Result.Err(tls_error: TLSError) ->
@@ -137,7 +138,7 @@ priv fn run_echo_roundtrip(
     rescue e -> fail "client write: #{net_message(e)}"
 
   echoed =
-    match client.read(1024)
+    match client.read_string(1024)
       Result.Ok(d) -> d
       Result.Err(e) -> fail "client read: #{net_message(e)}"
     end
@@ -236,7 +237,7 @@ priv fn serve_tls_echo(listener: TCPListener, config: TLSConfig)
     end
 
   data =
-    match secured.read(1024)
+    match secured.read_string(1024)
       Result.Ok(d) -> d
       Result.Err(e) -> return Result.Err("server read: " <> net_message(e))
     end
@@ -253,10 +254,11 @@ priv fn serve_tls_echo(listener: TCPListener, config: TLSConfig)
   Result.Ok(data)
 end
 
-priv fn net_message(e: SocketError | TLSError) -> String
+priv fn net_message(e: IOError | TLSError | String.ConversionError) -> String
   match e
-    socket_error: SocketError -> socket_error.message()
+    io_error: IOError -> io_error.message()
     tls_error: TLSError -> tls_error.message()
+    conversion: String.ConversionError -> "#{conversion}"
   end
 end
 
@@ -264,7 +266,7 @@ priv fn read_test_certificate -> Result<Certificate, String>
   text =
     match File.read(TLS_TEST_CERT_PATH)
       Result.Ok(pem) -> pem
-      Result.Err(e) -> return Result.Err("read cert fixture: " <> e)
+      Result.Err(e) -> return Result.Err("read cert fixture: #{e}")
     end
 
   match Certificate.parse(text)
@@ -283,7 +285,7 @@ priv fn server_test_config -> Result<TLSConfig, String>
   key_text =
     match File.read(TLS_TEST_KEY_PATH)
       Result.Ok(pem) -> pem
-      Result.Err(e) -> return Result.Err("read key fixture: " <> e)
+      Result.Err(e) -> return Result.Err("read key fixture: #{e}")
     end
 
   key =

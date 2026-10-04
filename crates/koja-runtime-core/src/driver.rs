@@ -221,8 +221,8 @@ where
                         self.runtime.ready.borrow_mut().push(wake);
                     }
                 }
-                // `Fd.watch`: mint the backend's `IOReady` message and
-                // route it to the watcher.
+                // `IO.Descriptor.watch`: mint the backend's `IOReady`
+                // message and route it to the watcher.
                 Waker::Deliver { fd, pid, readiness } => {
                     let message = self.executor.io_ready_message(readiness, fd);
                     self.route_delivery(pid, message);

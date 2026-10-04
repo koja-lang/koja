@@ -59,13 +59,14 @@ pub trait Message {
 /// Mints the protocol messages the
 /// [`CooperativeDriver`](crate::CooperativeDriver) must synthesize on its
 /// own: lifecycle signals drained from the [`SignalSource`] and I/O
-/// readiness events the [`Reactor`] reports for a `Fd.watch` owner. The
-/// native driver builds these inline in its own loop (signals into the
-/// system queue, `IOReady`s via `send_io_event`), so only cooperative
-/// backends (eval, then WASI) implement this. Carries the message as a
-/// type parameter (rather than an associated type) so the driver can bind
-/// it to the executor's `Message` (`E: MessageSource<E::Message>`)
-/// without a second `Message` associated type to disambiguate.
+/// readiness events the [`Reactor`] reports for an `IO.Descriptor.watch`
+/// owner. The native driver builds these inline in its own loop (signals
+/// into the system queue, `IOReady`s via `send_io_event`), so only
+/// cooperative backends (eval, then WASI) implement this. Carries the
+/// message as a type parameter (rather than an associated type) so the
+/// driver can bind it to the executor's `Message`
+/// (`E: MessageSource<E::Message>`) without a second `Message` associated
+/// type to disambiguate.
 pub trait MessageSource<M: Message> {
     /// Build the message delivered to the entry process for `event`.
     fn lifecycle_message(&self, event: Lifecycle) -> M;
@@ -129,9 +130,9 @@ pub enum Readiness {
 
 /// What the reactor does when a registered fd becomes ready: resume a
 /// process blocked on the fd (`io_block` path), or enqueue an `IOReady`
-/// message for a watcher (`Fd.watch` path). A typed action, replacing
-/// the old scheme that multiplexed pid keys and offset fd keys into one
-/// integer keyspace.
+/// message for a watcher (`IO.Descriptor.watch` path). A typed action,
+/// replacing the old scheme that multiplexed pid keys and offset fd keys
+/// into one integer keyspace.
 ///
 /// Registered as the action to take. Returned by [`Reactor::poll`] with
 /// the `Deliver` `readiness` filled in from the event that fired.

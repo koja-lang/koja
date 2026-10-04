@@ -253,6 +253,11 @@ fn fetch_limits(url: String) -> Limits ! HTTP.Error | NumericConversionError
 end
 ```
 
+The same rule accepts a callee whose error union is a subset of the
+caller's, so `try` on a `! HTTP.Error | IO.Error` callee inside a
+`! HTTP.Error | IO.Error | File.Error` caller needs no mapping either.
+The lowering switches on the source tag and re-wraps each member.
+
 Two error domains compose with zero ceremony and the signature honestly
 enumerates every failure source. This replaces Rust's `From`-based
 implicit conversion (and the `thiserror` cottage industry that feeds
@@ -555,9 +560,9 @@ The feature removes plumbing, not pattern matching.
 - **Nothing (Go).** The status quo is already worse than Go per
   fallible call.
 - **Type-routed `return` instead of `fail`** (plain `return` picks the
-  channel from the value's type). Fatal counterexample in the shipped
-  stdlib: `File.read -> Result<String, String>` puts the same type on
-  both sides, so no routing rule exists. The tag is semantic, not
+  channel from the value's type). Fatal counterexample in the stdlib
+  as it was then: `File.read -> Result<String, String>` put the same
+  type on both sides, so no routing rule existed. The tag is semantic, not
   derivable. It would also give every return site two candidate
   expected types, breaking single-expected-type bidirectional checking
   (literal coercion, empty collections) and degrading diagnostics to

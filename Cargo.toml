@@ -25,7 +25,7 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.19.1"
+version = "0.20.0"
 
 # `just doc` builds with `--document-private-items` for the compiler's
 # own developers, so a public doc comment may link to a crate-private

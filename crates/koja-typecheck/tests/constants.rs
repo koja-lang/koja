@@ -710,7 +710,7 @@ fn type_member_read_diagnoses() {
 fn global_constants_resolve_bare() {
     typecheck(&dedent(
         "
-        out: Fd = STDOUT
+        out: IO.Descriptor = STDOUT
         out.print()
         ",
     ));

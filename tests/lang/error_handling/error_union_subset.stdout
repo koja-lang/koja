@@ -1,0 +1,9 @@
+ok 0
+parse x
+net
+auth nope
+parse x
+net
+string hello
+int 7
+string hello

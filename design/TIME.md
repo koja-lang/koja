@@ -330,7 +330,7 @@ did.
   `elapsed = started.elapsed()`. `Outcome` and `Summary` carry the
   `Duration`, the human reporters pick a unit from the size, and the
   `json` reporter emits integer microseconds.
-- Socket timeouts in [IO.md](IO.md). `with_read_timeout(Duration)`
+- Socket timeouts in [IO.md](IO.md). `IO.Reader.Options{timeout}`
   bounds one call. A whole-request budget is
   `deadline = Instant.now().plus(Duration.new(5, Duration.Unit.Seconds))` and
   `remaining = deadline.since(Instant.now())` before each read.

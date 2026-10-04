@@ -1,0 +1,63 @@
+alias File.Mode as FileMode
+alias IO.Error as IOError
+alias Test.require
+
+test "close returns Ok on valid fd"
+  fd = try require(File.open("/dev/null", FileMode.Read))
+  try require(fd.close())
+end
+
+test "read after close fails with Closed"
+  fd = try require(File.open("/dev/null", FileMode.Read))
+  try require(fd.close())
+
+  match fd.read(1)
+    Result.Ok(_) -> fail "expected the read to fail"
+    Result.Err(IOError.Closed) -> ()
+    Result.Err(e) -> fail "expected Closed, got: #{e.message()}"
+  end
+end
+
+test "close on opened writable file"
+  path = "/tmp/koja_fd_close_test.txt"
+  fd = try require(File.open(path, FileMode.Write))
+  result = fd.close()
+  File.delete(path)
+
+  try require(result)
+end
+
+test "write returns byte count on success"
+  path = "/tmp/koja_fd_write_test.txt"
+  fd = try require(File.open(path, FileMode.Write))
+  result = fd.write("hello")
+  _ = fd.close()
+  File.delete(path)
+
+  n = try require(result)
+  assert n == 5
+end
+
+test "write and read back roundtrip"
+  path = "/tmp/koja_fd_write_roundtrip.txt"
+  fd = try require(File.open(path, FileMode.Write))
+  fd.write("koja write test")
+  _ = fd.close()
+  read = File.read(path)
+  File.delete(path)
+
+  contents = try require(read)
+  assert contents == "koja write test"
+end
+
+test "write to /dev/null succeeds"
+  fd = try require(File.open("/dev/null", FileMode.Write))
+  try require(fd.write("discard me"))
+end
+
+test "watch and unwatch do not crash"
+  fd = try require(File.open("/dev/null", FileMode.Read))
+  fd.watch(IO.Descriptor.Interest.Readable)
+  fd.unwatch()
+  _ = fd.close()
+end

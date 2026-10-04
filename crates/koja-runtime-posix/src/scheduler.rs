@@ -1590,7 +1590,7 @@ pub extern "C" fn koja_rt_reductions_grant() -> u32 {
 ///
 /// Constructs a tagged buffer: tag=2 (IO event), then the IOReady enum
 /// layout: variant byte (0=Read, 1=Write, 2=Error) at offset 8, followed
-/// by the Fd struct (i64 descriptor) at offset 16. Routed to the
+/// by the `IO.Descriptor` struct (i64 `raw`) at offset 16. Routed to the
 /// target's business queue.
 pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
     let buf = unsafe {

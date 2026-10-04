@@ -44,22 +44,6 @@ pub extern "C" fn koja_socket_accept(fd: i32, timeout_ms: i64) -> i32 {
     }
 }
 
-/// Non-blocking accept: returns the new client fd if a connection is
-/// immediately available, -2 if none is pending (EAGAIN), or -1 on error.
-#[unsafe(no_mangle)]
-pub extern "C" fn koja_socket_try_accept(fd: i32) -> i32 {
-    let client = unsafe { libc_accept(fd, ptr::null_mut(), ptr::null_mut()) };
-    if client >= 0 {
-        set_nonblocking(client);
-        return client;
-    }
-    if get_errno() == EAGAIN {
-        return -2; // nothing pending
-    }
-    set_last_error(io::Error::last_os_error());
-    -1
-}
-
 /// Binds a socket to a local IP address and port. Returns 0 on success,
 /// -1 on error.
 #[unsafe(no_mangle)]

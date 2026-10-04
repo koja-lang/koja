@@ -127,9 +127,10 @@ impl Reactor for EvalReactor {
     }
 }
 
-/// Register `fd` for one `IOReady` delivery to `pid` (`Fd.watch`). The
-/// reactor fills the fired direction in at `poll` time. The `readiness`
-/// here is the registered interest, a placeholder until then.
+/// Register `fd` for one `IOReady` delivery to `pid`
+/// (`IO.Descriptor.watch`). The reactor fills the fired direction in at
+/// `poll` time. The `readiness` here is the registered interest, a
+/// placeholder until then.
 pub(crate) fn watch(fd: i32, interest: Interest, pid: Pid) {
     let readiness = match interest {
         Interest::Readable => Readiness::Readable,
@@ -138,7 +139,8 @@ pub(crate) fn watch(fd: i32, interest: Interest, pid: Pid) {
     arm(fd, interest, Waker::Deliver { fd, pid, readiness });
 }
 
-/// Drop `fd` from readiness monitoring (`Fd.unwatch`). Idempotent.
+/// Drop `fd` from readiness monitoring (`IO.Descriptor.unwatch`).
+/// Idempotent.
 pub(crate) fn unwatch(fd: i32) {
     REGISTRY.with(|registry| registry.borrow_mut().remove(&fd));
 }
@@ -192,8 +194,17 @@ fn expired(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
+/// Records `Interrupted` in the runtime's last-error slot, so a handler
+/// that returns the native failure sentinel reads back as the
+/// `Interrupted` variant of its error enum. Without it the Koja side
+/// reads whatever error the slot held last.
+pub(crate) fn note_interrupted() {
+    koja_runtime::set_last_error(io::Error::from(io::ErrorKind::Interrupted));
+}
+
 /// Records `TimedOut` in the runtime's last-error slot, so a handler that
-/// returns the native failure sentinel reads back as `Socket.Error.TimedOut`.
+/// returns the native failure sentinel reads back as the `TimedOut`
+/// variant of its error enum.
 pub(crate) fn note_timed_out() {
     koja_runtime::set_last_error(io::Error::from(io::ErrorKind::TimedOut));
 }

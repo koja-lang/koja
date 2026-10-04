@@ -1,0 +1,35 @@
+alias IO.Writer.Options as WriterOptions
+
+@doc """
+Per-call settings for `IO.Writer` methods. Every field has a default,
+so a call site names only what it changes, as in
+`socket.write(frame, IO.Writer.Options{timeout: Option.Some(limit)})`.
+
+`timeout` is how long one write may wait for the destination to accept
+bytes before it fails with `IO.Error.TimedOut`. `Option.None` waits
+with no bound.
+"""
+struct IO.Writer.Options
+  timeout: Option<Duration> = Option.None
+end
+
+@doc """
+A sink for bytes. Accepts a `String`, encoded as UTF-8, or a `Binary`
+for raw wire protocols, so non-UTF-8 frames pass through unaltered.
+
+`E` is the error a write fails with, and each implementor names its
+own, as `IO.Reader` does. A descriptor writes with
+`IO.Writer<IO.Error>` and a TLS socket with
+`IO.Writer<IO.Error | TLSError>`.
+"""
+protocol IO.Writer<E>
+  @doc """
+  Writes `data` and returns the number of bytes written, which can be
+  fewer than the size of `data`.
+  """
+  fn write(
+    self,
+    data: Binary | String,
+    options: WriterOptions = WriterOptions{},
+  ) -> Int ! E
+end

@@ -50,27 +50,10 @@ const SURFACE: &[(&str, &[&str])] = &[
     ("Checksum", &["crc32", "crc32c"]),
     ("Debug", &[]),
     (
-        "Fd",
-        &[
-            "block",
-            "close",
-            "koja_fd_close",
-            "koja_fd_read",
-            "koja_fd_write",
-            "koja_io_block",
-            "koja_rt_unwatch_fd",
-            "koja_rt_watch_fd",
-            "read",
-            "unwatch",
-            "watch",
-            "write",
-        ],
-    ),
-    (
         "File",
         &[
+            "Error",
             "Mode",
-            "close",
             "delete",
             "dir?",
             "exists?",
@@ -88,6 +71,7 @@ const SURFACE: &[(&str, &[&str])] = &[
             "mkdir_p",
             "open",
             "read",
+            "read_binary",
             "rename",
             "rmdir",
             "write",
@@ -96,7 +80,20 @@ const SURFACE: &[(&str, &[&str])] = &[
     ("Float", &["format", "parse"]),
     ("Float32", &["format"]),
     ("FloatLiteral", &[]),
-    ("IO", &["Ready", "gets", "puts", "warn", "write"]),
+    (
+        "IO",
+        &[
+            "Descriptor",
+            "Error",
+            "Reader",
+            "Ready",
+            "Writer",
+            "gets",
+            "puts",
+            "warn",
+            "write",
+        ],
+    ),
     ("Int", &["equals?", "format", "hash", "parse"]),
     ("Int8", &["equals?", "format", "hash"]),
     ("Int16", &["equals?", "format", "hash"]),
@@ -182,6 +179,33 @@ fn stdlib_surface_registers_after_autoimport() {
         for member in *members {
             assert_registered(&checked, &[root, member]);
         }
+    }
+}
+
+/// Members of the nested `IO.Descriptor` struct. `SURFACE` only
+/// covers two segments, so the three-segment paths get their own
+/// table.
+const DESCRIPTOR_MEMBERS: &[&str] = &[
+    "Interest",
+    "block",
+    "close",
+    "koja_fd_close",
+    "koja_fd_read",
+    "koja_fd_write",
+    "koja_io_block",
+    "koja_rt_unwatch_fd",
+    "koja_rt_watch_fd",
+    "read",
+    "unwatch",
+    "watch",
+    "write",
+];
+
+#[test]
+fn io_descriptor_members_register_after_autoimport() {
+    let checked = typecheck("1\n");
+    for member in DESCRIPTOR_MEMBERS {
+        assert_registered(&checked, &["IO", "Descriptor", member]);
     }
 }
 

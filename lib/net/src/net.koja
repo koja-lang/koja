@@ -1,4 +1,6 @@
+alias IO.Error as IOError
 alias Net.Socket.Address as SocketAddress
+alias Net.Socket.Error as SocketError
 alias Net.Socket.Kind as SocketKind
 
 @doc """
@@ -21,35 +23,38 @@ end
 POSIX socket for TCP/UDP network I/O.
 """
 struct Socket
-  fd: Fd
+  descriptor: IO.Descriptor
 
   @doc """
   Accepts an incoming connection. Returns the client file descriptor.
-  With a `timeout`, fails once that much time passes with no client.
+  With a `timeout`, fails with `SocketError.TimedOut` once that much
+  time passes with no client.
   """
-  fn accept(self, timeout: Option<Duration> = Option.None) -> Fd ! String
-    client_fd = koja_socket_accept(self.fd.descriptor, timeout_ms(timeout))
+  fn accept(self, timeout: Option<Duration> = Option.None)
+    -> IO.Descriptor ! SocketError
+
+    client_fd = koja_socket_accept(self.descriptor.raw, timeout_ms(timeout))
 
     if client_fd == -1
-      fail last_error()
+      fail SocketError.last()
     end
 
-    Fd{descriptor: client_fd}
+    IO.Descriptor{raw: client_fd}
   end
 
   @doc """
   Binds the socket to the given address and port.
   """
-  fn bind(self, addr: SocketAddress) -> Socket ! String
+  fn bind(self, addr: SocketAddress) -> Socket ! SocketError
     result = koja_socket_bind(
-      self.fd.descriptor,
+      self.descriptor.raw,
       CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
     )
 
     if result == -1
-      fail last_error()
+      fail SocketError.last()
     end
 
     self
@@ -58,19 +63,20 @@ struct Socket
   @doc """
   Closes the socket.
   """
-  fn close(self) -> String ! String
-    try self.fd.close()
+  fn close(self) ! IOError
+    try self.descriptor.close()
   end
 
   @doc """
   Connects the socket to the given address and port. With a `timeout`,
-  fails once that much time passes with the handshake still pending.
+  fails with `SocketError.TimedOut` once that much time passes with
+  the handshake still pending.
   """
   fn connect(self, addr: SocketAddress, timeout: Option<Duration> = Option.None)
-    -> Socket ! String
+    -> Socket ! SocketError
 
     result = koja_socket_connect(
-      self.fd.descriptor,
+      self.descriptor.raw,
       CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
@@ -78,7 +84,7 @@ struct Socket
     )
 
     if result == -1
-      fail last_error()
+      fail SocketError.last()
     end
 
     self
@@ -87,7 +93,7 @@ struct Socket
   @doc """
   Creates a socket of the given kind (Stream or Datagram).
   """
-  fn create(kind: SocketKind) -> Socket ! String
+  fn create(kind: SocketKind) -> Socket ! SocketError
     sock_type =
       match kind
         SocketKind.Stream -> 1
@@ -97,20 +103,20 @@ struct Socket
     fd = koja_socket_create(sock_type)
 
     if fd == -1
-      fail last_error()
+      fail SocketError.last()
     end
 
-    Socket{fd: Fd{descriptor: fd}}
+    Socket{descriptor: IO.Descriptor{raw: fd}}
   end
 
   @doc """
   Starts listening for incoming connections with the given backlog.
   """
-  fn listen(self, backlog: Int) -> Socket ! String
-    result = koja_socket_listen(self.fd.descriptor, backlog)
+  fn listen(self, backlog: Int) -> Socket ! SocketError
+    result = koja_socket_listen(self.descriptor.raw, backlog)
 
     if result == -1
-      fail last_error()
+      fail SocketError.last()
     end
 
     self
@@ -120,16 +126,18 @@ struct Socket
   Receives data and the sender's address (for unconnected datagram sockets).
   Returns a tuple of the data and sender address.
   """
-  fn recv_from(self, count: Int) -> (Binary, SocketAddress) ! String
-    (data, ip_bytes, port) = try self.recv_from_raw(count)
+  fn recv_from(self, count: Int) -> (Binary, SocketAddress) ! SocketError
+    (data, ip_bytes, port) = self.recv_from_raw(count)
+      rescue _ -> fail SocketError.last()
     (data, SocketAddress{ip: ip_address_from_bytes(ip_bytes), port: port})
   end
 
   @doc """
-  Resolves a hostname to a list of IP addresses via DNS.
+  Resolves a hostname to a list of IP addresses via DNS. Fails with
+  `SocketError.NameNotFound` when the name does not resolve.
   """
-  fn resolve(hostname: String) -> List<IPAddress> ! String
-    addresses = try Socket.resolve_raw(hostname)
+  fn resolve(hostname: String) -> List<IPAddress> ! SocketError
+    addresses = Socket.resolve_raw(hostname) rescue _ -> fail SocketError.last()
     addresses.map(bytes -> ip_address_from_bytes(bytes))
   end
 
@@ -137,7 +145,9 @@ struct Socket
   Sends data to the given address (for unconnected datagram sockets).
   Returns the number of bytes sent.
   """
-  fn send_to(self, data: Binary | String, addr: SocketAddress) -> Int ! String
+  fn send_to(self, data: Binary | String, addr: SocketAddress)
+    -> Int ! SocketError
+
     bytes =
       match data
         binary: Binary -> binary
@@ -145,7 +155,7 @@ struct Socket
       end
 
     result = koja_socket_send_to(
-      self.fd.descriptor,
+      self.descriptor.raw,
       CPtr.borrow(bytes),
       bytes.byte_size(),
       CPtr.borrow(addr.ip.bytes),
@@ -154,7 +164,7 @@ struct Socket
     )
 
     if result == -1
-      fail last_error()
+      fail SocketError.last()
     end
 
     result
@@ -163,23 +173,14 @@ struct Socket
   @doc """
   Sets the SO_REUSEADDR option on the socket.
   """
-  fn set_reuse_addr(self) -> Socket ! String
-    result = koja_socket_setsockopt_reuse(self.fd.descriptor)
+  fn set_reuse_addr(self) -> Socket ! SocketError
+    result = koja_socket_setsockopt_reuse(self.descriptor.raw)
 
     if result == -1
-      fail last_error()
+      fail SocketError.last()
     end
 
     self
-  end
-
-  @doc """
-  Non-blocking accept: returns the client fd if a connection is
-  immediately available, -2 if none is pending, or -1 on error.
-  Prefer `TCPListener.try_accept` for a typed wrapper.
-  """
-  fn try_accept_raw(self) -> Int32
-    koja_socket_try_accept(self.fd.descriptor)
   end
 
   priv fn timeout_ms(timeout: Option<Duration>) -> Int
@@ -236,7 +237,4 @@ struct Socket
 
   @extern "C"
   priv fn koja_socket_setsockopt_reuse(fd: Int32) -> Int64
-
-  @extern "C"
-  priv fn koja_socket_try_accept(fd: Int32) -> Int32
 end

@@ -110,11 +110,18 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
 
 /// Build a canonical `ResolvedType::Union` from `members`. Steps:
 /// peel each member through aliases, flatten any `Union(_)` member
-/// into the outer vec, sort by `display_resolution`, dedup by the
-/// same key. Collapse 0 members to `Unit`, 1 member to itself, ≥2
-/// to `Union(...)`. The sort+dedup makes `A | B` and `B | A` and
-/// `A | A | B` all equal as `ResolvedType` values, so the existing
-/// derive-`PartialEq` on `ResolvedType` compares unions correctly.
+/// into the outer vec, sort by `display_resolution` with the derived
+/// `Ord` as the tie-break, dedup structurally. Collapse 0 members to
+/// `Unit`, 1 member to itself, ≥2 to `Union(...)`. The sort+dedup
+/// makes `A | B` and `B | A` and `A | A | B` all equal as
+/// `ResolvedType` values, so the existing derive-`PartialEq` on
+/// `ResolvedType` compares unions correctly.
+///
+/// The display string orders members so the union's member order
+/// (and so the IR tag byte) reads the way a user would list them,
+/// but it is not an identity. A nested type renders as its leaf, so
+/// `File.Error` and `IO.Error` both display as `Error`. The tie-break
+/// and the structural dedup keep such members distinct.
 pub(crate) fn canonical_union(
     members: Vec<ResolvedType>,
     registry: &GlobalRegistry,
@@ -126,8 +133,12 @@ pub(crate) fn canonical_union(
             other => flat.push(other),
         }
     }
-    flat.sort_by_key(|m| display_resolution(m, registry));
-    flat.dedup_by_key(|m| display_resolution(m, registry));
+    flat.sort_by(|a, b| {
+        display_resolution(a, registry)
+            .cmp(&display_resolution(b, registry))
+            .then_with(|| a.cmp(b))
+    });
+    flat.dedup();
     match flat.len() {
         0 => registry.primitive("Unit"),
         1 => flat.into_iter().next().expect("flat.len() == 1"),
