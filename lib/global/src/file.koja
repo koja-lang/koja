@@ -14,9 +14,10 @@ end
 @doc """
 Operations on paths. Each function names a file or directory by its
 path and fails with `File.Error`. `open` returns the descriptor for
-the file, and from there reads, writes, and `close` are `Fd` methods
-that fail with `IO.Error`. `read`, `read_binary`, and `write` do a
-whole file in one call for the common case.
+the file, and from there reads, writes, and `close` are
+`IO.Descriptor` methods that fail with `IO.Error`. `read`,
+`read_binary`, and `write` do a whole file in one call for the common
+case.
 """
 struct File
   @doc """
@@ -94,15 +95,15 @@ struct File
 
   @doc """
   Opens a file with the given mode and returns its descriptor. Read
-  and write through the `IO.Reader` and `IO.Writer` methods on `Fd`,
-  and release it with `Fd.close`.
+  and write through the `IO.Reader` and `IO.Writer` methods on
+  `IO.Descriptor`, and release it with `IO.Descriptor.close`.
 
   `File.Mode.Read` opens for reading, and the file must exist.
   `File.Mode.Write` opens for writing and creates or truncates the
   file. `File.Mode.Append` opens for appending and creates the file if
   needed.
   """
-  fn open(path: String, mode: FileMode) -> Fd ! FileError
+  fn open(path: String, mode: FileMode) -> IO.Descriptor ! FileError
     mode_int =
       match mode
         FileMode.Read -> 0
@@ -118,7 +119,7 @@ struct File
       fail FileError.last()
     end
 
-    Fd{descriptor: fd}
+    IO.Descriptor{raw: fd}
   end
 
   @doc """

@@ -1,6 +1,7 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
-alias Fd.Interest
+alias IO.Descriptor
+alias IO.Descriptor.Interest
 alias IO.Error as IOError
 
 priv const SSL_ERROR_SYSCALL: Int64 = 5
@@ -211,14 +212,17 @@ struct TLSSession
   ssl: CPtr<UInt8>
 
   @doc """
-  Performs a server-side TLS handshake over the connected `fd` using
-  the certificate and key from `config`. Suspends the process while
-  the socket is not ready. `timeout` bounds the whole handshake,
+  Performs a server-side TLS handshake over the connected `descriptor`
+  using the certificate and key from `config`. Suspends the process
+  while the socket is not ready. `timeout` bounds the whole handshake,
   measured from this call, and a wait past it fails with
   `IOError.TimedOut`. Returns the established session.
   """
-  fn accept(fd: Fd, config: TLSConfig, timeout: Option<Duration> = Option.None)
-    -> TLSSession ! IOError | TLSError
+  fn accept(
+    descriptor: Descriptor,
+    config: TLSConfig,
+    timeout: Option<Duration> = Option.None,
+  ) -> TLSSession ! IOError | TLSError
 
     identity =
       match config.identity
@@ -248,12 +252,12 @@ struct TLSSession
       fail TLSError.Internal
     end
 
-    ssl_set_fd(ssl, fd.descriptor)
-    try handshake_loop(ssl, ctx, fd, false, deadline_for(timeout))
+    ssl_set_fd(ssl, descriptor.raw)
+    try handshake_loop(ssl, ctx, descriptor, false, deadline_for(timeout))
   end
 
   @doc """
-  Performs a client-side TLS handshake over the connected `fd`.
+  Performs a client-side TLS handshake over the connected `descriptor`.
   Sends `hostname` for SNI and, when `config.verify` is set, checks
   the server certificate chain against it. Suspends the process while
   the socket is not ready. `timeout` bounds the whole handshake,
@@ -261,7 +265,7 @@ struct TLSSession
   `IOError.TimedOut`. Returns the established session.
   """
   fn connect(
-    fd: Fd,
+    descriptor: Descriptor,
     hostname: String,
     config: TLSConfig,
     timeout: Option<Duration> = Option.None,
@@ -289,7 +293,7 @@ struct TLSSession
       fail TLSError.Internal
     end
 
-    ssl_set_fd(ssl, fd.descriptor)
+    ssl_set_fd(ssl, descriptor.raw)
 
     host_cs =
       match hostname.to_cstring()
@@ -309,7 +313,7 @@ struct TLSSession
     end
 
     host_cs.free()
-    try handshake_loop(ssl, ctx, fd, true, deadline_for(timeout))
+    try handshake_loop(ssl, ctx, descriptor, true, deadline_for(timeout))
   end
 
   @doc """
@@ -320,11 +324,15 @@ struct TLSSession
   `TCPSocket` calls this from its `IO.Reader` conformance with its own
   descriptor.
   """
-  fn read(self, fd: Fd, count: Int, timeout: Option<Duration> = Option.None)
-    -> Binary ! IOError | TLSError
+  fn read(
+    self,
+    descriptor: Descriptor,
+    count: Int,
+    timeout: Option<Duration> = Option.None,
+  ) -> Binary ! IOError | TLSError
 
     buf: CPtr<UInt8> = CPtr.alloc(count)
-    result = read_loop(self.ssl, fd, buf, count, deadline_for(timeout))
+    result = read_loop(self.ssl, descriptor, buf, count, deadline_for(timeout))
     buf.free()
     try result
   end
@@ -348,7 +356,7 @@ struct TLSSession
   """
   fn write(
     self,
-    fd: Fd,
+    descriptor: Descriptor,
     data: Binary | String,
     timeout: Option<Duration> = Option.None,
   ) -> Int ! IOError | TLSError
@@ -359,7 +367,7 @@ struct TLSSession
         s: String -> s.to_binary()
       end
 
-    try write_loop(self.ssl, fd, bytes, deadline_for(timeout))
+    try write_loop(self.ssl, descriptor, bytes, deadline_for(timeout))
   end
 
   priv fn add_chain_certs(ctx: CPtr<UInt8>, bio: CPtr<UInt8>) -> Bool ! TLSError
@@ -448,7 +456,7 @@ struct TLSSession
   priv fn handshake_loop(
     ssl: CPtr<UInt8>,
     ctx: CPtr<UInt8>,
-    fd: Fd,
+    descriptor: Descriptor,
     client: Bool,
     deadline: Option<Instant>,
   ) -> TLSSession ! IOError | TLSError
@@ -468,7 +476,7 @@ struct TLSSession
       fail failure
     end
 
-    match wait_ready(fd, err, deadline)
+    match wait_ready(descriptor, err, deadline)
       Result.Err(e) ->
         ssl_free(ssl)
         ssl_ctx_free(ctx)
@@ -478,7 +486,7 @@ struct TLSSession
         ()
     end
 
-    try handshake_loop(ssl, ctx, fd, client, deadline)
+    try handshake_loop(ssl, ctx, descriptor, client, deadline)
   end
 
   priv fn io_failure(err: Int) -> IOError | TLSError
@@ -546,7 +554,7 @@ struct TLSSession
 
   priv fn read_loop(
     ssl: CPtr<UInt8>,
-    fd: Fd,
+    descriptor: Descriptor,
     buf: CPtr<UInt8>,
     count: Int,
     deadline: Option<Instant>,
@@ -569,8 +577,8 @@ struct TLSSession
       fail io_failure(err)
     end
 
-    try wait_ready(fd, err, deadline)
-    try read_loop(ssl, fd, buf, count, deadline)
+    try wait_ready(descriptor, err, deadline)
+    try read_loop(ssl, descriptor, buf, count, deadline)
   end
 
   priv fn syscall_failure -> IOError | TLSError
@@ -647,11 +655,15 @@ struct TLSSession
     true
   end
 
-  # Waits for `fd` in the direction OpenSSL asked for until `deadline`.
-  # `ssl_error` is `SSL_ERROR_WANT_READ` or `SSL_ERROR_WANT_WRITE`. Each
-  # wait gets the time left, so a whole call shares one bound.
-  priv fn wait_ready(fd: Fd, ssl_error: Int, deadline: Option<Instant>)
-    ! IOError
+  # Waits for `descriptor` in the direction OpenSSL asked for until
+  # `deadline`. `ssl_error` is `SSL_ERROR_WANT_READ` or
+  # `SSL_ERROR_WANT_WRITE`. Each wait gets the time left, so a whole
+  # call shares one bound.
+  priv fn wait_ready(
+    descriptor: Descriptor,
+    ssl_error: Int,
+    deadline: Option<Instant>,
+  ) ! IOError
 
     interest = ssl_error == SSL_ERROR_WANT_READ
       ? Interest.Readable
@@ -659,12 +671,14 @@ struct TLSSession
 
     match deadline
       Option.None ->
-        _ = fd.block(interest, Option.None)
+        _ = descriptor.block(interest, Option.None)
 
       Option.Some(at) ->
         remaining = at.since(Instant.now())
 
-        if remaining.zero?() or fd.block(interest, Option.Some(remaining))
+        if remaining.zero?()
+          or descriptor.block(interest, Option.Some(remaining))
+
           fail IOError.TimedOut
         end
     end
@@ -672,7 +686,7 @@ struct TLSSession
 
   priv fn write_loop(
     ssl: CPtr<UInt8>,
-    fd: Fd,
+    descriptor: Descriptor,
     bytes: Binary,
     deadline: Option<Instant>,
   ) -> Int ! IOError | TLSError
@@ -689,8 +703,8 @@ struct TLSSession
       fail io_failure(err)
     end
 
-    try wait_ready(fd, err, deadline)
-    try write_loop(ssl, fd, bytes, deadline)
+    try wait_ready(descriptor, err, deadline)
+    try write_loop(ssl, descriptor, bytes, deadline)
   end
 
   @extern "C" @link "ssl:BIO_free"

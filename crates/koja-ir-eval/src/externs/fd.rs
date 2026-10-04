@@ -1,4 +1,4 @@
-//! Externs declared in `lib/global/src/fd.koja` and
+//! Externs declared in `lib/global/src/io/descriptor.koja` and
 //! `lib/global/src/file.koja`.
 //!
 //! Three families:
@@ -14,8 +14,8 @@
 //! - **Actor-coupled I/O** (`koja_io_block`, `koja_rt_watch_fd`,
 //!   `koja_rt_unwatch_fd`): routed to eval's own cooperative
 //!   [`crate::reactor`] (the native symbols are welded to the native
-//!   scheduler), so `Fd.block` parks on readiness and `Fd.watch` delivers
-//!   `IOReady` messages through the driver.
+//!   scheduler), so `IO.Descriptor.block` parks on readiness and
+//!   `IO.Descriptor.watch` delivers `IOReady` messages through the driver.
 //!
 //! The generated handlers narrow `Value::Int` on the way out
 //! (`as i32`) at the C ABI boundary.
@@ -110,9 +110,9 @@ pub(super) async fn fd_write(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(written))
 }
 
-/// `koja_io_block(fd, interest, timeout_ms)` (`Fd.block`): suspend until
-/// `fd` is ready for the requested direction via eval's reactor. Returns
-/// 1 when the deadline passed, 0 otherwise.
+/// `koja_io_block(fd, interest, timeout_ms)` (`IO.Descriptor.block`):
+/// suspend until `fd` is ready for the requested direction via eval's
+/// reactor. Returns 1 when the deadline passed, 0 otherwise.
 /// `interest`: 0 = readable, 1 = writable.
 pub(super) async fn io_block(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(fd), Value::Int(interest), Value::Int(timeout_ms)] = args else {
@@ -132,8 +132,9 @@ pub(super) async fn io_block(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(i64::from(wait == IoWait::TimedOut)))
 }
 
-/// `koja_rt_watch_fd(fd, interest)` (`Fd.watch`): arm `fd` so the driver
-/// delivers an `IOReady` message to the current process when it fires.
+/// `koja_rt_watch_fd(fd, interest)` (`IO.Descriptor.watch`): arm `fd` so
+/// the driver delivers an `IOReady` message to the current process when
+/// it fires.
 /// `interest`: 0 = readable, 1 = writable.
 pub(super) fn rt_watch_fd(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(fd), Value::Int(interest)] = args else {
@@ -152,7 +153,8 @@ pub(super) fn rt_watch_fd(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Unit)
 }
 
-/// `koja_rt_unwatch_fd(fd)` (`Fd.unwatch`): stop monitoring `fd`.
+/// `koja_rt_unwatch_fd(fd)` (`IO.Descriptor.unwatch`): stop monitoring
+/// `fd`.
 pub(super) fn rt_unwatch_fd(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(fd)] = args else {
         return Err(type_mismatch("koja_rt_unwatch_fd", "(fd: Int32)", args));

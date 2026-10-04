@@ -1161,12 +1161,12 @@ fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R
 /// same constant the `koja-ir` `deliver_io_ready` elaborate pass keys on.
 const IO_READY_SYMBOL: &str = "Global.IO.Ready";
 
-/// Materialize the `IOReady.{Read,Write,Error}(Fd)` value the reactor
-/// delivers to a `Fd.watch` owner. Built at send time (the driver's
-/// readiness pass) so the receiver's synthesized `ReceiveTag::IOReady` arm
-/// just binds it. `readiness` selects the variant. `fd` fills the wrapped
-/// `Fd{ descriptor }`, whose struct symbol is recovered from the variant
-/// payload rather than fabricated.
+/// Materialize the `IOReady.{Read,Write,Error}(IO.Descriptor)` value the
+/// reactor delivers to an `IO.Descriptor.watch` owner. Built at send time
+/// (the driver's readiness pass) so the receiver's synthesized
+/// `ReceiveTag::IOReady` arm just binds it. `readiness` selects the
+/// variant. `fd` fills the wrapped `IO.Descriptor{ raw }`, whose struct
+/// symbol is recovered from the variant payload rather than fabricated.
 pub(crate) fn build_io_ready_value<R: CallResolver>(
     resolver: &R,
     readiness: Readiness,
@@ -1196,7 +1196,7 @@ pub(crate) fn build_io_ready_value<R: CallResolver>(
     };
     let [IRType::Struct(fd_symbol)] = types.as_slice() else {
         panic!(
-            "interpreter: `IOReady.{variant_name}` payload is not a single `Fd` struct (seal invariant violation)"
+            "interpreter: `IOReady.{variant_name}` payload is not a single `IO.Descriptor` struct (seal invariant violation)"
         );
     };
     Value::Enum {

@@ -123,7 +123,8 @@ fn last_error_value() -> Value {
     Value::string(abi::take_block_bytes(payload))
 }
 
-/// Extract the raw fd from a `Socket{fd: Fd{descriptor}}` receiver.
+/// Extract the raw fd from a `Socket{descriptor: IO.Descriptor{raw}}`
+/// receiver.
 fn socket_fd(receiver: &Value) -> Result<i32, RuntimeError> {
     if let Value::Struct { fields, .. } = receiver
         && let [
@@ -137,7 +138,7 @@ fn socket_fd(receiver: &Value) -> Result<i32, RuntimeError> {
     }
     Err(RuntimeError::TypeMismatch {
         detail: format!(
-            "Socket.recv_from_raw: receiver is not a Socket{{fd: Fd}} struct: {receiver}"
+            "Socket.recv_from_raw: receiver is not a Socket{{descriptor: IO.Descriptor}} struct: {receiver}"
         ),
     })
 }

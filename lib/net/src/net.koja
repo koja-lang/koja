@@ -23,21 +23,23 @@ end
 POSIX socket for TCP/UDP network I/O.
 """
 struct Socket
-  fd: Fd
+  descriptor: IO.Descriptor
 
   @doc """
   Accepts an incoming connection. Returns the client file descriptor.
   With a `timeout`, fails with `SocketError.TimedOut` once that much
   time passes with no client.
   """
-  fn accept(self, timeout: Option<Duration> = Option.None) -> Fd ! SocketError
-    client_fd = koja_socket_accept(self.fd.descriptor, timeout_ms(timeout))
+  fn accept(self, timeout: Option<Duration> = Option.None)
+    -> IO.Descriptor ! SocketError
+
+    client_fd = koja_socket_accept(self.descriptor.raw, timeout_ms(timeout))
 
     if client_fd == -1
       fail SocketError.last()
     end
 
-    Fd{descriptor: client_fd}
+    IO.Descriptor{raw: client_fd}
   end
 
   @doc """
@@ -45,7 +47,7 @@ struct Socket
   """
   fn bind(self, addr: SocketAddress) -> Socket ! SocketError
     result = koja_socket_bind(
-      self.fd.descriptor,
+      self.descriptor.raw,
       CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
@@ -62,7 +64,7 @@ struct Socket
   Closes the socket.
   """
   fn close(self) ! IOError
-    try self.fd.close()
+    try self.descriptor.close()
   end
 
   @doc """
@@ -74,7 +76,7 @@ struct Socket
     -> Socket ! SocketError
 
     result = koja_socket_connect(
-      self.fd.descriptor,
+      self.descriptor.raw,
       CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
@@ -104,14 +106,14 @@ struct Socket
       fail SocketError.last()
     end
 
-    Socket{fd: Fd{descriptor: fd}}
+    Socket{descriptor: IO.Descriptor{raw: fd}}
   end
 
   @doc """
   Starts listening for incoming connections with the given backlog.
   """
   fn listen(self, backlog: Int) -> Socket ! SocketError
-    result = koja_socket_listen(self.fd.descriptor, backlog)
+    result = koja_socket_listen(self.descriptor.raw, backlog)
 
     if result == -1
       fail SocketError.last()
@@ -153,7 +155,7 @@ struct Socket
       end
 
     result = koja_socket_send_to(
-      self.fd.descriptor,
+      self.descriptor.raw,
       CPtr.borrow(bytes),
       bytes.byte_size(),
       CPtr.borrow(addr.ip.bytes),
@@ -172,7 +174,7 @@ struct Socket
   Sets the SO_REUSEADDR option on the socket.
   """
   fn set_reuse_addr(self) -> Socket ! SocketError
-    result = koja_socket_setsockopt_reuse(self.fd.descriptor)
+    result = koja_socket_setsockopt_reuse(self.descriptor.raw)
 
     if result == -1
       fail SocketError.last()

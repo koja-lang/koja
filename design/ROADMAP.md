@@ -33,11 +33,11 @@ call sites once instead of twice.
 - Reshape the I/O types along [IO.md](IO.md). Landed, the three error
   domains `IO.Error`, `File.Error`, and `Socket.Error`, the
   `IO.Reader<E>` and `IO.Writer<E>` protocols with per-call options
-  and `Fd` and `TCPSocket` on them, `File.open` returning an `Fd`,
-  `IO.gets` returning `Option<String>` so callers can tell end of
-  input from an empty line, `Fd.Interest` on the reactor methods, and
-  `try_accept` folded into a zero-bound `accept`. The `Fd` to
-  `IO.Descriptor` rename follows on its own branch before 0.20 ships.
+  and `IO.Descriptor` and `TCPSocket` on them, `File.open` returning
+  an `IO.Descriptor`, `IO.gets` returning `Option<String>` so callers
+  can tell end of input from an empty line,
+  `IO.Descriptor.Interest` on the reactor methods, `try_accept` folded
+  into a zero-bound `accept`, and `Fd` renamed to `IO.Descriptor`.
 
 ### Language
 
@@ -74,8 +74,8 @@ call sites once instead of twice.
 - **[DONE]** Add socket read, write, connect, and accept timeouts so a
   stalled peer cannot block its owning process forever. Sockets are non-blocking
   through the reactor on both backends, so a timeout is a bounded reactor
-  wait, the same mechanism `receive ... after` and `Fd.watch` use, not a
-  socket option. The shape follows
+  wait, the same mechanism `receive ... after` and `IO.Descriptor.watch`
+  use, not a socket option. The shape follows
   [IO.md](IO.md#timeouts-are-per-call) and takes a `Duration` from
   [TIME.md](TIME.md). The timeouts landed as socket fields on the
   `Socket.Error` surface, and IO.md step 2 moved them to per-call
@@ -118,9 +118,9 @@ plus `Process.context` as 0.20 and finish `Log` and the exporter in 0.21.
 
 The deferred standard library items stay in [GAPS.md](GAPS.md) and can ship
 in any patch release: `UUID.v4()`, `Binary.compare` and endian helpers,
-`List.sort`, `System.cmd`, and `File.ls`. `Fd` random access, durability,
-and locking also stay there, as do the compiler fixes with a known cause,
-such as the
+`List.sort`, `System.cmd`, and `File.ls`. `IO.Descriptor` random access,
+durability, and locking also stay there, as do the compiler fixes with a
+known cause, such as the
 [function reference default](GAPS.md#function-references-cannot-be-default-field-values).
 None of them is a 0.20 release gate. The tree-sitter grammar, the
 editor extensions, and kojalang.org pick up the `unless` removal and the

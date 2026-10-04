@@ -11,8 +11,8 @@ at the end are the follow-on work.
 ## Summary
 
 - `protocol IO.Reader<E>` and `protocol IO.Writer<E>`, nested under
-  `IO` and generic in the error each implementor fails with. `Fd`
-  implements both with `IO.Error`, `TCPSocket` with
+  `IO` and generic in the error each implementor fails with.
+  `IO.Descriptor` implements both with `IO.Error`, `TCPSocket` with
   `IO.Error | TLSError`. `read` returns bytes and `<<>>` at end of
   stream.
 - Text lives on `IO.Reader` once, as default-bodied methods
@@ -21,11 +21,12 @@ at the end are the follow-on work.
 - Three errno domains. `IO.Error` for an open stream, `File.Error` for
   a path, `Socket.Error` for connection setup. `TLSError` stays
   separate. Decode failures are `String.ConversionError`.
-- `Fd` is the handle. `File.open` returns one, and `File` is the path
-  module with statics only. `TCPSocket` wraps an `Fd` for the
-  socket-specific surface. The reactor methods stay on `Fd`, take an
-  `Fd.Interest`, and are documented as the floor for processes that
-  drive a descriptor directly.
+- `IO.Descriptor` is the handle. `File.open` returns one, and `File`
+  is the path module with statics only. `TCPSocket` wraps an
+  `IO.Descriptor` for the socket-specific surface. The reactor
+  methods stay on `IO.Descriptor`, take an `IO.Descriptor.Interest`,
+  and are documented as the floor for processes that drive a
+  descriptor directly.
 - `IO` is the I/O namespace. Its own functions are the console,
   `puts`, `warn`, `write`, and `gets`, and the protocols and the
   stream error nest under it.
@@ -69,8 +70,8 @@ data)` is a message send, `File.open` returns a pid, and `IO.gets`
 takes the device as a defaulted first argument. That fits a world
 where everything is a process.
 
-Koja has processes, but `Fd` is a value and the reactor is a runtime
-service. That puts Koja closer to Rust, Go, and Zig. All three
+Koja has processes, but `IO.Descriptor` is a value and the reactor is
+a runtime service. That puts Koja closer to Rust, Go, and Zig. All three
 converge on the same answer: a small reader and writer abstraction,
 one error type at the descriptor level, and every text convenience
 written once against the reader. Koja has protocols, unions on the
@@ -90,8 +91,8 @@ needs.
    could branch between at one call site. A stream, a path, and a
    connection are three such sets, so errno splits into three enums
    and a composite operation declares the union.
-5. The descriptor is the handle. User code holds the `Fd` that
-   `File.open` returned, or a `TCPSocket` that wraps one.
+5. The descriptor is the handle. User code holds the `IO.Descriptor`
+   that `File.open` returned, or a `TCPSocket` that wraps one.
 
 ## Design
 
@@ -121,8 +122,8 @@ protocol IO.Writer<E>
   fn write(self, data: Binary | String, options: IO.Writer.Options = IO.Writer.Options{}) -> Int ! E
 end
 
-impl IO.Reader<IO.Error> for Fd
-impl IO.Writer<IO.Error> for Fd
+impl IO.Reader<IO.Error> for IO.Descriptor
+impl IO.Writer<IO.Error> for IO.Descriptor
 impl IO.Reader<IO.Error | TLSError> for TCPSocket
 impl IO.Writer<IO.Error | TLSError> for TCPSocket
 ```
@@ -249,7 +250,7 @@ open descriptor. `File.Error` is what `open`, `delete`, `mkdir`,
 `lib/net/src/error.koja` minus the stream and decode causes it had
 absorbed. A function fails with the domain of the failure, not the
 domain of its owner, so `File.open` fails with `File.Error` and
-`Fd.read` with `IO.Error`.
+`IO.Descriptor.read` with `IO.Error`.
 
 Rust keeps one `ErrorKind` for all of errno. Koja's error channel is
 a union, and ERROR-HANDLING.md says a composite operation declares the
@@ -279,14 +280,16 @@ Every `! String` in `fd.koja`, `file.koja`, and `net.koja` is gone.
 different cleanup with a different shape (a parse error with a
 position) and are not part of this document.
 
-### `Fd` is the handle
+### `IO.Descriptor` is the handle
 
-`Fd` keeps `close` and carries the `IO.Reader` and `IO.Writer`
-implementations. It is what `File.open` returns, what `STDIN`,
-`STDOUT`, and `STDERR` name, and what the socket types wrap.
+`IO.Descriptor` keeps `close` and carries the `IO.Reader` and
+`IO.Writer` implementations. It is what `File.open` returns, what
+`STDIN`, `STDOUT`, and `STDERR` name, and what the socket types wrap.
+Its one field, `raw: Int32`, is the integer the operating system
+knows the descriptor by.
 
-The reactor methods `block`, `watch`, and `unwatch` stay on `Fd`, and
-the `IO.Ready` message stays under `IO`. The draft leaned to a
+The reactor methods `block`, `watch`, and `unwatch` stay on
+`IO.Descriptor`, and the `IO.Ready` message stays under `IO`. The draft leaned to a
 `Runtime.Reactor` namespace, and two facts moved it back. `Runtime` is
 documented as read-only observability, every value a point-in-time
 gauge that cannot fail, and `watch` has a side effect while `block`
@@ -294,11 +297,10 @@ parks the process, so housing them there would change what `Runtime`
 is. And Koja has one ambient reactor that nobody holds, constructs, or
 passes, so a reactor namespace would be a bag of statics standing in
 for an object that does not exist, with the descriptor as the only
-value in play. `fd.watch(...)` is the method spelling of
-`watch(fd, ...)` when there is one reactor. An `IO.Reactor` sibling
-was set aside for the same reason, and because the descriptor already
-puts every piece of this surface under `IO` once it is renamed
-`IO.Descriptor`.
+value in play. `descriptor.watch(...)` is the method spelling of
+`watch(descriptor, ...)` when there is one reactor. An `IO.Reactor`
+sibling was set aside for the same reason, and because the descriptor
+already puts every piece of this surface under `IO`.
 
 The objection that plumbing clutters the user handle is answered by
 the layering. The descriptor is the floor by design, with buffering
@@ -306,35 +308,43 @@ above it (open question 2), so a process that drives a raw descriptor
 is the caller that wants `watch` and `block`, and everyone else lives
 on the layer above. The three methods are documented as that floor.
 
-`Fd.Interest`, with `Readable` and `Writable`, replaces the `Bool` on
-`block` and the `Int` on `watch`. It nests under the type whose
-methods take it, the convention `IO.Reader.Options` and `File.Mode`
-follow, and the `IO.Descriptor` rename carries it along. `IO.Ready` is
-not nested the same way because it is a message type that appears in
-process headers and match arms in code that never called `watch`
-itself, so it is an `IO` concept the way `IO.Error` is.
+`IO.Descriptor.Interest`, with `Readable` and `Writable`, replaces
+the `Bool` on `block` and the `Int` on `watch`. It nests under the
+type whose methods take it, the convention `IO.Reader.Options` and
+`File.Mode` follow. `IO.Ready` is not nested the same way because it
+is a message type that appears in process headers and match arms in
+code that never called `watch` itself, so it is an `IO` concept the
+way `IO.Error` is.
 
-`Fd` implements both protocols, so `STDOUT.write` and
+`IO.Descriptor` implements both protocols, so `STDOUT.write` and
 `STDIN.read_line()` work without a wrapper type, and so does the
 descriptor a file open returned.
 
-The name changes to `IO.Descriptor` on its own branch before 0.20
-ships, so one release carries every I/O break (decided 2026-10-04). `Fd` was an acceptable name while it was the floor under
-`File` and `TCPSocket`. Now it is the handle user code holds, and a
-shortcut name on the handle fails the same rule that turned `FS` into
-`FileSystem`. It nests under `IO` because `File.open`, the standard
-streams, and the sockets all produce one and the protocols it
-implements live there. `Descriptor` over `Handle` because the type is
-the integer the OS owns and stays that thin. Anything that keeps state
-above it, a buffer, an encoding, or a line cursor, is a wrapper that
-implements the same protocols, possibly an `IO.Handle` that wraps an
-`IO.Descriptor`.
+The type was `Fd` until the rename landed on its own branch before
+0.20 shipped, so one release carries every I/O break (decided
+2026-10-04). `Fd` was an acceptable name while it was the floor under
+`File` and `TCPSocket`. Once it became the handle user code holds, a
+shortcut name on the handle failed the same rule that turned `FS`
+into `FileSystem`. It nests under `IO` because `File.open`, the
+standard streams, and the sockets all produce one and the protocols
+it implements live there. `Descriptor` over `Handle` because the type
+is the integer the OS owns and stays that thin. Anything that keeps
+state above it, a buffer, an encoding, or a line cursor, is a wrapper
+that implements the same protocols, possibly an `IO.Handle` that
+wraps an `IO.Descriptor`. The field is `raw` rather than `descriptor`
+so that `socket.descriptor.raw` reads as the integer under the handle
+and not as a descriptor of a descriptor. The members that exposed the
+old name followed it. `Socket.fd` became `Socket.descriptor`,
+`TCPListener.fd()` became `descriptor()`, and the `fd` parameters on
+`TLSSession` became `descriptor`. The runtime externs keep their
+`koja_fd_*` names, since `fd` is the POSIX term for the integer they
+take.
 
 ### `File` is the path module
 
 ```koja
 struct File
-  fn open(path: String, mode: File.Mode) -> Fd ! File.Error
+  fn open(path: String, mode: File.Mode) -> IO.Descriptor ! File.Error
   fn read(path: String) -> String ! File.Error | IO.Error | String.ConversionError
   fn read_binary(path: String) -> Binary ! File.Error | IO.Error
   fn write(path: String, content: Binary | String) ! File.Error | IO.Error
@@ -349,8 +359,9 @@ end
 ```
 
 `File` has no fields and no instance methods. Every function names a
-file or directory by its path, and `open` hands back the `Fd`. The
-first draft of step 2 had a `struct File{fd: Fd}` that implemented
+file or directory by its path, and `open` hands back the
+`IO.Descriptor`. The first draft of step 2 had a `struct File{fd: Fd}`
+(the descriptor type was `Fd` at the time) that implemented
 both protocols by delegating to its descriptor, and the filesystem
 statics in a separate `FileSystem` module. Writing it showed that the
 value type was a one-field wrapper whose every method forwarded to
@@ -388,8 +399,8 @@ There is no `from:` parameter. A caller with another reader calls
 `lib/global/test/io/reader_test.koja`, which opens a temp file and
 calls `read_line` on the descriptor.
 
-`IO.Ready` stays under `IO` as the message `Fd.watch` produces. See
-"`Fd` is the handle" for why.
+`IO.Ready` stays under `IO` as the message `IO.Descriptor.watch`
+produces. See "`IO.Descriptor` is the handle" for why.
 
 ### Timeouts are per call
 
@@ -462,10 +473,11 @@ default. Behavior that depends on ambient state a reader cannot see
 at the call site is rejected.
 
 Underneath, every one of these is a bounded reactor wait, the
-mechanism `receive ... after` and `Fd.block` already use. Sockets are
-non-blocking on both backends, so no socket option is involved. One
-runtime entry point, a bounded `Fd.block`, is the whole runtime change.
-`Fd.block` returns `Bool`, `true` on the timeout.
+mechanism `receive ... after` and `IO.Descriptor.block` already use.
+Sockets are non-blocking on both backends, so no socket option is
+involved. One runtime entry point, a bounded `IO.Descriptor.block`, is
+the whole runtime change. `IO.Descriptor.block` returns `Bool`, `true`
+on the timeout.
 
 ## Migration
 
@@ -493,18 +505,24 @@ Each step is one MR with its breaking lines in the changelog.
    instead of a bare flag, `IO.Ready` stays under `IO`, and
    `TCPListener.try_accept` folded into `accept` with a zero bound.
    The two runtime externs behind `block` and `watch` share one
-   interest encoding. See "`Fd` is the handle" for the namespace
-   reasoning, which reversed the draft.
+   interest encoding. See "`IO.Descriptor` is the handle" for the
+   namespace reasoning, which reversed the draft.
+5. **Done.** `Fd` became `IO.Descriptor` and `Fd.Interest` became
+   `IO.Descriptor.Interest`, with the field renamed to `raw`. The
+   source moved to `lib/global/src/io/descriptor.koja`. `Socket.fd`,
+   `TCPListener.fd()`, and the `fd` parameters on `TLSSession` became
+   `descriptor`. The runtimes read the struct by position, so no
+   runtime code changed.
 
-The former step 5, filesystem statics in an `FS` module, is resolved
-by `File` staying the path module.
+The planned filesystem statics in an `FS` module are resolved by
+`File` staying the path module.
 
 ## Rejected
 
-- **A `from: Fd = STDIN` parameter on `IO.gets`.** Considered as the
+- **A `from: IO.Descriptor = STDIN` parameter on `IO.gets`.** Considered as the
   Elixir-shaped fix for the `gets` gap. It solves one function. The
   protocol solves every reader, and `gets` becomes two lines.
-- **`Fd.read` returning `Option<Binary>`.** `<<>>` at end of stream is
+- **`IO.Descriptor.read` returning `Option<Binary>`.** `<<>>` at end of stream is
   what Rust and Go do (`Ok(0)`, `io.EOF` after zero bytes), and a
   caller that wants to loop already tests for empty. `Option` belongs
   on `read_line`, where an empty line and end of stream are both
@@ -517,10 +535,11 @@ by `File` staying the path module.
   to the causes that can happen, and the union on the error channel
   composes them where an operation does both.
 - **A `FileSystem` module for the path statics.** Tried during step 2
-  and reverted. It left `File` as a one-field wrapper around `Fd`, and
-  it moved `open` away from `delete`, `rename`, and `mkdir`, the
-  operations it shares a path argument with. `File` as the path module
-  with `open -> Fd` keeps them together and needs no second type.
+  and reverted. It left `File` as a one-field wrapper around the
+  descriptor, and it moved `open` away from `delete`, `rename`, and
+  `mkdir`, the operations it shares a path argument with. `File` as
+  the path module with `open -> IO.Descriptor` keeps them together and
+  needs no second type.
 - **Timeouts as socket state.** `read_timeout` and `write_timeout`
   fields set by `with_read_timeout` and `with_write_timeout`, and a
   `TCPListener.Options` to seed accepted sockets. Shipped in #135 and
@@ -544,8 +563,8 @@ by `File` staying the path module.
   `readUntilDelimiter`, one `anyerror` set per operation.
 - **Elixir.** Devices are processes. `IO.read(device, :line)` and
   `IO.gets(device \\ :stdio, prompt)` return `:eof` as an atom. The
-  model depends on every device being a process, which Koja's `Fd`
-  is not.
+  model depends on every device being a process, which Koja's
+  `IO.Descriptor` is not.
 
 ## Open questions
 
@@ -561,15 +580,15 @@ by `File` staying the path module.
    bound, `S: IO.Reader<IO.Error | TLSError>`, works today. The
    generic form is what a buffered reader over any stream needs, and
    it lands with that reader. Recorded in GAPS.md.
-2. **Buffering.** `read_line` over `Fd.read(1)` is one syscall per
-   byte. The answer is a layer above the descriptor that implements
+2. **Buffering.** `read_line` over `IO.Descriptor.read(1)` is one
+   syscall per byte. The answer is a layer above the descriptor that implements
    `IO.Reader<E>` itself, a `BufferedReader<R: IO.Reader<E>, E>` or an
    `IO.Handle` that wraps an `IO.Descriptor`, and it can land without
    changing the protocol once open question 1 is closed. Whether
    `File.open` returns the descriptor or the handle by default is a
    separate choice.
-3. **Closed.** `Fd.block` and friends stay on the descriptor. See
-   "`Fd` is the handle".
+3. **Closed.** `IO.Descriptor.block` and friends stay on the
+   descriptor. See "`IO.Descriptor` is the handle".
 4. **`write_all` and `read_to_end`.** `IO.Writer.write` returns the
    count, the Rust and Go position, and a short write is the caller's
    to notice. A `write_all` default body on `IO.Writer` and a

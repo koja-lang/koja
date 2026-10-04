@@ -1,36 +1,38 @@
 @doc """
 Readiness notification delivered to the mailbox of the process that
-called `Fd.watch` once the descriptor becomes ready. Infrastructure
-processes like `TCPServer` handle it, and most user code handles the
-higher-level events they produce, like `TCPServer.Event`, instead.
+called `IO.Descriptor.watch` once the descriptor becomes ready.
+Infrastructure processes like `TCPServer` handle it, and most user
+code handles the higher-level events they produce, like
+`TCPServer.Event`, instead.
 """
 enum IO.Ready
-  Read(Fd)
-  Write(Fd)
-  Error(Fd)
+  Read(IO.Descriptor)
+  Write(IO.Descriptor)
+  Error(IO.Descriptor)
 end
 
 @doc """
 The standard error file descriptor.
 """
-const STDERR: Fd = Fd{descriptor: 2}
+const STDERR: IO.Descriptor = IO.Descriptor{raw: 2}
 
 @doc """
 The standard input file descriptor.
 """
-const STDIN: Fd = Fd{descriptor: 0}
+const STDIN: IO.Descriptor = IO.Descriptor{raw: 0}
 
 @doc """
 The standard output file descriptor.
 """
-const STDOUT: Fd = Fd{descriptor: 1}
+const STDOUT: IO.Descriptor = IO.Descriptor{raw: 1}
 
 @doc """
 The I/O namespace. Its own functions, `IO.puts`, `IO.warn`, `IO.write`,
-and `IO.gets`, are the console. The stream protocols `IO.Reader` and
-`IO.Writer` and the stream error `IO.Error` nest under it. For
+and `IO.gets`, are the console. The descriptor type `IO.Descriptor`,
+the stream protocols `IO.Reader` and `IO.Writer`, the stream error
+`IO.Error`, and the readiness message `IO.Ready` nest under it. For
 low-level console access, use `STDIN`, `STDOUT`, and `STDERR` directly
-as `Fd` values.
+as `IO.Descriptor` values.
 """
 struct IO
   @doc """

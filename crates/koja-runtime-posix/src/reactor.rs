@@ -3,7 +3,8 @@
 //! A single dedicated reactor thread runs [`reactor_loop`], driving the
 //! [`NativeReactor`]'s [`poll`](Reactor::poll) and applying the [`Waker`]s
 //! it returns: promoting a process blocked on a fd from `WaitingIO` to
-//! `Runnable`, or delivering an `IOReady` message to a `Fd.watch` owner.
+//! `Runnable`, or delivering an `IOReady` message to an
+//! `IO.Descriptor.watch` owner.
 //!
 //! I/O-performing runtime functions (accept, read, write, etc.) call
 //! [`io_block`] when a syscall returns `EAGAIN`. This registers the fd as
@@ -122,7 +123,8 @@ impl Reactor for NativeReactor {
     /// fired fd. Oneshot disarms the poller entry on fire, but the waker
     /// stays registered until an explicit [`deregister`](Reactor::deregister)
     /// (an `io_block` waiter, on resume) or [`release_fd_and_close`] (a
-    /// watcher). A `Fd.watch` owner re-arms by watching again.
+    /// watcher). An `IO.Descriptor.watch` owner re-arms by watching
+    /// again.
     fn poll(&self, timeout: Option<Duration>) -> Vec<Waker> {
         let mut events = Events::new();
         match self.poller.wait(&mut events, timeout) {
@@ -266,8 +268,9 @@ pub extern "C" fn koja_rt_unwatch_fd(fd: i32) {
 
 /// Executes a waker for an fd that will never report readiness again.
 /// A process `io_block`-ed on it is promoted `WaitingIO -> Runnable` (it
-/// resumes, retries the syscall, and gets `EBADF`). A `Fd.watch` owner is
-/// sent a synthetic `IOReady.Error` so its handler observes the hangup.
+/// resumes, retries the syscall, and gets `EBADF`). An
+/// `IO.Descriptor.watch` owner is sent a synthetic `IOReady.Error` so its
+/// handler observes the hangup.
 ///
 /// Must run with the `wakers` lock dropped. No table lock is taken under it.
 fn wake(waker: Waker) {

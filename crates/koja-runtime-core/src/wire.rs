@@ -43,7 +43,7 @@ pub const TAG_BUSINESS: u8 = 0;
 /// Lifecycle signal. Payload is the lifecycle variant byte.
 pub const TAG_LIFECYCLE: u8 = 1;
 /// I/O readiness event from the reactor. Payload is the IOReady
-/// variant byte followed by the `Fd`.
+/// variant byte followed by the `IO.Descriptor`.
 pub const TAG_IO_READY: u8 = 2;
 /// Reply to an in-flight `Ref.call`, correlated by the envelope's
 /// [`reply_token`](Envelope::reply_token). Routed to the caller's
@@ -61,11 +61,12 @@ pub const TAG_HEADER_SIZE: usize = 8;
 /// Total size of a lifecycle envelope: tag header + one variant byte.
 pub const LIFECYCLE_BUF_SIZE: usize = 16;
 
-/// Total size of an IOReady envelope: tag header + variant byte + `Fd`.
+/// Total size of an IOReady envelope: tag header + variant byte +
+/// `IO.Descriptor`.
 pub const IO_READY_BUF_SIZE: usize = 24;
 /// Offset of the IOReady variant byte within the envelope.
 pub const IO_READY_VARIANT_OFFSET: usize = 8;
-/// Offset of the `Fd` (i64) within an IOReady envelope.
+/// Offset of the `IO.Descriptor` (i64) within an IOReady envelope.
 pub const IO_READY_FD_OFFSET: usize = 16;
 
 /// IOReady variant: the fd became readable.

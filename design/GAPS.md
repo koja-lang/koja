@@ -192,10 +192,10 @@ hazard for other types remain until the general lowering lands.
 
 ---
 
-## `Fd` lacks random access, durability, and locking
+## `IO.Descriptor` lacks random access, durability, and locking
 
-Found 2026-08-09 while building embedded storage. `Fd` reads only move
-forward: there is no `seek` or positioned read, no `stat` or file size,
+Found 2026-08-09 while building embedded storage. `IO.Descriptor` reads
+only move forward: there is no `seek` or positioned read, no `stat` or file size,
 and no `truncate`. Any page-oriented file format (an on-disk B-tree, an
 archive reader, a large-file parser) must instead load the whole file
 with `File.read_binary`, which caps the dataset at available memory.
@@ -210,10 +210,12 @@ Two adjacent holes make the durability story worse:
   ownership of its file. Two processes opening the same database
   corrupt it silently, and `flock` is unreachable without FFI.
 
-**Fix path:** one "Fd random access and durability" pass. Runtime
-shims for `pread`/`lseek`, `fstat`, `ftruncate`, `fsync` (with the
-Darwin fcntl behind it), and `flock`, surfaced as `Fd.read_at`,
-`Fd.size`, `Fd.truncate`, `Fd.sync`, and `Fd.lock`/`try_lock`.
+**Fix path:** one "descriptor random access and durability" pass.
+Runtime shims for `pread`/`lseek`, `fstat`, `ftruncate`, `fsync` (with
+the Darwin fcntl behind it), and `flock`, surfaced as
+`IO.Descriptor.read_at`, `IO.Descriptor.size`,
+`IO.Descriptor.truncate`, `IO.Descriptor.sync`, and
+`IO.Descriptor.lock`/`try_lock`.
 
 ---
 
@@ -277,7 +279,7 @@ shell. That works, but it makes libc the real stdlib for CLI work.
 **Fix path:** two intrinsic families. `System.cmd(program, args)`
 returns captured output plus exit status and must park the calling
 process rather than block a scheduler thread. `File.ls(path)` returns
-directory entries. Per-entry metadata can ride the `Fd`
+directory entries. Per-entry metadata can ride the `IO.Descriptor`
 random-access pass tracked above, which already owns `stat`.
 
 ---
@@ -611,8 +613,8 @@ from the cause.
 Consequence: a type cannot offer a static and an instance method
 under one name at one arity. The stdlib met it once and resolved it
 by design, since `File` became a path module with no instance methods
-and `Fd` is the handle. User code that hits it gets a misleading
-error at a call site.
+and `IO.Descriptor` is the handle. User code that hits it gets a
+misleading error at a call site.
 
 **Fix path:** two parts. First, `synthesize_default_method` reports
 the collision, naming the adapter it tried to register and the
@@ -656,8 +658,8 @@ must name a concrete error in its bound,
 `fn drain<S: IO.Reader<IO.Error | TLSError>>(source: S)`, and so
 cannot be written once for every stream. A `BufferedReader<R, E>`
 over any reader is the first thing blocked. Implementors and call
-sites are unaffected, since `impl IO.Reader<IO.Error> for Fd` names
-its argument and `socket.read_line()` dispatches on the receiver.
+sites are unaffected, since `impl IO.Reader<IO.Error> for IO.Descriptor`
+names its argument and `socket.read_line()` dispatches on the receiver.
 
 **Fix path:** after the argument pass binds what it can, walk the
 unfilled slots. For each one that appears as an argument of a protocol

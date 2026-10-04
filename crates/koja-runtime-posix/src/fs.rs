@@ -286,9 +286,9 @@ pub unsafe extern "C" fn koja_file_write_all(
     }
 }
 
-/// `Fd.block`: suspends the process until `fd` is ready for the requested
-/// direction or `timeout_ms` passes (negative for no limit). Returns 1
-/// when the deadline passed, 0 otherwise.
+/// `IO.Descriptor.block`: suspends the process until `fd` is ready for
+/// the requested direction or `timeout_ms` passes (negative for no
+/// limit). Returns 1 when the deadline passed, 0 otherwise.
 ///
 /// `interest`: 0 = readable, 1 = writable, the same encoding as
 /// `koja_rt_watch_fd`.

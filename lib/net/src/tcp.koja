@@ -1,4 +1,4 @@
-alias Fd.Interest
+alias IO.Descriptor.Interest
 alias IO.Error as IOError
 alias IO.Reader.Options as ReaderOptions
 alias IO.Ready as IOReady
@@ -123,7 +123,12 @@ struct TCPSocket
     timeout: Option<Duration> = Option.None,
   ) -> TCPSocket ! IOError | TLSError
 
-    session = try TLSSession.connect(self.socket.fd, hostname, config, timeout)
+    session = try TLSSession.connect(
+      self.socket.descriptor,
+      hostname,
+      config,
+      timeout,
+    )
     TCPSocket{socket: self.socket, tls: Option.Some(session)}
   end
 
@@ -139,7 +144,7 @@ struct TCPSocket
     timeout: Option<Duration> = Option.None,
   ) -> TCPSocket ! IOError | TLSError
 
-    session = try TLSSession.accept(self.socket.fd, config, timeout)
+    session = try TLSSession.accept(self.socket.descriptor, config, timeout)
     TCPSocket{socket: self.socket, tls: Option.Some(session)}
   end
 
@@ -175,8 +180,8 @@ impl IO.Reader<IOError | TLSError> for TCPSocket
 
     match self.tls
       Option.Some(session) ->
-        try session.read(self.socket.fd, count, options.timeout)
-      Option.None -> try self.socket.fd.read(count, options)
+        try session.read(self.socket.descriptor, count, options.timeout)
+      Option.None -> try self.socket.descriptor.read(count, options)
     end
   end
 end
@@ -194,8 +199,8 @@ impl IO.Writer<IOError | TLSError> for TCPSocket
 
     match self.tls
       Option.Some(session) ->
-        try session.write(self.socket.fd, data, options.timeout)
-      Option.None -> try self.socket.fd.write(data, options)
+        try session.write(self.socket.descriptor, data, options.timeout)
+      Option.None -> try self.socket.descriptor.write(data, options)
     end
   end
 end
@@ -242,15 +247,16 @@ struct TCPListener
   fn accept(self, timeout: Option<Duration> = Option.None)
     -> TCPSocket ! SocketError
 
-    fd = try self.socket.accept(timeout)
-    TCPSocket{socket: Socket{fd: fd}, tls: Option.None}
+    descriptor = try self.socket.accept(timeout)
+    TCPSocket{socket: Socket{descriptor: descriptor}, tls: Option.None}
   end
 
   @doc """
-  Returns the underlying file descriptor, for `Fd.watch` and `Fd.block`.
+  Returns the underlying file descriptor, for `IO.Descriptor.watch` and
+  `IO.Descriptor.block`.
   """
-  fn fd(self) -> Fd
-    self.socket.fd
+  fn descriptor(self) -> IO.Descriptor
+    self.socket.descriptor
   end
 
   @doc """
@@ -266,7 +272,7 @@ Events delivered to a process that spawns a `TCPServer`.
 """
 enum TCPServer.Event
   Connected(TCPSocket)
-  Closed(Fd)
+  Closed(IO.Descriptor)
   Error(SocketError)
 end
 
@@ -308,7 +314,7 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
   fn start(config: TCPServerConfig) -> Self ! StopReason
     match TCPListener.bind(config.port)
       Result.Ok(listener) ->
-        listener.fd().watch(Interest.Readable)
+        listener.descriptor().watch(Interest.Readable)
         TCPServer{listener: listener, owner: config.owner}
 
       Result.Err(e) ->
@@ -364,7 +370,7 @@ extend TCPServer
         Step.Done(StopReason.Shutdown)
 
       _ ->
-        self.listener.fd().watch(Interest.Readable)
+        self.listener.descriptor().watch(Interest.Readable)
         Step.Continue(self)
     end
   end
@@ -380,12 +386,12 @@ extend TCPServer
         self.drain_accepts()
 
       Result.Err(SocketError.TimedOut) ->
-        self.listener.fd().watch(Interest.Readable)
+        self.listener.descriptor().watch(Interest.Readable)
         Step.Continue(self)
 
       Result.Err(e) ->
         self.owner.cast(TCPEvent.Error(e))
-        self.listener.fd().watch(Interest.Readable)
+        self.listener.descriptor().watch(Interest.Readable)
         Step.Continue(self)
     end
   end
