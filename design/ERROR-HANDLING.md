@@ -560,9 +560,9 @@ The feature removes plumbing, not pattern matching.
 - **Nothing (Go).** The status quo is already worse than Go per
   fallible call.
 - **Type-routed `return` instead of `fail`** (plain `return` picks the
-  channel from the value's type). Fatal counterexample in the shipped
-  stdlib: `File.read -> Result<String, String>` puts the same type on
-  both sides, so no routing rule exists. The tag is semantic, not
+  channel from the value's type). Fatal counterexample in the stdlib
+  as it was then: `File.read -> Result<String, String>` put the same
+  type on both sides, so no routing rule existed. The tag is semantic, not
   derivable. It would also give every return site two candidate
   expected types, breaking single-expected-type bidirectional checking
   (literal coercion, empty collections) and degrading diagnostics to

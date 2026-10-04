@@ -157,7 +157,6 @@ extern_table! {
         "koja_socket_listen" => net::socket_listen(args),
         "koja_socket_send_to" => net::socket_send_to(args).await,
         "koja_socket_setsockopt_reuse" => net::socket_setsockopt_reuse(args),
-        "koja_socket_try_accept" => net::socket_try_accept(args),
         "koja_time_monotonic_nanoseconds" => time::monotonic_nanoseconds(args),
         "koja_time_now_microseconds" => time::now_microseconds(args),
         "koja_toolchain_version" => system::toolchain_version(args),

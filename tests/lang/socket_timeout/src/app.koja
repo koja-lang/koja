@@ -1,8 +1,9 @@
+alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
 alias Net.IPAddress
 alias Net.Socket.Address as SocketAddress
 alias Net.Socket.Error as SocketError
 alias Net.TCPListener
-alias Net.TCPListener.Options as ListenerOptions
 alias Net.TCPSocket
 alias Net.TLSError
 alias Process.Lifecycle
@@ -10,8 +11,8 @@ alias Process.Step
 alias Process.StopReason
 
 # Socket deadlines under the process runtime: an accept with no client
-# and a read from a silent peer both end in `SocketError.TimedOut`
-# instead of parking forever.
+# ends in `SocketError.TimedOut` and a read from a silent peer in
+# `IOError.TimedOut`, instead of parking forever.
 
 const SHORT_WAIT: Duration = Duration{
   unit: Duration.Unit.Milliseconds,
@@ -29,10 +30,9 @@ struct App: Process<App, (), String>
 
   fn run(self) -> StopReason
     addr = SocketAddress{ip: IPAddress.LOOPBACK, port: 43121}
-    options = ListenerOptions{accept_timeout: Option.Some(SHORT_WAIT)}
 
     listener =
-      match TCPListener.bind_addr(addr, options)
+      match TCPListener.bind_addr(addr)
         Result.Ok(l) ->
           l
 
@@ -41,7 +41,7 @@ struct App: Process<App, (), String>
           return StopReason.Shutdown
       end
 
-    match listener.accept()
+    match listener.accept(Option.Some(SHORT_WAIT))
       Result.Ok(_) -> IO.puts("accept returned a socket")
       Result.Err(SocketError.TimedOut) -> IO.puts("accept timed out")
       Result.Err(e) -> IO.puts("accept failed: " <> e.message())
@@ -57,14 +57,14 @@ struct App: Process<App, (), String>
           return StopReason.Shutdown
       end
 
-    match client.with_read_timeout(Option.Some(SHORT_WAIT)).read(16)
+    match client.read(16, ReaderOptions{timeout: Option.Some(SHORT_WAIT)})
       Result.Ok(_) ->
         IO.puts("read returned data")
 
-      Result.Err(socket_error: SocketError) ->
-        match socket_error
-          SocketError.TimedOut -> IO.puts("read timed out")
-          _ -> IO.puts("read failed: " <> socket_error.message())
+      Result.Err(io_error: IOError) ->
+        match io_error
+          IOError.TimedOut -> IO.puts("read timed out")
+          _ -> IO.puts("read failed: " <> io_error.message())
         end
 
       Result.Err(tls_error: TLSError) ->

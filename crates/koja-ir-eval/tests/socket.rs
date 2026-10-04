@@ -48,7 +48,7 @@ fn tcp_loopback_round_trip() {
           end
 
           inbound =
-            match server.read(4)
+            match server.read_string(4)
               Result.Ok(text) -> text
               Result.Err(_) -> return "server read failed"
             end
@@ -58,7 +58,7 @@ fn tcp_loopback_round_trip() {
             Result.Err(_) -> return "server write failed"
           end
 
-          match client.read(16)
+          match client.read_string(16)
             Result.Ok(text) -> text
             Result.Err(_) -> "client read failed"
           end
@@ -71,11 +71,15 @@ fn tcp_loopback_round_trip() {
     );
 }
 
+/// A zero bound must poll: readiness is checked before the deadline, so
+/// an empty backlog reports `TimedOut` without waiting and without
+/// treating the expired deadline as an error of another kind.
 #[test]
-fn tcp_try_accept_reports_nothing_pending() {
+fn tcp_accept_with_zero_bound_reports_nothing_pending() {
     let port = fresh_port();
     let source = dedent(&format!(
         r#"
+        alias Net.Socket.Error as SocketError
         alias Net.TCPListener
 
         fn main -> Bool
@@ -85,9 +89,10 @@ fn tcp_try_accept_reports_nothing_pending() {
               Result.Err(_) -> return false
             end
 
-          match listener.try_accept()
-            Option.Some(_) -> false
-            Option.None -> true
+          match listener.accept(Option.Some(Duration.ZERO))
+            Result.Ok(_) -> false
+            Result.Err(SocketError.TimedOut) -> true
+            Result.Err(_) -> false
           end
         end
         "#
@@ -107,18 +112,16 @@ fn tcp_accept_times_out_without_a_client() {
         r#"
         alias Net.Socket.Error as SocketError
         alias Net.TCPListener
-        alias Net.TCPListener.Options as ListenerOptions
 
         fn main -> String
           limit = Duration{{unit: Duration.Unit.Milliseconds, value: 20}}
-          options = ListenerOptions{{accept_timeout: Option.Some(limit)}}
           listener =
-            match TCPListener.bind({port}, options)
+            match TCPListener.bind({port})
               Result.Ok(l) -> l
               Result.Err(e) -> return "bind failed: " <> e.message()
             end
 
-          match listener.accept()
+          match listener.accept(Option.Some(limit))
             Result.Ok(_) -> "accepted"
             Result.Err(SocketError.TimedOut) -> "timed out"
             Result.Err(e) -> "accept failed: " <> e.message()
@@ -137,7 +140,8 @@ fn tcp_read_times_out_on_a_silent_peer() {
     let port = fresh_port();
     let source = dedent(&format!(
         r#"
-        alias Net.Socket.Error as SocketError
+        alias IO.Error as IOError
+        alias IO.Reader.Options as ReaderOptions
         alias Net.TCPListener
         alias Net.TCPSocket
         alias Net.TLSError
@@ -156,12 +160,12 @@ fn tcp_read_times_out_on_a_silent_peer() {
             end
 
           limit = Duration{{unit: Duration.Unit.Milliseconds, value: 20}}
-          match client.with_read_timeout(Option.Some(limit)).read(16)
+          match client.read(16, ReaderOptions{{timeout: Option.Some(limit)}})
             Result.Ok(_) -> "read data"
-            Result.Err(socket_error: SocketError) ->
-              match socket_error
-                SocketError.TimedOut -> "timed out"
-                _ -> "read failed: " <> socket_error.message()
+            Result.Err(io_error: IOError) ->
+              match io_error
+                IOError.TimedOut -> "timed out"
+                _ -> "read failed: " <> io_error.message()
               end
             Result.Err(tls_error: TLSError) -> "read failed: " <> tls_error.message()
           end

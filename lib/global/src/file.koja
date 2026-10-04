@@ -1,0 +1,270 @@
+alias File.Error as FileError
+alias File.Mode as FileMode
+alias IO.Error as IOError
+
+@doc """
+The mode used when opening a file, one of `Read`, `Write`, or `Append`.
+"""
+enum File.Mode
+  Read
+  Write
+  Append
+end
+
+@doc """
+Operations on paths. Each function names a file or directory by its
+path and fails with `File.Error`. `open` returns the descriptor for
+the file, and from there reads, writes, and `close` are `Fd` methods
+that fail with `IO.Error`. `read`, `read_binary`, and `write` do a
+whole file in one call for the common case.
+"""
+struct File
+  @doc """
+  Deletes the file at the given path.
+  """
+  fn delete(path: String) ! FileError
+    cs = try path_cstring(path)
+    result = koja_file_delete(cs.ptr)
+    cs.free()
+
+    if result < 0
+      fail FileError.last()
+    end
+  end
+
+  @doc """
+  Returns true if the given path exists and is a directory. `exists?`
+  is true for files and directories alike, while `dir?` distinguishes them.
+  """
+  fn dir?(path: String) -> Bool
+    cs =
+      match path_cstring(path)
+        Result.Err(_) -> return false
+        Result.Ok(value) -> value
+      end
+
+    result = koja_file_is_dir(cs.ptr)
+    cs.free()
+    result == 1
+  end
+
+  @doc """
+  Returns true if a file or directory exists at the given path.
+  """
+  fn exists?(path: String) -> Bool
+    cs =
+      match path_cstring(path)
+        Result.Err(_) -> return false
+        Result.Ok(value) -> value
+      end
+
+    result = koja_file_exists(cs.ptr)
+    cs.free()
+    result == 1
+  end
+
+  @doc """
+  Creates a single directory. Fails with `File.Error.NotFound` if the
+  parent directory is missing and `File.Error.AlreadyExists` if the
+  path exists. See `mkdir_p` for the recursive variant.
+  """
+  fn mkdir(path: String) ! FileError
+    cs = try path_cstring(path)
+    result = koja_file_mkdir(cs.ptr)
+    cs.free()
+
+    if result < 0
+      fail FileError.last()
+    end
+  end
+
+  @doc """
+  Creates a directory along with any missing parents (like `mkdir -p`).
+  Succeeds if the directory already exists.
+  """
+  fn mkdir_p(path: String) ! FileError
+    cs = try path_cstring(path)
+    result = koja_file_mkdir_p(cs.ptr)
+    cs.free()
+
+    if result < 0
+      fail FileError.last()
+    end
+  end
+
+  @doc """
+  Opens a file with the given mode and returns its descriptor. Read
+  and write through the `IO.Reader` and `IO.Writer` methods on `Fd`,
+  and release it with `Fd.close`.
+
+  `File.Mode.Read` opens for reading, and the file must exist.
+  `File.Mode.Write` opens for writing and creates or truncates the
+  file. `File.Mode.Append` opens for appending and creates the file if
+  needed.
+  """
+  fn open(path: String, mode: FileMode) -> Fd ! FileError
+    mode_int =
+      match mode
+        FileMode.Read -> 0
+        FileMode.Write -> 1
+        FileMode.Append -> 2
+      end
+
+    cs = try path_cstring(path)
+    fd = koja_file_open(cs.ptr, mode_int)
+    cs.free()
+
+    if fd < 0
+      fail FileError.last()
+    end
+
+    Fd{descriptor: fd}
+  end
+
+  @doc """
+  Reads the entire contents of the file at the given path as UTF-8
+  text. Opens, reads, and closes the file in one call.
+  """
+  fn read(path: String) -> String ! FileError | IOError | String.ConversionError
+    bytes = try File.read_binary(path)
+    try bytes.to_string()
+  end
+
+  @doc """
+  Reads the entire contents of the file at the given path as raw bytes.
+  Opens, reads, and closes the file in one call.
+  """
+  fn read_binary(path: String) -> Binary ! FileError | IOError
+    cs = try path_cstring(path)
+    ptr = koja_file_read_all(cs.ptr)
+    cs.free()
+
+    if ptr.null?()
+      fail last_error()
+    end
+
+    RuntimeBlock.adopt_binary(ptr)
+  end
+
+  @doc """
+  Renames (moves) a file from source to destination.
+  """
+  fn rename(source: String, destination: String) ! FileError
+    src_cs = try path_cstring(source)
+
+    dst_cs =
+      match path_cstring(destination)
+        Result.Err(error) ->
+          src_cs.free()
+          fail error
+
+        Result.Ok(value) ->
+          value
+      end
+
+    result = koja_file_rename(src_cs.ptr, dst_cs.ptr)
+    src_cs.free()
+    dst_cs.free()
+
+    if result < 0
+      fail FileError.last()
+    end
+  end
+
+  @doc """
+  Removes an empty directory. Fails with `File.Error.DirectoryNotEmpty`
+  if the directory has entries. See `delete` for removing files.
+  """
+  fn rmdir(path: String) ! FileError
+    cs = try path_cstring(path)
+    result = koja_file_rmdir(cs.ptr)
+    cs.free()
+
+    if result < 0
+      fail FileError.last()
+    end
+  end
+
+  @doc """
+  Writes text or raw bytes to the given path, creating or truncating
+  it. Opens, writes, and closes the file in one call.
+  """
+  fn write(path: String, content: Binary | String) ! FileError | IOError
+    path_cs = try path_cstring(path)
+
+    bytes =
+      match content
+        binary: Binary -> binary
+        string: String -> string.to_binary()
+      end
+
+    result = koja_file_write_all(
+      path_cs.ptr,
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+    )
+    path_cs.free()
+
+    if result < 0
+      fail last_error()
+    end
+  end
+
+  priv fn last_error -> FileError | IOError
+    # `read_binary` and `write` each wrap one runtime call that opens
+    # the path and then streams it, so the code can come from either
+    # domain. Stream causes are checked first and anything else,
+    # including `Unknown`, lands in the path domain.
+
+    match IOError.from_code(koja_last_error_code())
+      Option.Some(error) ->
+        stream: FileError | IOError = error
+        stream
+
+      Option.None ->
+        path: FileError | IOError = FileError.last()
+        path
+    end
+  end
+
+  priv fn path_cstring(path: String) -> CString ! FileError
+    path.to_cstring() rescue _ -> fail FileError.InvalidPath
+  end
+
+  @extern "C"
+  priv fn koja_last_error_code -> Int32
+
+  @extern "C"
+  priv fn koja_file_delete(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_exists(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_is_dir(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_mkdir(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_mkdir_p(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_open(path: CPtr<UInt8>, mode: Int64) -> Int32
+
+  @extern "C"
+  priv fn koja_file_read_all(path: CPtr<UInt8>) -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn koja_file_rename(src: CPtr<UInt8>, dst: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_rmdir(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_write_all(
+    path: CPtr<UInt8>,
+    content: CPtr<UInt8>,
+    length: Int64,
+  ) -> Int64
+end

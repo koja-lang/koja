@@ -821,7 +821,7 @@ c = Config{name: "app"} # host and port fill from the defaults
 Config{} # error: `name` has no default
 ```
 
-Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default resolves in its declaring file, so it can name a type through a dotted path (`TCPListener.Options{}`) or through one of that file's aliases.
+Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default resolves in its declaring file, so it can name a type through a dotted path (`IO.Reader.Options{}`) or through one of that file's aliases.
 
 The default expression evaluates at each construction that omits the field. This makes generic defaults work: a `List<T>` field can default to `[]` and an `Option<T>` field to `Option.None`:
 
@@ -1710,7 +1710,7 @@ The auto-imported `Global` package provides core types (`Option`, `Result`, `Lis
 
 - **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
 - **`JSON`**: `Value`, `Encoding`, `EncodeOptions`, `encode`, `decode`
-- **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
+- **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `Socket.Address`, `Socket.Kind`, `Socket.Error`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
 
 Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
@@ -2724,9 +2724,36 @@ roundtrip.print() # "hello"
 
 ### File I/O
 
+Three error domains cover I/O. `IO.Error` is a failure on an open stream, `File.Error` is a failure on a path, and `Socket.Error` is a failure in connection setup. A function fails with the domain of the failure, so `File.open` fails with `File.Error` and a read on the descriptor it returned fails with `IO.Error`.
+
+- `IO.Error`: `BrokenPipe`, `Closed`, `ConnectionReset`, `Interrupted`, `TimedOut`, `Unknown(Int)`.
+- `File.Error`: `AlreadyExists`, `DirectoryNotEmpty`, `InvalidPath`, `IsDirectory`, `NotDirectory`, `NotFound`, `PermissionDenied`, `Unknown(Int)`.
+
+#### `IO.Reader<E>` and `IO.Writer<E>`
+
+The stream protocols. Each is generic in `E`, the error its implementor fails with, so the protocol does not need one enum wide enough for every stream. `Fd` implements `IO.Reader<IO.Error>` and `TCPSocket` implements `IO.Reader<IO.Error | TLSError>`, and a caller sees the TLS cause by name. A type that implements `read` gets `read_string` and `read_line` from the protocol. Each method takes an options struct as its last parameter with an all-default value, so a call names only what it changes.
+
+- `IO.Reader.read(self, count: Int, options: IO.Reader.Options = IO.Reader.Options{}) -> Binary ! E`: reads up to `count` bytes. An empty `Binary` is end of input.
+- `IO.Reader.read_string(self, count: Int, options) -> String ! E | String.ConversionError`: reads up to `count` bytes and decodes them as UTF-8.
+- `IO.Reader.read_line(self, options) -> Option<String> ! E | String.ConversionError`: reads up to and drops the next newline. `Option.None` at end of input.
+- `IO.Writer.write(self, data: Binary | String, options: IO.Writer.Options = IO.Writer.Options{}) -> Int ! E`: writes data and returns the byte count written.
+
+`IO.Reader.Options` and `IO.Writer.Options` each hold `timeout: Option<Duration>`, `Option.None` by default. A read or write that waits past its timeout fails with `IO.Error.TimedOut`.
+
+A call site never writes `E`. A bound names it, and the bound's error is what the generic body fails with.
+
+```koja
+line = try socket.read_line(IO.Reader.Options{timeout: Option.Some(limit)})
+
+fn drain<S: IO.Reader<IO.Error>>(source: S) -> Int ! IO.Error
+  bytes = try source.read(4096)
+  bytes.byte_size()
+end
+```
+
 #### `Fd`
 
-A raw file descriptor for low-level I/O:
+An open file descriptor. `File.open` returns one for a file, `STDIN`, `STDOUT`, and `STDERR` name the standard streams, and the socket types wrap one. `Fd` implements `IO.Reader<IO.Error>` and `IO.Writer<IO.Error>`, and every operation on an open descriptor fails with `IO.Error`.
 
 ```koja
 struct Fd
@@ -2736,39 +2763,42 @@ end
 
 Functions:
 
-- `read(self, count: Int) -> String ! String`: reads and validates up to `count` bytes as UTF-8.
-- `read_binary(self, count: Int) -> Binary ! String`: reads up to `count` arbitrary bytes.
-- `write(self, data: Binary | String) -> Int ! String`: writes data, returns bytes written.
-- `close(self) -> String ! String`: closes the descriptor.
+- `read`, `read_string`, `read_line`, and `write` as the protocols define them.
+- `close(self) ! IO.Error`: closes the descriptor. A later read or write fails with `IO.Error.Closed`.
+
+Three functions are for processes that drive a descriptor directly. Reads and writes wait for readiness on their own, so most code never calls them. Each takes an `Fd.Interest`, `Readable` or `Writable`.
+
+- `block(self, interest: Fd.Interest, timeout: Option<Duration> = Option.None) -> Bool`: suspends the current process until the descriptor is ready or `timeout` passes. Returns `true` when the wait ended on the timeout.
+- `watch(self, interest: Fd.Interest)`: registers the descriptor for one `IO.Ready` message to the mailbox of the current process. The registration fires once, so call `watch` again after each message.
+- `unwatch(self)`: removes the registration.
+
+`IO.Ready` is the message `watch` produces, `Read(Fd)`, `Write(Fd)`, or `Error(Fd)`. A process that handles it names it in its message union, as `impl Process<App, AppMsg | IO.Ready, String>`. `TCPServer` is the stdlib process that works this way, and its owner sees `TCPServer.Event` instead.
 
 #### `File`
 
-Higher-level file operations wrapping `Fd`:
-
-```koja
-struct File
-  fd: Fd
-end
-```
+Operations on paths. Each function names a file or directory by its path and fails with `File.Error`. `open` returns the `Fd` for the file, and from there reads, writes, and `close` are `Fd` methods that fail with `IO.Error`. `File` has no instance methods.
 
 Functions:
 
-- `File.open(path: String, mode: FileMode) -> File ! String`: opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
-- `File.read(path: String) -> String ! String`: reads an entire file as UTF-8 text (opens, reads, closes).
-- `File.read_binary(path: String) -> Binary ! String`: reads an entire file as arbitrary bytes.
-- `File.write(path: String, content: Binary | String) -> String ! String`: writes text or arbitrary bytes (creates or truncates).
+- `File.open(path: String, mode: File.Mode) -> Fd ! File.Error`: opens a file with the given mode (`File.Mode.Read`, `File.Mode.Write`, `File.Mode.Append`).
+- `File.read(path: String) -> String ! File.Error | IO.Error | String.ConversionError`: reads an entire file as UTF-8 text (opens, reads, closes).
+- `File.read_binary(path: String) -> Binary ! File.Error | IO.Error`: reads an entire file as bytes.
+- `File.write(path: String, content: Binary | String) ! File.Error | IO.Error`: writes text or bytes (creates or truncates).
 - `File.exists?(path: String) -> Bool`: returns true if a file or directory exists at the path.
 - `File.dir?(path: String) -> Bool`: returns true only for directories (`exists?` covers both).
-- `File.delete(path: String) -> String ! String`: deletes a file.
-- `File.rename(source: String, destination: String) -> String ! String`: renames (moves) a file.
-- `File.mkdir(path: String) -> String ! String`: creates a single directory, erroring if the parent is missing or the path already exists.
-- `File.mkdir_p(path: String) -> String ! String`: creates a directory and any missing parents (like `mkdir -p`), succeeding if it already exists.
-- `File.rmdir(path: String) -> String ! String`: removes an empty directory.
-- `close(self) -> String ! String`: closes the file handle.
+- `File.delete(path: String) ! File.Error`: deletes a file.
+- `File.rename(source: String, destination: String) ! File.Error`: renames (moves) a file.
+- `File.mkdir(path: String) ! File.Error`: creates a single directory, erroring if the parent is missing or the path already exists.
+- `File.mkdir_p(path: String) ! File.Error`: creates a directory and any missing parents (like `mkdir -p`), succeeding if it already exists.
+- `File.rmdir(path: String) ! File.Error`: removes an empty directory.
 
 ```koja
-content = File.read("config.txt").unwrap()
+content = try File.read("config.txt")
 content.print()
+
+log = try File.open("app.log", File.Mode.Append)
+_ = try log.write("started\n")
+try log.close()
 ```
 
 ### Environment
@@ -2835,19 +2865,21 @@ compact = birthday.to_string(ISO8601.Basic)
 
 ### Console I/O
 
-`IO` provides ergonomic console input/output. `STDIN`, `STDOUT`, and `STDERR` are available as `Fd` constants for low-level access.
+`IO` is the I/O namespace. Its own functions are the console, and the stream protocols `IO.Reader` and `IO.Writer`, the stream error `IO.Error`, and the readiness message `IO.Ready` nest under it. `STDIN`, `STDOUT`, and `STDERR` are `Fd` constants for direct access.
 
 Functions:
 
 - `IO.puts(message: String)`: writes to stdout with a trailing newline.
 - `IO.warn(message: String)`: writes to stderr with a trailing newline.
 - `IO.write(message: String)`: writes to stdout without a trailing newline.
-- `IO.gets(prompt: String) -> String`: prints `prompt` and reads a line from stdin (without the trailing newline).
+- `IO.gets(prompt: String) -> Option<String> ! IO.Error | String.ConversionError`: prints `prompt` and reads one line from stdin without its newline. `Option.None` at end of input.
 
 ```koja
 IO.puts("hello")
-name = IO.gets("What is your name? ")
-IO.puts("Hello, #{name}!")
+match try IO.gets("What is your name? ")
+  Option.Some(name) -> IO.puts("Hello, #{name}!")
+  Option.None -> IO.puts("Goodbye.")
+end
 ```
 
 ### Parsing

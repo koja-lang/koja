@@ -2,7 +2,7 @@
 //!
 //! Drives the real scheduler + reactor through the runtime's `#[no_mangle]`
 //! C surface and checks that a bounded wait ends with `TimedOut` (cause
-//! code 11) instead of parking forever. Three waits are covered: a read on
+//! code 18) instead of parking forever. Three waits are covered: a read on
 //! a peer that never writes, an accept on a listener no client reaches,
 //! and a connect to a TEST-NET address (RFC 5737) that no router forwards,
 //! so the SYN goes unanswered. A host with no route at all fails that
@@ -38,9 +38,9 @@ unsafe extern "C" {
 
 const SOCK_STREAM: i64 = 1;
 /// Cause codes from `error_kind_code` in the runtime.
-const HOST_UNREACHABLE: i64 = 6;
-const NETWORK_UNREACHABLE: i64 = 8;
-const TIMED_OUT: i64 = 11;
+const HOST_UNREACHABLE: i64 = 9;
+const NETWORK_UNREACHABLE: i64 = 14;
+const TIMED_OUT: i64 = 18;
 const TIMEOUT: Duration = Duration::from_millis(100);
 /// 192.0.2.0/24 is reserved for documentation and never routed.
 const TEST_NET_IP: [u8; 4] = [192, 0, 2, 1];

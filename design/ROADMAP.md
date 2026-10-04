@@ -30,11 +30,14 @@ call sites once instead of twice.
 - Remove `@test` after its 0.19 deprecation. Every remaining annotation
   warns today, so the removal is a parser error with the `test "..."`
   replacement, on the `unless` model.
-- Reshape the I/O types along [IO.md](IO.md). `IO.gets` returns
-  `Option<String>` over a caller-supplied reader so callers can tell end
-  of input from an empty line
-  ([gap](GAPS.md#toolchain-and-stdlib-nits-from-the-git_hygiene-build)),
-  as one step of the `Read` protocol.
+- Reshape the I/O types along [IO.md](IO.md). Landed, the three error
+  domains `IO.Error`, `File.Error`, and `Socket.Error`, the
+  `IO.Reader<E>` and `IO.Writer<E>` protocols with per-call options
+  and `Fd` and `TCPSocket` on them, `File.open` returning an `Fd`,
+  `IO.gets` returning `Option<String>` so callers can tell end of
+  input from an empty line, `Fd.Interest` on the reactor methods, and
+  `try_accept` folded into a zero-bound `accept`. The `Fd` to
+  `IO.Descriptor` rename follows on its own branch before 0.20 ships.
 
 ### Language
 
@@ -73,10 +76,11 @@ call sites once instead of twice.
   through the reactor on both backends, so a timeout is a bounded reactor
   wait, the same mechanism `receive ... after` and `Fd.watch` use, not a
   socket option. The shape follows
-  [IO.md](IO.md#timeouts-are-socket-state) and takes a `Duration` from
-  [TIME.md](TIME.md). The timeouts landed on the current `Socket.Error`
-  surface before the `IO.Error` migration, so that step renames the
-  error type but not the fields.
+  [IO.md](IO.md#timeouts-are-per-call) and takes a `Duration` from
+  [TIME.md](TIME.md). The timeouts landed as socket fields on the
+  `Socket.Error` surface, and IO.md step 2 moved them to per-call
+  `IO.Reader.Options` and `IO.Writer.Options` that fail with
+  `IO.Error.TimedOut`.
 
 ### Observability
 

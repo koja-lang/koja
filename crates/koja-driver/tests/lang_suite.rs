@@ -928,40 +928,6 @@ fn run_process_io(backend: &str) {
         );
     }
 }
-
-/// `IO.gets` must end a line at end of input instead of spinning on the
-/// empty reads `Fd.read` returns there. It lives here because `gets`
-/// reads `STDIN` directly and a stdlib test cannot redirect it. When
-/// `design/IO.md` changes `gets` to return `Option<String>` over a
-/// caller-supplied reader, this moves to `lib/global/test`.
-#[test]
-fn lang_io_gets_ends_at_eof() {
-    let dir = lang_dir().join("io_gets");
-    assert!(dir.exists(), "test fixture io_gets/ not found");
-    let cases: [(&[u8], &str); 3] = [
-        (b"a\n", "[a]\n[]\n[]\n"),
-        (b"a\n\nb", "[a]\n[]\n[b]\n"),
-        // Multi-byte characters arrive one byte at a time and must
-        // survive the trip.
-        ("héllo wörld\n".as_bytes(), "[héllo wörld]\n[]\n[]\n"),
-    ];
-
-    for backend in BACKENDS {
-        for (stdin, expected) in cases {
-            let label = format!("io_gets ({backend}, {stdin:?})");
-            let mut cmd = Command::new(koja_bin());
-            cmd.arg("run")
-                .arg(format!("--backend={backend}"))
-                .arg("gets_eof.kojs");
-            let (stdout, stderr, code) = run_with_stdin(cmd, &dir, stdin);
-            assert!(code == 0, "{label}: exit {code}\nstderr:\n{stderr}");
-            if stdout != expected {
-                panic!("\n--- FAIL: {label} ---\n{}", diff_lines(&stdout, expected));
-            }
-        }
-    }
-}
-
 /// Regression for the worker-migration TLS-caching bug: a process that
 /// suspends in socket I/O (`connect` returns EINPROGRESS on Linux) can
 /// resume on a different worker thread, and the runtime's switch-out

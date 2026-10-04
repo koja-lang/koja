@@ -310,13 +310,6 @@ Found 2026-08-28. None blocking, each with a workaround:
   insertion sort or a shell-side `sort`. A comparator-closure
   `sort` works today. A `Comparable` conformance can follow when
   the protocol exists (see the `Binary` ordering entry).
-- **`IO.gets` cannot distinguish end of input from an empty
-  line.** Both return `""`, so a line-oriented filter reading
-  stdin cannot tell where input stops. Workaround is reading
-  `STDIN` directly and treating an empty read as end of input.
-  [IO.md](IO.md) changes `gets` to return `Option<String>` over a
-  caller-supplied reader, which also moves the `io_gets` lang
-  fixture into the stdlib test suite.
 
 ---
 
@@ -593,3 +586,83 @@ current text and nested types gain their owner. Typecheck tests that
 assert a message mentioning a nested type need their expected text
 updated, and the display-ordered union member list changes order only
 where same-leaf members already tie.
+
+## A static and an instance method with one name and arity collide
+
+Found 2026-10-04 while giving `File` an `impl IO.Writer`. The registry
+keys a function by owner, name, and arity. `insert_function` in
+`koja-typecheck/src/registry/mod.rs` reports a collision when
+`NameEntries.functions` already holds that arity, and nothing in the
+key says whether the function takes `self`. LANGUAGE.md documents the
+rule, and `&name/arity` references depend on it. So a static
+`File.write(path, content)` and an instance `write(self, data)` are
+the same function to the registry.
+
+The protocol default adapter made this silent. A defaulted parameter
+becomes an exact-arity adapter function, and
+`synthesize_default_method` in
+`pipeline/lift_signatures/impls.rs` registers each adapter with
+`insert_function` and returns without a diagnostic when the outcome is
+not `Fresh`. The two-argument adapter for `write(self, data)` lost to
+the static, so `file.write(line)` reported "cannot call static method
+`Global.File.write` on a value" at the call site, three steps away
+from the cause.
+
+Consequence: a type cannot offer a static and an instance method
+under one name at one arity. The stdlib met it once and resolved it
+by design, since `File` became a path module with no instance methods
+and `Fd` is the handle. User code that hits it gets a misleading
+error at a call site.
+
+**Fix path:** two parts. First, `synthesize_default_method` reports
+the collision, naming the adapter it tried to register and the
+function it collided with, so the cause is at the declaration. Second,
+if the rule itself should change, the registry key gains a dispatch
+axis and about 25 lookup sites across typecheck, IR, and query
+resolve through it. That is its own branch and a LANGUAGE.md change
+to the identity rule.
+
+## A protocol argument is not inferred from a bound
+
+Found 2026-10-04 while making `IO.Reader<E>` generic in its error.
+Call inference binds a function's type parameters from the argument
+types it is given. A parameter that appears only inside a bound on
+another parameter never gets a value:
+
+```koja
+fn drain<S: IO.Reader<E>, E>(source: S) -> Int ! E
+  bytes = try source.read(4096)
+  bytes.byte_size()
+end
+
+drain(socket)
+# error: typecheck cannot infer type parameter `E` of `drain` from
+# the supplied arguments
+# error: type `TCPSocket` does not implement protocol
+# `IO.Reader<<unresolved>>`
+```
+
+`S` binds to `TCPSocket` from the argument. `E` has no argument to
+bind from, and `finalize_inference` in
+`koja-typecheck/src/pipeline/resolve/inference.rs` reports the empty
+slot. The information is in the registry. `TCPSocket` has exactly one
+conformance to `IO.Reader`, with `protocol_args` of
+`[IO.Error | TLSError]`, and `conformance_args` in
+`registry/conformance.rs` returns it. The `for` statement already uses
+that lookup to find the `Enumeration` arguments of its subject.
+
+Consequence: a generic consumer of `IO.Reader<E>` or `IO.Writer<E>`
+must name a concrete error in its bound,
+`fn drain<S: IO.Reader<IO.Error | TLSError>>(source: S)`, and so
+cannot be written once for every stream. A `BufferedReader<R, E>`
+over any reader is the first thing blocked. Implementors and call
+sites are unaffected, since `impl IO.Reader<IO.Error> for Fd` names
+its argument and `socket.read_line()` dispatches on the receiver.
+
+**Fix path:** after the argument pass binds what it can, walk the
+unfilled slots. For each one that appears as an argument of a protocol
+bound whose bounded parameter is filled, look up that parameter's
+conformance to the protocol and unify the bound's argument list with
+the conformance's `protocol_args`. One conformance per type and
+protocol makes the answer unique. A slot still empty after that pass
+reports as it does today.

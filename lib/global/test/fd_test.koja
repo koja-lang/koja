@@ -1,20 +1,27 @@
 alias File.Mode as FileMode
+alias IO.Error as IOError
 alias Test.require
 
 test "close returns Ok on valid fd"
-  file = try require(File.open("/dev/null", FileMode.Read))
-  try require(file.fd.close())
+  fd = try require(File.open("/dev/null", FileMode.Read))
+  try require(fd.close())
 end
 
-test "close consumes the fd"
-  file = try require(File.open("/dev/null", FileMode.Read))
-  try require(file.close())
+test "read after close fails with Closed"
+  fd = try require(File.open("/dev/null", FileMode.Read))
+  try require(fd.close())
+
+  match fd.read(1)
+    Result.Ok(_) -> fail "expected the read to fail"
+    Result.Err(IOError.Closed) -> ()
+    Result.Err(e) -> fail "expected Closed, got: #{e.message()}"
+  end
 end
 
 test "close on opened writable file"
   path = "/tmp/koja_fd_close_test.txt"
-  file = try require(File.open(path, FileMode.Write))
-  result = file.close()
+  fd = try require(File.open(path, FileMode.Write))
+  result = fd.close()
   File.delete(path)
 
   try require(result)
@@ -22,8 +29,9 @@ end
 
 test "write returns byte count on success"
   path = "/tmp/koja_fd_write_test.txt"
-  file = try require(File.open(path, FileMode.Write))
-  result = file.fd.write("hello")
+  fd = try require(File.open(path, FileMode.Write))
+  result = fd.write("hello")
+  _ = fd.close()
   File.delete(path)
 
   n = try require(result)
@@ -32,8 +40,9 @@ end
 
 test "write and read back roundtrip"
   path = "/tmp/koja_fd_write_roundtrip.txt"
-  file = try require(File.open(path, FileMode.Write))
-  file.fd.write("koja write test")
+  fd = try require(File.open(path, FileMode.Write))
+  fd.write("koja write test")
+  _ = fd.close()
   read = File.read(path)
   File.delete(path)
 
@@ -42,13 +51,13 @@ test "write and read back roundtrip"
 end
 
 test "write to /dev/null succeeds"
-  file = try require(File.open("/dev/null", FileMode.Write))
-  try require(file.fd.write("discard me"))
+  fd = try require(File.open("/dev/null", FileMode.Write))
+  try require(fd.write("discard me"))
 end
 
 test "watch and unwatch do not crash"
-  file = try require(File.open("/dev/null", FileMode.Read))
-  file.fd.watch(0)
-  file.fd.unwatch()
-  _ = file.close()
+  fd = try require(File.open("/dev/null", FileMode.Read))
+  fd.watch(Fd.Interest.Readable)
+  fd.unwatch()
+  _ = fd.close()
 end

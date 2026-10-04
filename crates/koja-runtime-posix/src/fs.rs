@@ -289,12 +289,15 @@ pub unsafe extern "C" fn koja_file_write_all(
 /// `Fd.block`: suspends the process until `fd` is ready for the requested
 /// direction or `timeout_ms` passes (negative for no limit). Returns 1
 /// when the deadline passed, 0 otherwise.
+///
+/// `interest`: 0 = readable, 1 = writable, the same encoding as
+/// `koja_rt_watch_fd`.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_io_block(fd: i32, readable: i64, timeout_ms: i64) -> i64 {
-    let interest = if readable != 0 {
-        Interest::Readable
-    } else {
+pub extern "C" fn koja_io_block(fd: i32, interest: i64, timeout_ms: i64) -> i64 {
+    let interest = if interest == 1 {
         Interest::Writable
+    } else {
+        Interest::Readable
     };
     let deadline = deadline_from_user_millis(timeout_ms);
     let wait = io_block(fd, interest, deadline);

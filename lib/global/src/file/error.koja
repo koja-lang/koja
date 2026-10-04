@@ -1,0 +1,81 @@
+alias File.Error as FileError
+
+@doc """
+Why an operation on a path failed. Variants name causes, not
+operations. The caller already knows which call failed, so these
+say why.
+
+`InvalidPath` means the path cannot name a file, because it holds an
+interior NUL or is not valid UTF-8. `Unknown` carries the raw OS errno
+for causes outside the mapped set.
+
+Produced by the `File` path operations such as `open`, `delete`,
+`mkdir`, and `rename`. Once `open` has returned an `Fd`, reads and
+writes on it fail with `IO.Error` instead.
+"""
+enum File.Error
+  AlreadyExists
+  DirectoryNotEmpty
+  InvalidPath
+  IsDirectory
+  NotDirectory
+  NotFound
+  PermissionDenied
+  Unknown(Int)
+
+  @doc """
+  Maps a runtime cause code to the path cause it names, or
+  `Option.None` when the code belongs to another domain. Mostly
+  internal. A composite operation such as `File.read` uses it to
+  route a code between `File.Error` and `IO.Error`.
+  """
+  fn from_code(code: Int) -> Option<FileError>
+    # Mirrors `error_kind_code` in `crates/koja-runtime-posix/src/util.rs`.
+
+    match code
+      2 -> Option.Some(FileError.AlreadyExists)
+      8 -> Option.Some(FileError.DirectoryNotEmpty)
+      11 -> Option.Some(FileError.InvalidPath)
+      12 -> Option.Some(FileError.IsDirectory)
+      15 -> Option.Some(FileError.NotDirectory)
+      16 -> Option.Some(FileError.NotFound)
+      17 -> Option.Some(FileError.PermissionDenied)
+      _ -> Option.None
+    end
+  end
+
+  @doc """
+  Builds the error for the most recent failed runtime path call.
+  Mostly internal. Prefer matching returned errors.
+  """
+  fn last -> FileError
+    FileError.from_code_or_unknown(koja_last_error_code())
+  end
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      FileError.AlreadyExists -> "path already exists"
+      FileError.DirectoryNotEmpty -> "directory is not empty"
+      FileError.InvalidPath -> "path is not valid"
+      FileError.IsDirectory -> "path is a directory"
+      FileError.NotDirectory -> "path is not a directory"
+      FileError.NotFound -> "no such file or directory"
+      FileError.PermissionDenied -> "permission denied"
+      FileError.Unknown(errno) -> "file error (errno #{errno})"
+    end
+  end
+
+  # Negative codes are raw OS errno values for unmapped causes.
+  priv fn from_code_or_unknown(code: Int) -> FileError
+    match FileError.from_code(code)
+      Option.Some(error) -> error
+      Option.None -> FileError.Unknown(code < 0 ? 0 - code : 0)
+    end
+  end
+
+  @extern "C"
+  priv fn koja_last_error_code -> Int32
+end

@@ -25,11 +25,10 @@ impl Koja.Task for New
       fail "directory '#{path}' already exists"
     end
 
-    File.mkdir_p("#{path}/src")
-      rescue message -> fail "cannot create directory: #{message}"
+    File.mkdir_p("#{path}/src") rescue e -> fail "cannot create directory: #{e}"
 
     File.mkdir_p("#{path}/test")
-      rescue message -> fail "cannot create directory: #{message}"
+      rescue e -> fail "cannot create directory: #{e}"
 
     try write_scaffold(path, name)
 
@@ -51,10 +50,7 @@ end
 
 # Appends the trailing newline the heredoc closing delimiter strips.
 priv fn write_file(path: String, content: String) ! String
-  File.write(path, "#{content}\n")
-    rescue message -> fail "cannot write #{path}: #{message}"
-
-  ()
+  File.write(path, "#{content}\n") rescue e -> fail "cannot write #{path}: #{e}"
 end
 
 priv fn valid_project_name?(name: String) -> Bool

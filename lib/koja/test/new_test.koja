@@ -87,8 +87,8 @@ test "run scaffolds a complete project"
   )
 end
 
-priv fn check_marker(
-  contents: Result<String, String>,
+priv fn check_marker<E>(
+  contents: Result<String, E>,
   marker: String,
   label: String,
 ) ! Test.Failure

@@ -192,8 +192,17 @@ fn expired(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
+/// Records `Interrupted` in the runtime's last-error slot, so a handler
+/// that returns the native failure sentinel reads back as the
+/// `Interrupted` variant of its error enum. Without it the Koja side
+/// reads whatever error the slot held last.
+pub(crate) fn note_interrupted() {
+    koja_runtime::set_last_error(io::Error::from(io::ErrorKind::Interrupted));
+}
+
 /// Records `TimedOut` in the runtime's last-error slot, so a handler that
-/// returns the native failure sentinel reads back as `Socket.Error.TimedOut`.
+/// returns the native failure sentinel reads back as the `TimedOut`
+/// variant of its error enum.
 pub(crate) fn note_timed_out() {
     koja_runtime::set_last_error(io::Error::from(io::ErrorKind::TimedOut));
 }
