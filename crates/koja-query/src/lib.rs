@@ -24,6 +24,7 @@ pub mod position;
 pub mod rename;
 pub mod signature;
 pub mod symbol;
+pub mod test_sites;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

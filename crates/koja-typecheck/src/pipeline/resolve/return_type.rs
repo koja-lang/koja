@@ -9,9 +9,9 @@
 //! resolution equals the declared return type. [`check_explicit_return`]
 //! applies the same compatibility rules at each `return` site.
 
-use koja_ast::ast::{Diagnostic, Expr, Function, Statement};
+use koja_ast::ast::{Diagnostic, Edit, Expr, Function, Statement};
 use koja_ast::identifier::ResolvedType;
-use koja_ast::span::Span;
+use koja_ast::span::{Position, Span};
 
 use crate::registry::{FunctionSignature, GlobalRegistry};
 
@@ -196,6 +196,7 @@ pub(super) fn check_explicit_return(
     if declares_unit {
         diagnostics.push(unit_return_value_diagnostic(
             resolver.in_script_body,
+            span,
             value.span,
         ));
         return;
@@ -209,22 +210,33 @@ pub(super) fn check_explicit_return(
 
 /// The valued-`return` rejection for Unit-returning bodies. Scripts
 /// get their own wording since they have no return channel at all
-/// (exit codes go through `Kernel.exit`).
-fn unit_return_value_diagnostic(in_script_body: bool, span: Span) -> Diagnostic {
+/// (exit codes go through `Kernel.exit`). In a function the fix
+/// deletes everything after the `return` keyword, which `statement`
+/// starts with, through the value.
+fn unit_return_value_diagnostic(in_script_body: bool, statement: Span, value: Span) -> Diagnostic {
     if in_script_body {
-        Diagnostic::error_with_hint(
+        return Diagnostic::error_with_hint(
             "scripts do not return a value",
             "use `Kernel.exit(code)` to set an exit code, or print the value",
-            span,
-        )
-    } else {
-        Diagnostic::error_with_hint(
-            "cannot return a value from a function that returns `Unit`",
-            "use a bare `return`",
-            span,
-        )
+            value,
+        );
     }
+    let keyword_end = Position {
+        offset: statement.start.offset + RETURN_KEYWORD_LEN,
+        line: statement.start.line,
+        column: statement.start.column + RETURN_KEYWORD_LEN,
+    };
+    let after_keyword = Span::new(keyword_end, value.end, statement.file);
+    Diagnostic::error_with_hint(
+        "cannot return a value from a function that returns `Unit`",
+        "use a bare `return`",
+        value,
+    )
+    .with_fix("Drop the return value", vec![Edit::delete(after_keyword)])
 }
+
+/// Byte and column length of the `return` keyword.
+const RETURN_KEYWORD_LEN: u32 = "return".len() as u32;
 
 /// Render a return-position [`Mismatch`] into its message. `owner`
 /// is the function name for the trailing-expression check, `None`

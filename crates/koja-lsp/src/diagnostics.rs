@@ -14,17 +14,20 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{Diagnostic as KojaDiagnostic, Severity as KojaSeverity};
+use koja_ast::span::Span;
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
 use koja_query::{Analysis, ReferenceIndex};
 use koja_typecheck::{CheckedPackage, CheckedProgram, check_program};
 
 use crate::backend::{Backend, DocumentState};
-use crate::convert::{path_to_uri, span_to_range, uri_to_path};
+use crate::code_action::FixData;
+use crate::convert::{path_to_uri, uri_to_path};
 
 #[derive(Deserialize)]
 struct KojaToml {
@@ -263,12 +266,22 @@ fn read_project_namespace(project_root: &Path) -> Option<String> {
 }
 
 impl Backend {
-    /// Runs the pipeline on the current source text and publishes
+    /// Runs the pipeline on the buffer text of `uri` and publishes
     /// diagnostics per owning file. The bundle (stdlib + siblings +
     /// active buffer) is parsed and checked from scratch on every
     /// call. We accept that cost for simplicity and revisit only if
     /// real-world latency complains.
-    pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
+    ///
+    /// Runs overlap when edits arrive faster than analysis finishes,
+    /// and they can finish out of order. A run whose buffer revision
+    /// is no longer current publishes nothing, so a slow old run
+    /// never overwrites a fresh one.
+    pub(crate) async fn diagnose(&self, uri: Uri) {
+        let Some(buffer) = self.buffers.snapshot(uri.as_str()) else {
+            return;
+        };
+        let text = buffer.text.as_str();
+
         // Re-materialize the stdlib extraction if pruned, so cached
         // stdlib paths stay valid for navigation.
         let _ = koja_stdlib::extract();
@@ -284,7 +297,7 @@ impl Backend {
             (None, p) => package_for_path(Some(p)),
         };
 
-        let overlays = self.open_document_overlays(uri.as_str()).await;
+        let overlays = self.open_document_overlays(uri.as_str());
         let (sources, project_paths) = self.build_bundle(
             &active_package,
             &active_path,
@@ -299,6 +312,19 @@ impl Backend {
             .files
             .values()
             .flat_map(|file| file.diagnostics.iter().cloned())
+            .collect();
+
+        // Typecheck drops the source text, so capture it now in the
+        // file order spans index into.
+        let source_texts: Vec<Arc<str>> = parsed
+            .order
+            .iter()
+            .map(|path| {
+                parsed
+                    .files
+                    .get(path)
+                    .map_or_else(|| Arc::from(""), |file| Arc::from(file.source.as_str()))
+            })
             .collect();
 
         // Both arms keep the post-typecheck ASTs and the registry.
@@ -354,62 +380,49 @@ impl Backend {
             None => ReferenceIndex::default(),
         };
 
-        {
-            let mut docs = self.documents.write().await;
-            docs.insert(
-                uri.as_str().to_string(),
-                DocumentState {
-                    source: text.to_string(),
-                    active_path: active_path.clone(),
-                    active_package,
-                    parsed: parsed_for_state,
-                    registry,
-                    source_paths: source_paths.clone(),
-                    has_errors,
-                    project_paths,
-                    index,
-                },
-            );
+        let state = DocumentState {
+            active_path: active_path.clone(),
+            active_package,
+            encoding: self.encoding(),
+            parsed: parsed_for_state,
+            registry,
+            source_paths,
+            source_texts,
+            has_errors,
+            project_paths,
+            project_root,
+            index,
+        };
+
+        // A newer revision means another run owns the result now.
+        if self.buffers.revision(uri.as_str()) != Some(buffer.revision) {
+            return;
         }
 
-        self.publish_grouped(uri, version, &active_path, grouped, &source_paths)
+        let (active_diags, publishes) = convert_grouped(&uri, &state, grouped);
+        self.documents
+            .write()
+            .await
+            .insert(uri.as_str().to_string(), state);
+
+        self.publish(uri, Some(buffer.version), active_diags, publishes)
             .await;
     }
 
     /// Publish each file's diagnostics to its own URI and clear the
-    /// URIs that lost theirs since the previous pass. `source_paths`
-    /// resolves the file of a related location to its URI.
-    async fn publish_grouped(
+    /// URIs that lost theirs since the previous pass.
+    async fn publish(
         &self,
         uri: Uri,
         version: Option<i32>,
-        active_path: &Path,
-        mut grouped: HashMap<PathBuf, Vec<KojaDiagnostic>>,
-        source_paths: &[PathBuf],
+        active_diags: Vec<Diagnostic>,
+        publishes: Vec<(Uri, Vec<Diagnostic>)>,
     ) {
-        let active_diags: Vec<Diagnostic> = grouped
-            .remove(active_path)
-            .unwrap_or_default()
-            .iter()
-            .map(|d| to_lsp_diagnostic(d, source_paths, &uri))
-            .collect();
-
-        let mut publishes: Vec<(Uri, Vec<Diagnostic>)> = Vec::new();
         let mut now_published: HashSet<Uri> = HashSet::new();
         if !active_diags.is_empty() {
             now_published.insert(uri.clone());
         }
-        for (path, diags) in &grouped {
-            let Some(sibling_uri) = path_to_uri(path) else {
-                continue;
-            };
-            now_published.insert(sibling_uri.clone());
-            let converted = diags
-                .iter()
-                .map(|d| to_lsp_diagnostic(d, source_paths, &sibling_uri))
-                .collect();
-            publishes.push((sibling_uri, converted));
-        }
+        now_published.extend(publishes.iter().map(|(uri, _)| uri.clone()));
 
         let stale: Vec<Uri> = {
             let mut published = self.published.write().await;
@@ -435,16 +448,46 @@ impl Backend {
 
     /// Canonical path to buffer text for every other open document,
     /// so siblings compile from unsaved editor state, not disk.
-    async fn open_document_overlays(&self, active_uri: &str) -> HashMap<PathBuf, String> {
-        let docs = self.documents.read().await;
-        docs.iter()
-            .filter(|(doc_uri, _)| doc_uri.as_str() != active_uri)
-            .filter_map(|(_, state)| {
-                let canonical = fs::canonicalize(&state.active_path).ok()?;
-                Some((canonical, state.source.clone()))
+    fn open_document_overlays(&self, active_uri: &str) -> HashMap<PathBuf, String> {
+        self.buffers
+            .open_texts()
+            .into_iter()
+            .filter(|(doc_uri, _)| doc_uri != active_uri)
+            .filter_map(|(doc_uri, text)| {
+                let canonical = fs::canonicalize(uri_to_path(&doc_uri)?).ok()?;
+                Some((canonical, text))
             })
             .collect()
     }
+}
+
+/// Convert the grouped diagnostics to LSP form. Returns the active
+/// file's set and one set per sibling that has any.
+fn convert_grouped(
+    uri: &Uri,
+    state: &DocumentState,
+    mut grouped: HashMap<PathBuf, Vec<KojaDiagnostic>>,
+) -> (Vec<Diagnostic>, Vec<(Uri, Vec<Diagnostic>)>) {
+    let range = |span: &Span| state.range_of(span);
+    let active_diags: Vec<Diagnostic> = grouped
+        .remove(&state.active_path)
+        .unwrap_or_default()
+        .iter()
+        .map(|d| to_lsp_diagnostic(d, &state.source_paths, uri, &range))
+        .collect();
+
+    let mut publishes: Vec<(Uri, Vec<Diagnostic>)> = Vec::new();
+    for (path, diags) in &grouped {
+        let Some(sibling_uri) = path_to_uri(path) else {
+            continue;
+        };
+        let converted = diags
+            .iter()
+            .map(|d| to_lsp_diagnostic(d, &state.source_paths, &sibling_uri, &range))
+            .collect();
+        publishes.push((sibling_uri, converted));
+    }
+    (active_diags, publishes)
 }
 
 impl Backend {
@@ -568,8 +611,15 @@ fn group_by_file(
 
 /// Converts a Koja compiler diagnostic to an LSP diagnostic. A
 /// related location becomes `related_information`, falling back to
-/// `own_uri` when its file id is not in `source_paths`.
-fn to_lsp_diagnostic(d: &KojaDiagnostic, source_paths: &[PathBuf], own_uri: &Uri) -> Diagnostic {
+/// `own_uri` when its file id is not in `source_paths`. A fix rides
+/// in `data` for the code action handler. `range` converts a span
+/// over the text of the span's file.
+fn to_lsp_diagnostic(
+    d: &KojaDiagnostic,
+    source_paths: &[PathBuf],
+    own_uri: &Uri,
+    range: &dyn Fn(&Span) -> Range,
+) -> Diagnostic {
     let severity = match d.severity {
         KojaSeverity::Error => DiagnosticSeverity::ERROR,
         KojaSeverity::Warning => DiagnosticSeverity::WARNING,
@@ -583,6 +633,11 @@ fn to_lsp_diagnostic(d: &KojaDiagnostic, source_paths: &[PathBuf], own_uri: &Uri
 
     let tags = is_deprecation_warning(d).then(|| vec![DiagnosticTag::DEPRECATED]);
 
+    let data = d
+        .fix
+        .as_ref()
+        .and_then(|fix| serde_json::to_value(FixData::from_fix(fix, range)).ok());
+
     let related_information = d.related.as_ref().map(|related| {
         let uri = source_paths
             .get(related.span.file.0 as usize)
@@ -591,19 +646,20 @@ fn to_lsp_diagnostic(d: &KojaDiagnostic, source_paths: &[PathBuf], own_uri: &Uri
         vec![DiagnosticRelatedInformation {
             location: Location {
                 uri,
-                range: span_to_range(&related.span),
+                range: range(&related.span),
             },
             message: related.message.clone(),
         }]
     });
 
     Diagnostic {
-        range: span_to_range(&d.span),
+        range: range(&d.span),
         severity: Some(severity),
         source: Some("koja".to_string()),
         message,
         related_information,
         tags,
+        data,
         ..Default::default()
     }
 }
@@ -622,7 +678,13 @@ mod tests {
 
     use koja_ast::span::{FileId, Span};
 
+    use crate::convert::{PositionEncoding, Positions};
+
     use super::*;
+
+    fn range(span: &Span) -> Range {
+        Positions::new(PositionEncoding::Utf16, "").range(span)
+    }
 
     fn diag(file: FileId) -> KojaDiagnostic {
         let span = Span {
@@ -699,7 +761,7 @@ mod tests {
         };
         let diagnostic = diag(FileId(0)).with_related("previous function definition", related_span);
 
-        let converted = to_lsp_diagnostic(&diagnostic, &source_paths, &active);
+        let converted = to_lsp_diagnostic(&diagnostic, &source_paths, &active, &range);
         let related = converted.related_information.expect("related information");
         assert_eq!(related.len(), 1);
         assert_eq!(related[0].message, "previous function definition");
@@ -710,11 +772,29 @@ mod tests {
     }
 
     #[test]
+    fn fix_rides_in_data() {
+        use koja_ast::ast::Edit;
+
+        let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
+        let diagnostic = diag(FileId(0)).with_fix("Drop it", vec![Edit::delete(Span::default())]);
+
+        let converted = to_lsp_diagnostic(&diagnostic, &[], &active, &range);
+        let data: FixData = serde_json::from_value(converted.data.expect("data")).unwrap();
+        assert_eq!(data.title, "Drop it");
+        assert_eq!(data.edits.len(), 1);
+        assert!(
+            to_lsp_diagnostic(&diag(FileId(0)), &[], &active, &range)
+                .data
+                .is_none()
+        );
+    }
+
+    #[test]
     fn related_location_with_unresolved_file_stays_in_own_uri() {
         let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
         let diagnostic = diag(FileId(0)).with_related("declared here", Span::default());
 
-        let converted = to_lsp_diagnostic(&diagnostic, &[], &active);
+        let converted = to_lsp_diagnostic(&diagnostic, &[], &active, &range);
         let related = converted.related_information.expect("related information");
         assert_eq!(related[0].location.uri, active);
     }

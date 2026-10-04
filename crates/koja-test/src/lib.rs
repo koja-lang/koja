@@ -72,6 +72,12 @@ pub struct Owner {
 }
 
 impl TestCase {
+    /// The `file:line` spec id, the same one the JSON reporter
+    /// prints and `koja test --only` accepts.
+    pub fn id(&self) -> String {
+        format!("{}:{}", self.file, self.line)
+    }
+
     /// The qualified function the harness registers.
     fn call_path(&self) -> String {
         match &self.owner {
@@ -296,6 +302,24 @@ fn spec_run(test: &TestCase) -> String {
     }
 }
 
+/// Keep the tests whose [`TestCase::id`] is in `only`, in discovery
+/// order. An id that names no test is a user error, so the unmatched
+/// ids come back as `Err` for the caller to report.
+pub fn select_tests(tests: Vec<TestCase>, only: &[String]) -> Result<Vec<TestCase>, Vec<String>> {
+    let unmatched: Vec<String> = only
+        .iter()
+        .filter(|id| !tests.iter().any(|test| test.id() == **id))
+        .cloned()
+        .collect();
+    if !unmatched.is_empty() {
+        return Err(unmatched);
+    }
+    Ok(tests
+        .into_iter()
+        .filter(|test| only.contains(&test.id()))
+        .collect())
+}
+
 /// Generate the Koja source for the test harness file: a
 /// [`HARNESS_ENTRY`] struct implementing
 /// `Process<(), Process.ExitSignal, ()>` whose `run` registers the
@@ -368,4 +392,50 @@ impl Process<(), Process.ExitSignal, ()> for {HARNESS_ENTRY}
 end
 "#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case(file: &str, line: u32) -> TestCase {
+        TestCase {
+            description: String::new(),
+            file: file.to_string(),
+            fn_name: String::new(),
+            line,
+            owner: None,
+            shape: Shape::Spec,
+        }
+    }
+
+    #[test]
+    fn select_keeps_matching_ids_in_discovery_order() {
+        let tests = vec![
+            case("test/a_test.koja", 3),
+            case("test/a_test.koja", 9),
+            case("test/b_test.koja", 3),
+        ];
+        let only = vec![
+            "test/b_test.koja:3".to_string(),
+            "test/a_test.koja:3".to_string(),
+        ];
+        let kept: Vec<String> = select_tests(tests, &only)
+            .unwrap()
+            .iter()
+            .map(TestCase::id)
+            .collect();
+        assert_eq!(kept, ["test/a_test.koja:3", "test/b_test.koja:3"]);
+    }
+
+    #[test]
+    fn select_reports_every_unmatched_id() {
+        let tests = vec![case("test/a_test.koja", 3)];
+        let only = vec![
+            "test/a_test.koja:4".to_string(),
+            "test/zz.koja:1".to_string(),
+        ];
+        let unmatched = select_tests(tests, &only).unwrap_err();
+        assert_eq!(unmatched, only);
+    }
 }

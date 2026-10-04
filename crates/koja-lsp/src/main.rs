@@ -1,4 +1,7 @@
 mod backend;
+mod buffer;
+mod code_action;
+mod code_lens;
 mod completion;
 mod convert;
 mod definition;

@@ -5,7 +5,7 @@
 //! branching). `unless` was removed in 0.19 but stays reserved so
 //! the parser can point at the `if not` replacement.
 
-use koja_ast::ast::{Expr, ExprKind, UnaryOp};
+use koja_ast::ast::{Diagnostic, Edit, Expr, ExprKind, UnaryOp};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -44,13 +44,20 @@ impl Parser {
 
     /// Reports the removed `unless` form and recovers by parsing it
     /// as `if not cond ... end`, so later passes see well-formed code
-    /// and report nothing spurious.
+    /// and report nothing spurious. The fix rewrites the keyword, which
+    /// is the whole difference between the two forms.
     pub(crate) fn parse_unless_removed(&mut self) -> Expr {
         let start = self.current_span();
-        self.error_with_hint(
-            "`unless` was removed in 0.19".to_string(),
-            "write `if not cond` instead".to_string(),
-            start,
+        self.report(
+            Diagnostic::error_with_hint(
+                "`unless` was removed in 0.19",
+                "write `if not cond` instead",
+                start,
+            )
+            .with_fix(
+                "Replace `unless` with `if not`",
+                vec![Edit::replace(start, "if not")],
+            ),
         );
         self.advance(); // unless
 

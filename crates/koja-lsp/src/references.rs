@@ -9,7 +9,6 @@ use tower_lsp_server::ls_types::*;
 use koja_query::Role;
 
 use crate::backend::Backend;
-use crate::convert::span_to_range;
 
 impl Backend {
     /// Handles `textDocument/references`.
@@ -38,7 +37,7 @@ impl Backend {
             .filter(|occurrence| include_declaration || occurrence.role != Role::Declaration)
             .map(|occurrence| Location {
                 uri: state.uri_of(&analysis, occurrence.span.file, &uri),
-                range: span_to_range(&occurrence.span),
+                range: state.range_of(&occurrence.span),
             })
             .collect();
 
@@ -50,7 +49,7 @@ impl Backend {
         {
             locations.push(Location {
                 uri: state.uri_of(&analysis, span.file, &uri),
-                range: span_to_range(&span),
+                range: state.range_of(&span),
             });
         }
 
