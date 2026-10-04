@@ -117,10 +117,12 @@ pub enum Coercion {
     /// `IRInstruction::NumericWiden` (sign-extend signed sources,
     /// zero-extend unsigned, `fpext` for `Float32`).
     NumericWiden(ResolvedType),
-    /// Member `M` flowing into union slot `M | ...`. The carried
+    /// Member `M` flowing into union slot `M | ...`, or a union
+    /// `M | N` flowing into a wider union `M | N | ...`. The carried
     /// `ResolvedType` is the *target union as declared at the slot*,
     /// preserved verbatim so an alias-named target keeps its name
     /// in diagnostics and the IR lowerer can peel it once when
-    /// shaping the `UnionWrap`. Lowers to `IRInstruction::UnionWrap`.
+    /// shaping the `UnionWrap`. Lowers to `IRInstruction::UnionWrap`,
+    /// behind a switch on the source tag when the source is a union.
     UnionWiden(ResolvedType),
 }

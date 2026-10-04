@@ -28,6 +28,7 @@ fn main() {
     let mut consts = Vec::new(); // (const_name, absolute_path, lib-relative path)
     let mut const_idx = 0usize;
     let mut relative_by_const: BTreeMap<String, String> = BTreeMap::new();
+    let mut relative_by_module: BTreeMap<String, String> = BTreeMap::new();
 
     for entry in &dirs {
         let project_dir = entry.path();
@@ -62,15 +63,14 @@ fn main() {
         for file_path in files {
             println!("cargo:rerun-if-changed={}", file_path.display());
 
-            let stem = file_path.file_stem().unwrap().to_string_lossy().to_string();
-            let module_name = if stem == package_name {
-                package_name.clone()
-            } else {
-                format!("{package_name}.{stem}")
-            };
+            let module_name = module_name(&package_name, &src_dir, &file_path);
+            let relative = lib_relative(&lib_dir, &file_path);
+            if let Some(previous) = relative_by_module.insert(module_name.clone(), relative.clone())
+            {
+                panic!("{relative} and {previous} both embed as `{module_name}`");
+            }
 
             let const_name = format!("SRC_{const_idx}");
-            let relative = lib_relative(&lib_dir, &file_path);
             relative_by_const.insert(const_name.clone(), relative.clone());
             consts.push((
                 const_name.clone(),
@@ -159,6 +159,26 @@ fn main() {
     code.push_str("];\n");
 
     fs::write(out_dir.join("stdlib_gen.rs"), code).unwrap();
+}
+
+/// Module name of an embedded source file. The pipeline keys files by
+/// this name (as the synthetic path `<Package.module>`), so it must be
+/// unique within a package. It is the path under `src/` with the
+/// extension dropped and the separators turned to dots, so
+/// `global/src/io.koja` is `Global.io` and `global/src/io/error.koja`
+/// is `Global.io.error`.
+fn module_name(package_name: &str, src_dir: &Path, file: &Path) -> String {
+    let relative = file
+        .strip_prefix(src_dir)
+        .unwrap_or_else(|_| panic!("{} is not under {}", file.display(), src_dir.display()))
+        .with_extension("");
+    let segments = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned());
+    std::iter::once(package_name.to_string())
+        .chain(segments)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Path of `file` relative to `lib_dir`, with `/` separators.

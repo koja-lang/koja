@@ -536,3 +536,60 @@ symbols exist before codegen. The first needs a union hash strategy
 in the backend, most simply a member dispatch that hashes the tag
 and then the active member. Once both land, the three `Codegen`
 sites in `resolve_hash_eq` become seal invariant panics.
+
+## `rescue` handlers cannot `return`
+
+Found 2026-10-04 while splitting `File` out of `fd.koja`.
+LANGUAGE.md says a `rescue` handler must produce the success type or
+diverge, and names `fail` and a panic as the diverging forms. `return`
+is the third diverging form and the compiler rejects it there with
+"`return` is only valid as a statement". The parser reads the handler
+with `parse_expr_bp(BP_RESCUE_R)` in `koja-parser/src/expr.rs`, so it
+is one expression and never statement position, even though resolve
+lowers it to a `match` arm body where `return` would be legal. The
+same limit keeps a handler to one expression, so a handler that must
+release a resource before it fails has no place to do so.
+
+Consequence: `File.dir?` and `File.exists?` keep a four-line `match`
+to turn a bad path into `false` where `rescue _ -> return false` reads
+as the intent. `File.rename` keeps a `match` so it can free the first
+`CString` before it fails on the second.
+
+**Fix path (agreed 2026-10-04, to land as one branch):** the model
+is the closure pair, a short form and a block form. The `->` in a
+short closure and in `rescue e -> handler` introduces a one-statement
+body, so both take an expression or a diverging `return`, `break`, or
+`fail`. `fail` is "return on the error channel" and becomes
+`Statement::Fail`, rejected by the parser in expression position the
+way `return` is, instead of an `ExprKind` that typecheck rejects
+late. `body_tail_type` treats `break` as divergent like `return`, so
+a `match`, `if`, or `cond` arm may end in `break`. A block handler
+for the multi-statement case comes after, with its own terminator
+design. A stash on `fix/nested-type-unions` holds a first cut of the
+`rescue` half (handler as `Box<Statement>`, parser dispatch on
+`return` and `break`, tests, docs).
+
+## Diagnostics render a nested type by its leaf name
+
+Found 2026-10-04 while adding `File.Error` beside `IO.Error`.
+`display_resolution` in `koja-typecheck/src/pipeline/resolve/types.rs`
+renders a `Global` head as `entry.identifier.last()`, the last path
+segment. A top-level type reads as expected (`Option<Int>`), but every
+nested type loses its owner, so `File.Error` and `IO.Error` both print
+as `Error` and `IO.Reader.Options` prints as `Options`. The same string
+was the sort and dedup key in `canonical_union` until the structural
+dedup landed, which is how `File.Error | IO.Error` once collapsed to
+one member. Identity is now structural there, so this is a reporting
+gap only. Every other use of the string is diagnostic text.
+
+Consequence: a mismatch between two same-leaf nested types reads as
+"annotation says `Error`, but the right-hand side has type `Error`",
+and a union of them prints as `Error | Error`. The user has to guess
+which owner each side means.
+
+**Fix path:** render the path under the package, so the `Global(id)`
+arm joins `identifier.path()` with dots. Top-level types keep their
+current text and nested types gain their owner. Typecheck tests that
+assert a message mentioning a nested type need their expected text
+updated, and the display-ordered union member list changes order only
+where same-leaf members already tie.

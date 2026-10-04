@@ -1,4 +1,4 @@
-//! Inline conformance expansion for union values.
+//! Inline conformance expansion and widening for union values.
 //!
 //! A union has no decl to hang a derived impl on, so `format` /
 //! `print` / `inspect` / `hash` (and `equals?`, via
@@ -6,7 +6,9 @@
 //! the tag byte: [`emit_union_switch`] projects the payload as the
 //! matching member and lets the caller build one arm per member.
 //! Every union conformance goes through that one switch so the
-//! control-flow shape is written once.
+//! control-flow shape is written once. [`emit_union_widen`] rides the
+//! same switch to re-tag a union value into a wider union, one
+//! [`emit_union_wrap`] per source member.
 
 use koja_ast::ast::{Arg, Expr};
 use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
@@ -154,6 +156,92 @@ pub(super) fn emit_union_switch(
         );
     }
     (result, merge)
+}
+
+/// Wrap `value`, statically one member of `union_ty`, into that union.
+/// The wrap aliases the member's storage without an acquire, so an
+/// owned source moves into the union. The ownership stamp transfers
+/// with it, or the temp's release site never sees it and the widened
+/// value leaks.
+pub(super) fn emit_union_wrap(
+    value: ValueId,
+    union_ty: &IRType,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> ValueId {
+    let IRType::Union { members, .. } = union_ty else {
+        panic!(
+            "IR lower: Coercion::UnionWiden target lowered to non-Union \
+             `{union_ty:?}` (typecheck invariant violation)",
+        );
+    };
+    let member_type = ctx.type_of(value).clone();
+    let member_index = members
+        .iter()
+        .position(|m| m == &member_type)
+        .unwrap_or_else(|| {
+            panic!(
+                "IR lower: Coercion::UnionWiden source type `{member_type:?}` \
+                 is not a member of target union `{union_ty:?}`, typecheck \
+                 invariant violation",
+            )
+        }) as u8;
+    let dest = ctx.fresh_value(union_ty.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::UnionWrap {
+            dest,
+            member_index,
+            member_type,
+            ty: union_ty.clone(),
+            value,
+        },
+    );
+    if ctx.is_owned(value) {
+        ctx.mark_owned(dest);
+    }
+    dest
+}
+
+/// Widen the union `value` (whose resolved type is `expr.resolution`)
+/// into the wider union `target_ty`. Typecheck admits the flow only
+/// when every source member is a target member, so each arm of the
+/// tag switch wraps its payload with the target's index for that
+/// member. The merge param owns the result, so each arm acquires the
+/// payload first and the source temp is released after the switch,
+/// the same contract the conformance expansions follow.
+pub(super) fn emit_union_widen(
+    expr: &Expr,
+    value: ValueId,
+    target_ty: IRType,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> (ValueId, IRBlockId) {
+    let source = peel_alias(&expr.resolution, ctx.registry);
+    let ResolvedType::Union(members) = &source else {
+        panic!(
+            "IR lower: Coercion::UnionWiden on a union value whose expression resolved \
+             to `{source:?}` (typecheck resolve invariant violation)",
+        );
+    };
+    let source_ty = ctx.type_of(value).clone();
+    let switch = UnionSwitch {
+        label: "union_widen",
+        result_ty: target_ty.clone(),
+        subject: UnionSubject {
+            members,
+            ty: &source_ty,
+            value,
+        },
+    };
+    let (widened, after) = emit_union_switch(switch, ctx, block, |arm, ctx, block| {
+        let member_ty = ctx.type_of(arm.payload).clone();
+        let acquired = materialize_owned(ctx, block, arm.payload, &member_ty);
+        let wrapped = emit_union_wrap(acquired, &target_ty, ctx, block);
+        (wrapped, block)
+    });
+    drop_discarded_temp(ctx, after, value);
+    (widened, after)
 }
 
 /// Render the carried member through its own `format`. Function
