@@ -6,9 +6,9 @@
 //! [`crate::reactor`] before each native call (see there for why).
 //!
 //! - `accept` / `send_to` [`io_block`](crate::reactor::io_block) for
-//!   readiness, then call the native symbol.
-//! - `try_accept` calls the native non-blocking symbol directly (a
-//!   non-blocking listener reports its `-2` "nothing pending" itself).
+//!   readiness, then call the native symbol. A zero `timeout_ms` makes
+//!   `accept` a poll, since `io_block` checks readiness before the
+//!   deadline.
 //! - `connect` cannot pre-wait (the fd is not writable until the
 //!   handshake is initiated), so it drives the runtime's split
 //!   `connect_start` / `connect_finish` around an eval `io_block` on
@@ -35,7 +35,6 @@ unsafe extern "C" {
         ip_length: i64,
         port: i64,
     ) -> i64;
-    fn koja_socket_try_accept(fd: i32) -> i32;
 }
 
 pass_through_externs! {
@@ -86,16 +85,6 @@ pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError>
         }
     }
     let client = unsafe { koja_socket_accept(*fd as i32, -1) };
-    Ok(Value::Int(i64::from(client)))
-}
-
-/// `koja_socket_try_accept(fd)`: native non-blocking accept. Returns the
-/// client fd, `-2` when nothing is pending, or `-1` on error.
-pub(super) fn socket_try_accept(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd)] = args else {
-        return Err(type_mismatch("koja_socket_try_accept", "(fd: Int32)", args));
-    };
-    let client = unsafe { koja_socket_try_accept(*fd as i32) };
     Ok(Value::Int(i64::from(client)))
 }
 

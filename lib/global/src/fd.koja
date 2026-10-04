@@ -1,6 +1,16 @@
+alias Fd.Interest
 alias IO.Error as IOError
 alias IO.Reader.Options as ReaderOptions
 alias IO.Writer.Options as WriterOptions
+
+@doc """
+The readiness a process waits for on a descriptor, either `Readable`
+or `Writable`. `Fd.block` and `Fd.watch` take one.
+"""
+enum Fd.Interest
+  Readable
+  Writable
+end
 
 @doc """
 An open file descriptor. `File.open` returns one for a file, `STDIN`,
@@ -8,20 +18,29 @@ An open file descriptor. `File.open` returns one for a file, `STDIN`,
 wrap one. Reads and writes come from the `IO.Reader` and `IO.Writer`
 conformances below, and every operation on an open descriptor fails
 with `IO.Error`.
+
+`block`, `watch`, and `unwatch` are for processes that drive a
+descriptor directly. Reads and writes wait for readiness on their own,
+so most code never calls them.
 """
 struct Fd
   descriptor: Int32
 
   @doc """
-  Suspends the current process until this file descriptor is ready or
-  `timeout` passes. Pass `true` to wait for readable, `false` to wait for
-  writable. Returns `true` when the wait ended on the timeout, `false`
-  when the I/O reactor detected readiness.
+  Suspends the current process until this file descriptor is ready for
+  `interest` or `timeout` passes. Returns `true` when the wait ended on
+  the timeout, `false` when the I/O reactor detected readiness.
   """
-  fn block(self, readable: Bool, timeout: Option<Duration> = Option.None)
+  fn block(self, interest: Interest, timeout: Option<Duration> = Option.None)
     -> Bool
 
-    koja_io_block(self.descriptor, readable ? 1 : 0, timeout_ms(timeout)) == 1
+    timed_out = koja_io_block(
+      self.descriptor,
+      interest_code(interest),
+      timeout_ms(timeout),
+    )
+
+    timed_out == 1
   end
 
   @doc """
@@ -34,23 +53,29 @@ struct Fd
   end
 
   @doc """
-  Removes this file descriptor from I/O readiness monitoring.
-  No further `IOReady` messages will be delivered for this fd.
+  Removes this file descriptor from I/O readiness monitoring. No
+  further `IO.Ready` messages arrive for it.
   """
   fn unwatch(self)
     koja_rt_unwatch_fd(self.descriptor)
   end
 
   @doc """
-  Registers this file descriptor for I/O readiness notifications.
-  When the fd becomes ready, an `IOReady` message is delivered to
-  the current process's mailbox. Uses oneshot mode: after one event
-  fires, `watch` must be called again to re-register.
-
-  Interest: 0 = readable, 1 = writable.
+  Registers this file descriptor for one readiness notification. When
+  the descriptor becomes ready for `interest`, an `IO.Ready` message
+  arrives in the mailbox of the current process. The registration
+  fires once, so call `watch` again after each message to keep
+  receiving them.
   """
-  fn watch(self, interest: Int)
-    koja_rt_watch_fd(self.descriptor, interest)
+  fn watch(self, interest: Interest)
+    koja_rt_watch_fd(self.descriptor, interest_code(interest))
+  end
+
+  priv fn interest_code(interest: Interest) -> Int
+    match interest
+      Interest.Readable -> 0
+      Interest.Writable -> 1
+    end
   end
 
   priv fn timeout_ms(timeout: Option<Duration>) -> Int
@@ -76,7 +101,7 @@ struct Fd
   ) -> Int64
 
   @extern "C"
-  priv fn koja_io_block(fd: Int32, readable: Int64, timeout_ms: Int64) -> Int64
+  priv fn koja_io_block(fd: Int32, interest: Int64, timeout_ms: Int64) -> Int64
 
   @extern "C"
   priv fn koja_rt_unwatch_fd(fd: Int32)

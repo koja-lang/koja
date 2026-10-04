@@ -1,5 +1,6 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
+alias Fd.Interest
 alias IO.Error as IOError
 
 priv const SSL_ERROR_SYSCALL: Int64 = 5
@@ -467,7 +468,7 @@ struct TLSSession
       fail failure
     end
 
-    match wait_ready(fd, err == SSL_ERROR_WANT_READ, deadline)
+    match wait_ready(fd, err, deadline)
       Result.Err(e) ->
         ssl_free(ssl)
         ssl_ctx_free(ctx)
@@ -568,7 +569,7 @@ struct TLSSession
       fail io_failure(err)
     end
 
-    try wait_ready(fd, err == SSL_ERROR_WANT_READ, deadline)
+    try wait_ready(fd, err, deadline)
     try read_loop(ssl, fd, buf, count, deadline)
   end
 
@@ -646,19 +647,24 @@ struct TLSSession
     true
   end
 
-  # Waits for `fd` in one direction until `deadline`. Each wait gets
-  # the time left, so a whole call shares one bound.
-  priv fn wait_ready(fd: Fd, readable: Bool, deadline: Option<Instant>)
+  # Waits for `fd` in the direction OpenSSL asked for until `deadline`.
+  # `ssl_error` is `SSL_ERROR_WANT_READ` or `SSL_ERROR_WANT_WRITE`. Each
+  # wait gets the time left, so a whole call shares one bound.
+  priv fn wait_ready(fd: Fd, ssl_error: Int, deadline: Option<Instant>)
     ! IOError
+
+    interest = ssl_error == SSL_ERROR_WANT_READ
+      ? Interest.Readable
+      : Interest.Writable
 
     match deadline
       Option.None ->
-        _ = fd.block(readable, Option.None)
+        _ = fd.block(interest, Option.None)
 
       Option.Some(at) ->
         remaining = at.since(Instant.now())
 
-        if remaining.zero?() or fd.block(readable, Option.Some(remaining))
+        if remaining.zero?() or fd.block(interest, Option.Some(remaining))
           fail IOError.TimedOut
         end
     end
@@ -683,7 +689,7 @@ struct TLSSession
       fail io_failure(err)
     end
 
-    try wait_ready(fd, err == SSL_ERROR_WANT_READ, deadline)
+    try wait_ready(fd, err, deadline)
     try write_loop(ssl, fd, bytes, deadline)
   end
 

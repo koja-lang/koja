@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IO.Error`, the error for an open stream, with `BrokenPipe`, `Closed`, `ConnectionReset`, `Interrupted`, `TimedOut`, and `Unknown(Int)`. `File.Error`, the error for a path, with `AlreadyExists`, `DirectoryNotEmpty`, `InvalidPath`, `IsDirectory`, `NotDirectory`, `NotFound`, `PermissionDenied`, and `Unknown(Int)`. Each has `from_code(code) -> Option<Self>`, `last()`, and `message()`.
 - `TCPSocket.connect(host, port, timeout)`, `connect_addr(addr, timeout)`, `connect_tls(host, port, timeout)`, and `connect_tls_with(host, port, config, timeout)` take a trailing `Option<Duration>` that bounds the TCP handshake. It defaults to `Option.None`. DNS resolution is not bounded. The two TLS forms apply the same bound again, measured anew, to the TLS handshake.
 - `TCPListener.accept(timeout)`, `TCPSocket.upgrade_tls(host, config, timeout)`, `accept_tls(config, timeout)`, `TLSSession.connect(fd, host, config, timeout)`, and `TLSSession.accept(fd, config, timeout)` take a trailing `Option<Duration>`, `Option.None` by default, that bounds the wait for a connection or the handshake.
-- `Fd.block` takes a trailing `timeout: Option<Duration> = Option.None` and returns `Bool`, `true` when the wait ended on the timeout. `Socket.accept` and `Socket.connect` take the same parameter.
+- `Fd.block` takes a trailing `timeout: Option<Duration> = Option.None` and returns `Bool`, `true` when the wait ended on the timeout. `Socket.accept` and `Socket.connect` take the same parameter. A `Duration.ZERO` bound is a poll on every one of them, so `listener.accept(Option.Some(Duration.ZERO))` returns a pending connection at once and fails with `Socket.Error.TimedOut` when the backlog is empty.
+- `Fd.Interest`, with `Readable` and `Writable`, names the readiness a process waits for. `Fd.block` and `Fd.watch` take one.
 - `koja shell` now accepts `:q` as an alias for `:quit`.
 - `koja test --only <file>:<line>` runs one test. Repeat the flag to run several.
 - Quick fixes in the language server. The `unless` removal, the `@test` deprecation, and a valued `return` in a `Unit` function carry the first ones.
@@ -31,11 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change.** Stream errors are `IO.Error` and connection errors are `Socket.Error`. `TCPSocket.read`, `read_binary`, `write`, and `close`, `TCPListener.close`, and `UDPSocket.close` fail with `IO.Error`. `Socket.create`, `bind`, `listen`, `accept`, `resolve`, `set_reuse_addr`, `recv_from`, and `send_to` fail with `Socket.Error` instead of `String`. The `close` functions on `Socket`, `TCPSocket`, `TCPListener`, and `UDPSocket` return `Unit`, so `_ = socket.close()` becomes `try socket.close()` or a bare call under `rescue`.
 - **Breaking change.** `Socket.Error` keeps the connection setup causes and gains `Interrupted`. `BrokenPipe` and `ConnectionReset` moved to `IO.Error`, so a `Socket.Error.BrokenPipe` pattern becomes `IO.Error.BrokenPipe`. `NotConnected` and `WouldBlock` are gone, since no function produced them.
 - **Breaking change.** `IO.gets(prompt)` returns `Option<String> ! IO.Error | String.ConversionError`, with `Option.None` at end of input. It reads through `STDIN.read_line`. Before, it returned `String` and could not report an error. `name = IO.gets("> ")` becomes a `match` on `try IO.gets("> ")`, or `try IO.gets("> ") rescue ...` followed by an `Option` unwrap.
+- **Breaking change.** `Fd.block` and `Fd.watch` take an `Fd.Interest` instead of a bare flag. `fd.block(true)` becomes `fd.block(Fd.Interest.Readable)` and `fd.block(false)` becomes `fd.block(Fd.Interest.Writable)`. `fd.watch(0)` becomes `fd.watch(Fd.Interest.Readable)` and `fd.watch(1)` becomes `fd.watch(Fd.Interest.Writable)`.
+- `TCPServer` reports an accept failure to its owner as `TCPServer.Event.Error` and keeps listening. Before, it dropped the failure and waited for the next connection.
 
 ### Removed
 
 - **Breaking change.** `Fd.read_binary` and `TCPSocket.read_binary` are removed. `read` returns `Binary` on both now, so `socket.read_binary(n)` becomes `socket.read(n)`.
 - **Breaking change.** The `File` value type and `File.close` are removed. `File.open` returns an `Fd`, so `file.close()` becomes `fd.close()` on the descriptor it returned.
+- **Breaking change.** `TCPListener.try_accept` and `Socket.try_accept_raw` are removed. A zero bound on `accept` is the same poll, so `match listener.try_accept()` with `Option.Some(socket)` and `Option.None` arms becomes `match listener.accept(Option.Some(Duration.ZERO))` with `Result.Ok(socket)` and `Result.Err(Socket.Error.TimedOut)` arms, and the other `Result.Err` arm now sees the failures `try_accept` hid.
 
 ### Fixed
 

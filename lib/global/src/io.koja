@@ -1,8 +1,8 @@
 @doc """
-Generic I/O readiness notification delivered to a process's mailbox
-when a watched file descriptor becomes ready. Used by infrastructure
-processes like `TCPListener`; most user code handles higher-level
-events like `TCPEvent` instead.
+Readiness notification delivered to the mailbox of the process that
+called `Fd.watch` once the descriptor becomes ready. Infrastructure
+processes like `TCPServer` handle it, and most user code handles the
+higher-level events they produce, like `TCPServer.Event`, instead.
 """
 enum IO.Ready
   Read(Fd)

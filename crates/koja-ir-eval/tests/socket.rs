@@ -71,11 +71,15 @@ fn tcp_loopback_round_trip() {
     );
 }
 
+/// A zero bound must poll: readiness is checked before the deadline, so
+/// an empty backlog reports `TimedOut` without waiting and without
+/// treating the expired deadline as an error of another kind.
 #[test]
-fn tcp_try_accept_reports_nothing_pending() {
+fn tcp_accept_with_zero_bound_reports_nothing_pending() {
     let port = fresh_port();
     let source = dedent(&format!(
         r#"
+        alias Net.Socket.Error as SocketError
         alias Net.TCPListener
 
         fn main -> Bool
@@ -85,9 +89,10 @@ fn tcp_try_accept_reports_nothing_pending() {
               Result.Err(_) -> return false
             end
 
-          match listener.try_accept()
-            Option.Some(_) -> false
-            Option.None -> true
+          match listener.accept(Option.Some(Duration.ZERO))
+            Result.Ok(_) -> false
+            Result.Err(SocketError.TimedOut) -> true
+            Result.Err(_) -> false
           end
         end
         "#

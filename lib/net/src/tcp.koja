@@ -1,3 +1,4 @@
+alias Fd.Interest
 alias IO.Error as IOError
 alias IO.Reader.Options as ReaderOptions
 alias IO.Ready as IOReady
@@ -233,7 +234,9 @@ struct TCPListener
   @doc """
   Accepts an incoming TCP connection. Blocks until a client connects,
   or fails with `SocketError.TimedOut` once `timeout` passes.
-  `Option.None` waits without limit. Returns a `TCPSocket` for the new
+  `Option.None` waits without limit, and `Duration.ZERO` polls, so a
+  pending connection returns at once and an empty backlog fails with
+  `TimedOut` without waiting. Returns a `TCPSocket` for the new
   connection, or an error if the accept fails.
   """
   fn accept(self, timeout: Option<Duration> = Option.None)
@@ -244,24 +247,7 @@ struct TCPListener
   end
 
   @doc """
-  Non-blocking accept. Returns `Option.Some(socket)` if a connection is
-  immediately available, or `Option.None` if no connection is pending.
-  """
-  fn try_accept(self) -> Option<TCPSocket>
-    raw = self.socket.try_accept_raw()
-
-    if raw >= 0
-      Option.Some(TCPSocket{
-        socket: Socket{fd: Fd{descriptor: raw}},
-        tls: Option.None,
-      })
-    else
-      Option.None
-    end
-  end
-
-  @doc """
-  Returns the underlying file descriptor for use with `Fd.watch`.
+  Returns the underlying file descriptor, for `Fd.watch` and `Fd.block`.
   """
   fn fd(self) -> Fd
     self.socket.fd
@@ -322,7 +308,7 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
   fn start(config: TCPServerConfig) -> Self ! StopReason
     match TCPListener.bind(config.port)
       Result.Ok(listener) ->
-        listener.fd().watch(0)
+        listener.fd().watch(Interest.Readable)
         TCPServer{listener: listener, owner: config.owner}
 
       Result.Err(e) ->
@@ -378,19 +364,28 @@ extend TCPServer
         Step.Done(StopReason.Shutdown)
 
       _ ->
-        self.listener.fd().watch(0)
+        self.listener.fd().watch(Interest.Readable)
         Step.Continue(self)
     end
   end
 
+  # Accepts every pending connection, then arms the listener for the
+  # next wakeup. A zero bound makes `accept` a poll, so `TimedOut`
+  # means the backlog is empty. Any other error goes to the owner and
+  # the listener stays up.
   priv fn drain_accepts(self) -> Step<Self>
-    match self.listener.try_accept()
-      Option.Some(client) ->
+    match self.listener.accept(Option.Some(Duration.ZERO))
+      Result.Ok(client) ->
         self.owner.cast(TCPEvent.Connected(client))
         self.drain_accepts()
 
-      Option.None ->
-        self.listener.fd().watch(0)
+      Result.Err(SocketError.TimedOut) ->
+        self.listener.fd().watch(Interest.Readable)
+        Step.Continue(self)
+
+      Result.Err(e) ->
+        self.owner.cast(TCPEvent.Error(e))
+        self.listener.fd().watch(Interest.Readable)
         Step.Continue(self)
     end
   end

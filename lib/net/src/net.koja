@@ -181,15 +181,6 @@ struct Socket
     self
   end
 
-  @doc """
-  Non-blocking accept: returns the client fd if a connection is
-  immediately available, -2 if none is pending, or -1 on error.
-  Prefer `TCPListener.try_accept` for a typed wrapper.
-  """
-  fn try_accept_raw(self) -> Int32
-    koja_socket_try_accept(self.fd.descriptor)
-  end
-
   priv fn timeout_ms(timeout: Option<Duration>) -> Int
     match timeout
       Option.None -> -1
@@ -244,7 +235,4 @@ struct Socket
 
   @extern "C"
   priv fn koja_socket_setsockopt_reuse(fd: Int32) -> Int64
-
-  @extern "C"
-  priv fn koja_socket_try_accept(fd: Int32) -> Int32
 end

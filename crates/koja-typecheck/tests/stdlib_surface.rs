@@ -52,6 +52,7 @@ const SURFACE: &[(&str, &[&str])] = &[
     (
         "Fd",
         &[
+            "Interest",
             "block",
             "close",
             "koja_fd_close",

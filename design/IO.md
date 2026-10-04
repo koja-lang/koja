@@ -1,12 +1,12 @@
 # IO: One Story for Descriptors, Files, Sockets, and the Console
 
-**Status: steps 1 to 3 landed (2026-10-04), step 4 open.** This
-document argues a position for the 0.20 breaking window. Koja gets an
-`IO.Reader` and `IO.Writer` protocol pair, typed errors in place of
-every `! String`, and text handling written once. It supersedes the
-`IO.gets` bullet in [ROADMAP.md](ROADMAP.md), which becomes one step
-of this design. The Summary and Design sections describe what landed.
-The Migration section says what is left.
+**Status: landed (2026-10-04).** This document argues a position for
+the 0.20 breaking window. Koja gets an `IO.Reader` and `IO.Writer`
+protocol pair, typed errors in place of every `! String`, and text
+handling written once. It supersedes the `IO.gets` bullet in
+[ROADMAP.md](ROADMAP.md), which becomes one step of this design. The
+Summary and Design sections describe what landed. The open questions
+at the end are the follow-on work.
 
 ## Summary
 
@@ -23,7 +23,9 @@ The Migration section says what is left.
   separate. Decode failures are `String.ConversionError`.
 - `Fd` is the handle. `File.open` returns one, and `File` is the path
   module with statics only. `TCPSocket` wraps an `Fd` for the
-  socket-specific surface. Reactor plumbing leaves `Fd` in step 4.
+  socket-specific surface. The reactor methods stay on `Fd`, take an
+  `Fd.Interest`, and are documented as the floor for processes that
+  drive a descriptor directly.
 - `IO` is the I/O namespace. Its own functions are the console,
   `puts`, `warn`, `write`, and `gets`, and the protocols and the
   stream error nest under it.
@@ -281,19 +283,43 @@ position) and are not part of this document.
 
 `Fd` keeps `close` and carries the `IO.Reader` and `IO.Writer`
 implementations. It is what `File.open` returns, what `STDIN`,
-`STDOUT`, and `STDERR` name, and what the socket types wrap. The
-reactor methods `block`, `watch`, and `unwatch`, and the `IO.Ready`
-event, are infrastructure. `TCPListener` and the runtime use them.
-User code does not. They either move to a `Runtime.Reactor` namespace
-or stay on `Fd` with docs that mark them internal. Moving them is
-cleaner. Staying is less churn. This document leans to moving.
+`STDOUT`, and `STDERR` name, and what the socket types wrap.
+
+The reactor methods `block`, `watch`, and `unwatch` stay on `Fd`, and
+the `IO.Ready` message stays under `IO`. The draft leaned to a
+`Runtime.Reactor` namespace, and two facts moved it back. `Runtime` is
+documented as read-only observability, every value a point-in-time
+gauge that cannot fail, and `watch` has a side effect while `block`
+parks the process, so housing them there would change what `Runtime`
+is. And Koja has one ambient reactor that nobody holds, constructs, or
+passes, so a reactor namespace would be a bag of statics standing in
+for an object that does not exist, with the descriptor as the only
+value in play. `fd.watch(...)` is the method spelling of
+`watch(fd, ...)` when there is one reactor. An `IO.Reactor` sibling
+was set aside for the same reason, and because the descriptor already
+puts every piece of this surface under `IO` once it is renamed
+`IO.Descriptor`.
+
+The objection that plumbing clutters the user handle is answered by
+the layering. The descriptor is the floor by design, with buffering
+above it (open question 2), so a process that drives a raw descriptor
+is the caller that wants `watch` and `block`, and everyone else lives
+on the layer above. The three methods are documented as that floor.
+
+`Fd.Interest`, with `Readable` and `Writable`, replaces the `Bool` on
+`block` and the `Int` on `watch`. It nests under the type whose
+methods take it, the convention `IO.Reader.Options` and `File.Mode`
+follow, and the `IO.Descriptor` rename carries it along. `IO.Ready` is
+not nested the same way because it is a message type that appears in
+process headers and match arms in code that never called `watch`
+itself, so it is an `IO` concept the way `IO.Error` is.
 
 `Fd` implements both protocols, so `STDOUT.write` and
 `STDIN.read_line()` work without a wrapper type, and so does the
 descriptor a file open returned.
 
-The name changes to `IO.Descriptor` on its own branch (decided
-2026-10-04). `Fd` was an acceptable name while it was the floor under
+The name changes to `IO.Descriptor` on its own branch before 0.20
+ships, so one release carries every I/O break (decided 2026-10-04). `Fd` was an acceptable name while it was the floor under
 `File` and `TCPSocket`. Now it is the handle user code holds, and a
 shortcut name on the handle fails the same rule that turned `FS` into
 `FileSystem`. It nests under `IO` because `File.open`, the standard
@@ -362,7 +388,8 @@ There is no `from:` parameter. A caller with another reader calls
 `lib/global/test/io/reader_test.koja`, which opens a temp file and
 calls `read_line` on the descriptor.
 
-`IO.Ready` leaves `IO` in step 4.
+`IO.Ready` stays under `IO` as the message `Fd.watch` produces. See
+"`Fd` is the handle" for why.
 
 ### Timeouts are per call
 
@@ -424,18 +451,21 @@ port, timeout)` bounds the TCP handshake. `TCPListener.accept(timeout)`
 bounds the wait for a connection. `upgrade_tls(host, config, timeout)`
 and `accept_tls(config, timeout)` bound the TLS handshake, and
 `connect_tls` applies its one bound to the TCP handshake and then,
-measured anew, to the TLS handshake. `try_accept` stays until step 4
-swaps it for `accept` with a zero bound, because `TCPServer` uses it.
-There is no process-wide or runtime-wide default. Behavior that
-depends on ambient state a reader cannot see at the call site is
-rejected.
+measured anew, to the TLS handshake. A `Duration.ZERO` bound is a
+poll, since both backends check readiness before the deadline, so
+`TCPServer` drains its backlog with `accept(Option.Some(Duration.ZERO))`
+and reads `Socket.Error.TimedOut` as empty. `TCPListener.try_accept`
+and the `koja_socket_try_accept` runtime symbol are gone with it, and
+an accept failure that `try_accept` hid now reaches the owner as
+`TCPServer.Event.Error`. There is no process-wide or runtime-wide
+default. Behavior that depends on ambient state a reader cannot see
+at the call site is rejected.
 
 Underneath, every one of these is a bounded reactor wait, the
 mechanism `receive ... after` and `Fd.block` already use. Sockets are
 non-blocking on both backends, so no socket option is involved. One
 runtime entry point, a bounded `Fd.block`, is the whole runtime change.
-`Fd.block` returns `Bool`, `true` on the timeout, until step 4 moves
-the readiness wait off `Fd`.
+`Fd.block` returns `Bool`, `true` on the timeout.
 
 ## Migration
 
@@ -459,12 +489,15 @@ Each step is one MR with its breaking lines in the changelog.
    default body, and `read_line` arrived with them. `TLSSession.read`
    and `write` keep taking the `Fd`, the internal detail branch, since
    `TCPSocket` is their only caller.
-4. Reactor plumbing off `Fd`, `IO.Ready` off `IO`, `try_accept` folded
-   into `accept` with a zero bound.
+4. **Done.** The reactor methods stay on `Fd` and take `Fd.Interest`
+   instead of a bare flag, `IO.Ready` stays under `IO`, and
+   `TCPListener.try_accept` folded into `accept` with a zero bound.
+   The two runtime externs behind `block` and `watch` share one
+   interest encoding. See "`Fd` is the handle" for the namespace
+   reasoning, which reversed the draft.
 
-Steps 1 to 3 carry most of the value. Step 4 is cleanup and can slip
-without weakening the story. The former step 5, filesystem statics in
-an `FS` module, is resolved by `File` staying the path module.
+The former step 5, filesystem statics in an `FS` module, is resolved
+by `File` staying the path module.
 
 ## Rejected
 
@@ -535,8 +568,8 @@ an `FS` module, is resolved by `File` staying the path module.
    changing the protocol once open question 1 is closed. Whether
    `File.open` returns the descriptor or the handle by default is a
    separate choice.
-3. **`Fd.block` and friends.** Move to `Runtime.Reactor` or stay with
-   internal docs.
+3. **Closed.** `Fd.block` and friends stay on the descriptor. See
+   "`Fd` is the handle".
 4. **`write_all` and `read_to_end`.** `IO.Writer.write` returns the
    count, the Rust and Go position, and a short write is the caller's
    to notice. A `write_all` default body on `IO.Writer` and a

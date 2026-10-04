@@ -2766,6 +2766,14 @@ Functions:
 - `read`, `read_string`, `read_line`, and `write` as the protocols define them.
 - `close(self) ! IO.Error`: closes the descriptor. A later read or write fails with `IO.Error.Closed`.
 
+Three functions are for processes that drive a descriptor directly. Reads and writes wait for readiness on their own, so most code never calls them. Each takes an `Fd.Interest`, `Readable` or `Writable`.
+
+- `block(self, interest: Fd.Interest, timeout: Option<Duration> = Option.None) -> Bool`: suspends the current process until the descriptor is ready or `timeout` passes. Returns `true` when the wait ended on the timeout.
+- `watch(self, interest: Fd.Interest)`: registers the descriptor for one `IO.Ready` message to the mailbox of the current process. The registration fires once, so call `watch` again after each message.
+- `unwatch(self)`: removes the registration.
+
+`IO.Ready` is the message `watch` produces, `Read(Fd)`, `Write(Fd)`, or `Error(Fd)`. A process that handles it names it in its message union, as `impl Process<App, AppMsg | IO.Ready, String>`. `TCPServer` is the stdlib process that works this way, and its owner sees `TCPServer.Event` instead.
+
 #### `File`
 
 Operations on paths. Each function names a file or directory by its path and fails with `File.Error`. `open` returns the `Fd` for the file, and from there reads, writes, and `close` are `Fd` methods that fail with `IO.Error`. `File` has no instance methods.
@@ -2857,7 +2865,7 @@ compact = birthday.to_string(ISO8601.Basic)
 
 ### Console I/O
 
-`IO` is the I/O namespace. Its own functions are the console, and the stream protocols `IO.Reader` and `IO.Writer` and the stream error `IO.Error` nest under it. `STDIN`, `STDOUT`, and `STDERR` are `Fd` constants for direct access.
+`IO` is the I/O namespace. Its own functions are the console, and the stream protocols `IO.Reader` and `IO.Writer`, the stream error `IO.Error`, and the readiness message `IO.Ready` nest under it. `STDIN`, `STDOUT`, and `STDERR` are `Fd` constants for direct access.
 
 Functions:
 

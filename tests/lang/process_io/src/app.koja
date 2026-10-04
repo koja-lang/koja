@@ -14,7 +14,7 @@ end
 struct App: Process<App, AppMsg | IOReady, String>
   fn start(config: App) -> Result<Self, StopReason>
     stdin = Fd{descriptor: 0}
-    stdin.watch(0)
+    stdin.watch(Fd.Interest.Readable)
     IO.puts("ready")
     Result.Ok(config)
   end
