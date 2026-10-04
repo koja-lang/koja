@@ -1,3 +1,4 @@
+alias IO.Error as IOError
 alias Net.IPAddress
 alias Net.Socket
 alias Net.Socket.Address as SocketAddress
@@ -105,14 +106,17 @@ test "TCPSocket.read fails with TimedOut when the peer is silent"
     Result.Ok(_) ->
       fail "expected read to time out"
 
-    Result.Err(socket_error: SocketError) ->
-      match socket_error
-        SocketError.TimedOut -> ()
-        _ -> fail "expected TimedOut, got: #{socket_error.message()}"
+    Result.Err(io_error: IOError) ->
+      match io_error
+        IOError.TimedOut -> ()
+        _ -> fail "expected TimedOut, got: #{io_error.message()}"
       end
 
     Result.Err(tls_error: TLSError) ->
       fail "expected TimedOut, got: #{tls_error.message()}"
+
+    Result.Err(conversion: String.ConversionError) ->
+      fail "expected TimedOut, got: #{conversion}"
   end
 end
 

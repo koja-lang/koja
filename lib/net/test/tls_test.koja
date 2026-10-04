@@ -1,7 +1,7 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
+alias IO.Error as IOError
 alias Net.Socket.Address as SocketAddress
-alias Net.Socket.Error as SocketError
 alias Test.require
 
 # Self-signed test certificate (CN=localhost, 100-year expiry).
@@ -57,8 +57,8 @@ test "verifying client rejects a self-signed server certificate"
         _ -> fail "expected verification failure, got: #{tls_error.message()}"
       end
 
-    Result.Err(socket_error: SocketError) ->
-      fail "expected verification failure, got: #{socket_error.message()}"
+    Result.Err(io_error: IOError) ->
+      fail "expected verification failure, got: #{io_error.message()}"
   end
 end
 
@@ -98,14 +98,17 @@ test "TLS read fails with TimedOut when the peer is silent"
     Result.Ok(_) ->
       fail "expected read to time out"
 
-    Result.Err(socket_error: SocketError) ->
-      match socket_error
-        SocketError.TimedOut -> ()
-        _ -> fail "expected TimedOut, got: #{socket_error.message()}"
+    Result.Err(io_error: IOError) ->
+      match io_error
+        IOError.TimedOut -> ()
+        _ -> fail "expected TimedOut, got: #{io_error.message()}"
       end
 
     Result.Err(tls_error: TLSError) ->
       fail "expected TimedOut, got: #{tls_error.message()}"
+
+    Result.Err(conversion: String.ConversionError) ->
+      fail "expected TimedOut, got: #{conversion}"
   end
 end
 
@@ -253,10 +256,11 @@ priv fn serve_tls_echo(listener: TCPListener, config: TLSConfig)
   Result.Ok(data)
 end
 
-priv fn net_message(e: SocketError | TLSError) -> String
+priv fn net_message(e: IOError | TLSError | String.ConversionError) -> String
   match e
-    socket_error: SocketError -> socket_error.message()
+    io_error: IOError -> io_error.message()
     tls_error: TLSError -> tls_error.message()
+    conversion: String.ConversionError -> "#{conversion}"
   end
 end
 
@@ -264,7 +268,7 @@ priv fn read_test_certificate -> Result<Certificate, String>
   text =
     match File.read(TLS_TEST_CERT_PATH)
       Result.Ok(pem) -> pem
-      Result.Err(e) -> return Result.Err("read cert fixture: " <> e)
+      Result.Err(e) -> return Result.Err("read cert fixture: #{e}")
     end
 
   match Certificate.parse(text)
@@ -283,7 +287,7 @@ priv fn server_test_config -> Result<TLSConfig, String>
   key_text =
     match File.read(TLS_TEST_KEY_PATH)
       Result.Ok(pem) -> pem
-      Result.Err(e) -> return Result.Err("read key fixture: " <> e)
+      Result.Err(e) -> return Result.Err("read key fixture: #{e}")
     end
 
   key =

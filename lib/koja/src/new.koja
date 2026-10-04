@@ -51,10 +51,7 @@ end
 
 # Appends the trailing newline the heredoc closing delimiter strips.
 priv fn write_file(path: String, content: String) ! String
-  File.write(path, "#{content}\n")
-    rescue message -> fail "cannot write #{path}: #{message}"
-
-  ()
+  File.write(path, "#{content}\n") rescue e -> fail "cannot write #{path}: #{e}"
 end
 
 priv fn valid_project_name?(name: String) -> Bool

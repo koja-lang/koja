@@ -1,3 +1,4 @@
+alias IO.Error as IOError
 alias Net.IPAddress
 alias Net.Socket.Address as SocketAddress
 alias Net.Socket.Error as SocketError
@@ -10,8 +11,8 @@ alias Process.Step
 alias Process.StopReason
 
 # Socket deadlines under the process runtime: an accept with no client
-# and a read from a silent peer both end in `SocketError.TimedOut`
-# instead of parking forever.
+# ends in `SocketError.TimedOut` and a read from a silent peer in
+# `IOError.TimedOut`, instead of parking forever.
 
 const SHORT_WAIT: Duration = Duration{
   unit: Duration.Unit.Milliseconds,
@@ -61,14 +62,17 @@ struct App: Process<App, (), String>
       Result.Ok(_) ->
         IO.puts("read returned data")
 
-      Result.Err(socket_error: SocketError) ->
-        match socket_error
-          SocketError.TimedOut -> IO.puts("read timed out")
-          _ -> IO.puts("read failed: " <> socket_error.message())
+      Result.Err(io_error: IOError) ->
+        match io_error
+          IOError.TimedOut -> IO.puts("read timed out")
+          _ -> IO.puts("read failed: " <> io_error.message())
         end
 
       Result.Err(tls_error: TLSError) ->
         IO.puts("read failed: " <> tls_error.message())
+
+      Result.Err(conversion: String.ConversionError) ->
+        IO.puts("read failed: #{conversion}")
     end
 
     _ = client.close()

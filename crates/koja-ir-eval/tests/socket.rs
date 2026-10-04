@@ -137,7 +137,7 @@ fn tcp_read_times_out_on_a_silent_peer() {
     let port = fresh_port();
     let source = dedent(&format!(
         r#"
-        alias Net.Socket.Error as SocketError
+        alias IO.Error as IOError
         alias Net.TCPListener
         alias Net.TCPSocket
         alias Net.TLSError
@@ -158,12 +158,13 @@ fn tcp_read_times_out_on_a_silent_peer() {
           limit = Duration{{unit: Duration.Unit.Milliseconds, value: 20}}
           match client.with_read_timeout(Option.Some(limit)).read(16)
             Result.Ok(_) -> "read data"
-            Result.Err(socket_error: SocketError) ->
-              match socket_error
-                SocketError.TimedOut -> "timed out"
-                _ -> "read failed: " <> socket_error.message()
+            Result.Err(io_error: IOError) ->
+              match io_error
+                IOError.TimedOut -> "timed out"
+                _ -> "read failed: " <> io_error.message()
               end
             Result.Err(tls_error: TLSError) -> "read failed: " <> tls_error.message()
+            Result.Err(conversion: String.ConversionError) -> "read failed: #{{conversion}}"
           end
         end
         "#

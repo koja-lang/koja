@@ -1,6 +1,6 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
-alias Net.Socket.Error as SocketError
+alias IO.Error as IOError
 
 priv const SSL_ERROR_SYSCALL: Int64 = 5
 priv const SSL_ERROR_WANT_READ: Int64 = 2
@@ -72,8 +72,8 @@ end
 
 @doc """
 Why a TLS operation failed. Socket-level failures during TLS
-operations surface as `SocketError` through union return types
-(`SocketError | TLSError`), not as `TLSError` variants.
+operations surface as `IOError` through union return types
+(`IOError | TLSError`), not as `TLSError` variants.
 """
 enum TLSError
   CertificateInvalid
@@ -221,7 +221,7 @@ struct TLSSession
     config: TLSConfig,
     read_timeout: Option<Duration> = Option.None,
     write_timeout: Option<Duration> = Option.None,
-  ) -> TLSSession ! SocketError | TLSError
+  ) -> TLSSession ! IOError | TLSError
 
     identity =
       match config.identity
@@ -276,7 +276,7 @@ struct TLSSession
     config: TLSConfig,
     read_timeout: Option<Duration> = Option.None,
     write_timeout: Option<Duration> = Option.None,
-  ) -> TLSSession ! SocketError | TLSError
+  ) -> TLSSession ! IOError | TLSError
 
     ctx = ssl_ctx_new(tls_method())
 
@@ -333,7 +333,7 @@ struct TLSSession
   @doc """
   Reads up to `count` bytes of decrypted data as raw bytes. Returns
   an empty `Binary` on a clean end of stream. Suspends the process
-  while the socket is not ready, and fails with `SocketError.TimedOut`
+  while the socket is not ready, and fails with `IOError.TimedOut`
   once `timeout` has passed since this call without a full record.
   """
   fn read_binary(
@@ -341,7 +341,7 @@ struct TLSSession
     fd: Fd,
     count: Int,
     timeout: Option<Duration> = Option.None,
-  ) -> Binary ! SocketError | TLSError
+  ) -> Binary ! IOError | TLSError
 
     buf: CPtr<UInt8> = CPtr.alloc(count)
     result = read_loop(self.ssl, fd, buf, count, deadline_for(timeout))
@@ -363,7 +363,7 @@ struct TLSSession
   Encrypts and writes data to the connection. Accepts either a
   `String` (encoded as UTF-8) or a `Binary`. Returns the number of
   bytes written. Suspends the process while the socket is not ready,
-  and fails with `SocketError.TimedOut` once `timeout` has passed
+  and fails with `IOError.TimedOut` once `timeout` has passed
   since this call without the record going out.
   """
   fn write(
@@ -371,7 +371,7 @@ struct TLSSession
     fd: Fd,
     data: Binary | String,
     timeout: Option<Duration> = Option.None,
-  ) -> Int ! SocketError | TLSError
+  ) -> Int ! IOError | TLSError
 
     bytes =
       match data
@@ -445,16 +445,14 @@ struct TLSSession
     end
   end
 
-  priv fn handshake_failure(ssl: CPtr<UInt8>, err: Int)
-    -> SocketError | TLSError
-
+  priv fn handshake_failure(ssl: CPtr<UInt8>, err: Int) -> IOError | TLSError
     # Maps a failed handshake to its cause: certificate verification
     # first, then the SSL error itself.
 
     verify = ssl_get_verify_result(ssl)
 
     if verify != X509_V_OK
-      failed: SocketError | TLSError = TLSError.VerificationFailed(VerificationError.from_code(
+      failed: IOError | TLSError = TLSError.VerificationFailed(VerificationError.from_code(
         verify,
       ))
       return failed
@@ -474,7 +472,7 @@ struct TLSSession
     client: Bool,
     read_deadline: Option<Instant>,
     write_deadline: Option<Instant>,
-  ) -> TLSSession ! SocketError | TLSError
+  ) -> TLSSession ! IOError | TLSError
 
     ret: Int = client ? ssl_connect(ssl) : ssl_accept(ssl)
 
@@ -510,11 +508,11 @@ struct TLSSession
     try handshake_loop(ssl, ctx, fd, client, read_deadline, write_deadline)
   end
 
-  priv fn io_failure(err: Int) -> SocketError | TLSError
+  priv fn io_failure(err: Int) -> IOError | TLSError
     # Maps an `SSL_get_error` code from a failed read/write/handshake.
 
     if err == SSL_ERROR_ZERO_RETURN
-      closed: SocketError | TLSError = TLSError.PeerClosed
+      closed: IOError | TLSError = TLSError.PeerClosed
       return closed
     end
 
@@ -522,7 +520,7 @@ struct TLSSession
       return syscall_failure()
     end
 
-    failed: SocketError | TLSError = TLSError.ProtocolFailed
+    failed: IOError | TLSError = TLSError.ProtocolFailed
     failed
   end
 
@@ -579,7 +577,7 @@ struct TLSSession
     buf: CPtr<UInt8>,
     count: Int,
     deadline: Option<Instant>,
-  ) -> Binary ! SocketError | TLSError
+  ) -> Binary ! IOError | TLSError
 
     ret: Int = ssl_read(ssl, buf, count)
 
@@ -602,20 +600,20 @@ struct TLSSession
     try read_loop(ssl, fd, buf, count, deadline)
   end
 
-  priv fn syscall_failure -> SocketError | TLSError
+  priv fn syscall_failure -> IOError | TLSError
     # Maps an `SSL_ERROR_SYSCALL` to the underlying socket cause, or
     # `PeerClosed` when the peer dropped the connection without a
     # close_notify (errno is untouched in that case).
 
-    cause = SocketError.from_errno()
+    cause = IOError.from_errno()
 
     match cause
-      SocketError.Unknown(code) when code == 0 ->
-        closed: SocketError | TLSError = TLSError.PeerClosed
+      IOError.Unknown(code) when code == 0 ->
+        closed: IOError | TLSError = TLSError.PeerClosed
         closed
 
       _ ->
-        widened: SocketError | TLSError = cause
+        widened: IOError | TLSError = cause
         widened
     end
   end
@@ -679,7 +677,7 @@ struct TLSSession
   # Waits for `fd` in one direction until `deadline`. Each wait gets
   # the time left, so a whole call shares one bound.
   priv fn wait_ready(fd: Fd, readable: Bool, deadline: Option<Instant>)
-    ! SocketError
+    ! IOError
 
     match deadline
       Option.None ->
@@ -689,7 +687,7 @@ struct TLSSession
         remaining = at.since(Instant.now())
 
         if remaining.zero?() or fd.block(readable, Option.Some(remaining))
-          fail SocketError.TimedOut
+          fail IOError.TimedOut
         end
     end
   end
@@ -699,7 +697,7 @@ struct TLSSession
     fd: Fd,
     bytes: Binary,
     deadline: Option<Instant>,
-  ) -> Int ! SocketError | TLSError
+  ) -> Int ! IOError | TLSError
 
     ret: Int = ssl_write(ssl, CPtr.borrow(bytes), bytes.byte_size())
 

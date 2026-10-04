@@ -53,7 +53,7 @@ fn server_source(port: u16, ready_path: &str) -> String {
           cert_text =
             match File.read("{cert_path}")
               Result.Ok(t) -> t
-              Result.Err(e) -> return "read cert: " <> e
+              Result.Err(e) -> return "read cert: #{{e}}"
             end
 
           cert =
@@ -65,7 +65,7 @@ fn server_source(port: u16, ready_path: &str) -> String {
           key_text =
             match File.read("{key_path}")
               Result.Ok(t) -> t
-              Result.Err(e) -> return "read key: " <> e
+              Result.Err(e) -> return "read key: #{{e}}"
             end
 
           key =
@@ -82,7 +82,7 @@ fn server_source(port: u16, ready_path: &str) -> String {
 
           match File.write("{ready_path}", "ready")
             Result.Ok(_) -> ()
-            Result.Err(e) -> return "sentinel: " <> e
+            Result.Err(e) -> return "sentinel: #{{e}}"
           end
 
           raw =

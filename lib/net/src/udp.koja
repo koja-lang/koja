@@ -1,3 +1,4 @@
+alias IO.Error as IOError
 alias Net.Socket.Address as SocketAddress
 alias Net.Socket.Error as SocketError
 alias Net.Socket.Kind as SocketKind
@@ -24,9 +25,8 @@ struct UDPSocket
   an error if the bind fails.
   """
   fn bind_addr(addr: SocketAddress) -> UDPSocket ! SocketError
-    sock = Socket.create(SocketKind.Datagram)
-      rescue _ -> fail SocketError.last()
-    bound = sock.bind(addr) rescue _ -> fail SocketError.last()
+    sock = try Socket.create(SocketKind.Datagram)
+    bound = try sock.bind(addr)
     UDPSocket{socket: bound}
   end
 
@@ -37,7 +37,7 @@ struct UDPSocket
   fn send_to(self, data: Binary | String, addr: SocketAddress)
     -> Int ! SocketError
 
-    self.socket.send_to(data, addr) rescue _ -> fail SocketError.last()
+    try self.socket.send_to(data, addr)
   end
 
   @doc """
@@ -45,14 +45,13 @@ struct UDPSocket
   and the sender's address, or an error if the receive fails.
   """
   fn recv_from(self, count: Int) -> (Binary, SocketAddress) ! SocketError
-    self.socket.recv_from(count) rescue _ -> fail SocketError.last()
+    try self.socket.recv_from(count)
   end
 
   @doc """
   Closes the UDP socket.
   """
-  fn close(self) -> Bool ! SocketError
-    self.socket.close() rescue _ -> fail SocketError.last()
-    true
+  fn close(self) ! IOError
+    try self.socket.close()
   end
 end
