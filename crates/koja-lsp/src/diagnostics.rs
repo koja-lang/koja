@@ -1,74 +1,36 @@
 //! Diagnostics pipeline for the Koja LSP.
 //!
-//! Bundles stdlib + project sibling files + the active buffer into a
-//! single [`ParsedProgram`], runs the pipeline
-//! ([`parse_program`] then [`check_program`]), groups parse-phase and
-//! check-phase diagnostics by the file that owns them, and publishes
-//! each group to its own URI.
+//! Loads the active buffer's project through the compiler's
+//! [`ProjectLoader`] with the open editor buffers as overlays, runs
+//! the pipeline ([`parse_program`] then [`check_program`]), groups
+//! parse-phase and check-phase diagnostics by the file that owns
+//! them, and publishes each group to its own URI.
 //!
-//! When a file belongs to a project (detected by walking up to find
-//! `koja.toml`), all sibling project files are bundled so cross-file
-//! type references resolve correctly, with open editor buffers
-//! overlaying their on-disk contents.
+//! The load is check-shaped. It takes the manifest's test directories
+//! and links the `Test` package, the way `koja check` does, so test
+//! files see each other and `assert` resolves.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Mutex, PoisonError};
 
-use serde::Deserialize;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{Diagnostic as KojaDiagnostic, Severity as KojaSeverity};
 use koja_ast::span::Span;
-use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
+use koja_parser::{ParseMode, ParsedProgram, SourceFile, SourceTable, parse_program};
+use koja_project::{
+    Dependencies, ErrorPolicy, LoadOptions, Loaded, LoadedSource, ProjectConfig, ProjectLoader,
+    SourceOrigin, StdlibOptions, find_project_root, load_project, stdlib_sources,
+};
 use koja_query::{Analysis, ReferenceIndex};
 use koja_typecheck::{CheckedPackage, CheckedProgram, check_program};
 
-use crate::backend::{Backend, DocumentState};
+use crate::backend::Backend;
 use crate::code_action::FixData;
 use crate::convert::{path_to_uri, uri_to_path};
-
-#[derive(Deserialize)]
-struct KojaToml {
-    project: ProjectStub,
-    #[serde(default)]
-    dependencies: HashMap<String, DepStub>,
-}
-
-#[derive(Deserialize)]
-struct ProjectStub {
-    name: String,
-    #[serde(default)]
-    namespace: Option<String>,
-    #[serde(default = "default_src")]
-    src: Vec<String>,
-    #[serde(default = "default_test")]
-    test: Vec<String>,
-}
-
-impl ProjectStub {
-    /// The PascalCase namespace stamped on the package's files,
-    /// mirroring `koja_driver`'s `ProjectConfig::namespace`.
-    fn namespace(&self) -> String {
-        self.namespace
-            .clone()
-            .unwrap_or_else(|| koja_parser::derive_namespace(&self.name))
-    }
-}
-
-#[derive(Deserialize)]
-struct DepStub {
-    path: Option<String>,
-}
-
-fn default_src() -> Vec<String> {
-    vec!["src".to_string()]
-}
-
-fn default_test() -> Vec<String> {
-    vec!["test".to_string()]
-}
+use crate::document::DocumentState;
 
 /// Derives a package name for an LSP-owned file from its on-disk path.
 /// Untitled buffers fall back to `"__lsp_preview__"` so every call
@@ -80,189 +42,50 @@ fn package_for_path(path: Option<&Path>) -> String {
         .unwrap_or_else(|| "__lsp_preview__".to_string())
 }
 
-/// Walks up from `start` looking for a directory containing `koja.toml`.
-fn find_project_root(start: &Path) -> Option<PathBuf> {
-    let mut dir = start;
-    loop {
-        if dir.join("koja.toml").exists() {
-            return Some(dir.to_path_buf());
-        }
-        dir = dir.parent()?;
+/// The project an open file belongs to, with its manifest loaded.
+struct Project {
+    config: ProjectConfig,
+    root: PathBuf,
+}
+
+/// The URIs holding published diagnostics, grouped by the project
+/// root they were checked under. A pass diffs against its own
+/// project's set alone, so a check in one project never clears
+/// another project's diagnostics. Files outside any project share
+/// the `None` group.
+///
+/// The lock is a plain mutex and is never held across an `await`.
+#[derive(Debug, Default)]
+pub(crate) struct Published(Mutex<HashMap<Option<PathBuf>, HashSet<Uri>>>);
+
+impl Published {
+    /// Replace the set for `project` with `now` and return the URIs
+    /// that dropped out and need an empty publish. The active URI
+    /// always gets its own publish, so it is never stale.
+    fn replace(&self, project: Option<PathBuf>, now: HashSet<Uri>, active: &Uri) -> Vec<Uri> {
+        let mut published = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let group = published.entry(project).or_default();
+        let stale = stale_uris(group, &now, active);
+        *group = now;
+        stale
     }
 }
 
-/// Recursively collects all `.koja` files under `dir`.
-fn collect_koja_files(dir: &Path) -> Vec<PathBuf> {
-    let mut result = Vec::new();
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return result,
+/// The manifest-bearing project that owns `path`, if any. A manifest
+/// that fails to load is reported and treated as no project, so the
+/// file still gets single-file diagnostics.
+fn project_of(path: &Path) -> Result<Option<Project>, String> {
+    let Some(root) = path.parent().and_then(find_project_root) else {
+        return Ok(None);
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            result.extend(collect_koja_files(&path));
-        } else if path.extension().is_some_and(|ext| ext == "koja") {
-            result.push(path);
-        }
+    match load_project(&root) {
+        Ok(Some(config)) => Ok(Some(Project { config, root })),
+        Ok(None) => Ok(None),
+        Err(err) => Err(format!(
+            "ignoring {}: {err}",
+            root.join("koja.toml").display()
+        )),
     }
-    result
-}
-
-/// Collects sibling project [`SourceFile`]s (excluding `current_path`)
-/// with their owning package names. Also scans local-path dependencies.
-/// Files open in the editor read from `overlays` instead of disk.
-/// Returns an empty vec on any I/O or parse-toml failure so the LSP
-/// degrades gracefully rather than dropping diagnostics entirely.
-fn collect_sibling_sources(
-    project_root: &Path,
-    current_path: Option<&Path>,
-    overlays: &HashMap<PathBuf, String>,
-) -> Vec<SourceFile> {
-    let toml_path = project_root.join("koja.toml");
-    let source = match fs::read_to_string(&toml_path) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let parsed: KojaToml = match toml::from_str(&source) {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut files: Vec<SourceFile> = Vec::new();
-    let namespace = parsed.project.namespace();
-    let mut seen_pkgs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    seen_pkgs.insert(namespace.clone());
-    if namespace != "Global" {
-        seen_pkgs.insert("Global".to_string());
-    }
-
-    push_package_files(
-        &parsed.project.src,
-        project_root,
-        &namespace,
-        current_path,
-        overlays,
-        &mut files,
-    );
-    // The LSP is check-shaped: `koja check` loads the test
-    // directories, so test files see each other and `assert` in a
-    // test file resolves against the `Test` package in the bundle.
-    push_package_files(
-        &parsed.project.test,
-        project_root,
-        &namespace,
-        current_path,
-        overlays,
-        &mut files,
-    );
-
-    for dep in parsed.dependencies.values() {
-        let Some(ref rel) = dep.path else { continue };
-        push_dep_files(
-            &project_root.join(rel),
-            &mut seen_pkgs,
-            current_path,
-            overlays,
-            &mut files,
-        );
-    }
-
-    // Materialized git dependencies: `koja deps get` copies each
-    // pinned package (including transitives) into deps/<Package> with
-    // its own koja.toml.
-    if let Ok(entries) = fs::read_dir(project_root.join("deps")) {
-        for entry in entries.flatten() {
-            push_dep_files(
-                &entry.path(),
-                &mut seen_pkgs,
-                current_path,
-                overlays,
-                &mut files,
-            );
-        }
-    }
-
-    files
-}
-
-/// Bundle one dependency directory's sources, keyed by the package
-/// name in its own koja.toml. Silently skips unreadable or duplicate
-/// packages so the LSP degrades gracefully.
-fn push_dep_files(
-    dep_root: &Path,
-    seen_pkgs: &mut std::collections::BTreeSet<String>,
-    current_path: Option<&Path>,
-    overlays: &HashMap<PathBuf, String>,
-    out: &mut Vec<SourceFile>,
-) {
-    let Ok(dep_src) = fs::read_to_string(dep_root.join("koja.toml")) else {
-        return;
-    };
-    let Ok(dep_toml) = toml::from_str::<KojaToml>(&dep_src) else {
-        return;
-    };
-    let namespace = dep_toml.project.namespace();
-    if !seen_pkgs.insert(namespace.clone()) {
-        return;
-    }
-    push_package_files(
-        &dep_toml.project.src,
-        dep_root,
-        &namespace,
-        current_path,
-        overlays,
-        out,
-    );
-}
-
-fn push_package_files(
-    src_dirs: &[String],
-    package_root: &Path,
-    package: &str,
-    current_path: Option<&Path>,
-    overlays: &HashMap<PathBuf, String>,
-    out: &mut Vec<SourceFile>,
-) {
-    for src in src_dirs {
-        let dir = package_root.join(src);
-        if !dir.is_dir() {
-            continue;
-        }
-        for file_path in collect_koja_files(&dir) {
-            if current_path.is_some_and(|cp| same_file(&file_path, cp)) {
-                continue;
-            }
-            let overlay = fs::canonicalize(&file_path)
-                .ok()
-                .and_then(|canonical| overlays.get(&canonical).cloned());
-            let text = match overlay {
-                Some(buffer) => buffer,
-                None => match fs::read_to_string(&file_path) {
-                    Ok(text) => text,
-                    Err(_) => continue,
-                },
-            };
-            out.push(SourceFile {
-                package: package.to_string(),
-                path: file_path,
-                source: text,
-            });
-        }
-    }
-}
-
-fn same_file(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(ca), Ok(cb)) => ca == cb,
-        _ => a == b,
-    }
-}
-
-fn read_project_namespace(project_root: &Path) -> Option<String> {
-    let source = fs::read_to_string(project_root.join("koja.toml")).ok()?;
-    let parsed: KojaToml = toml::from_str(&source).ok()?;
-    Some(parsed.project.namespace())
 }
 
 impl Backend {
@@ -277,34 +100,43 @@ impl Backend {
     /// is no longer current publishes nothing, so a slow old run
     /// never overwrites a fresh one.
     pub(crate) async fn diagnose(&self, uri: Uri) {
-        let Some(buffer) = self.buffers.snapshot(uri.as_str()) else {
+        let Some(buffer) = self.buffers.snapshot(&uri) else {
             return;
         };
-        let text = buffer.text.as_str();
 
         // Re-materialize the stdlib extraction if pruned, so cached
         // stdlib paths stay valid for navigation.
-        let _ = koja_stdlib::extract();
+        let extraction_root = koja_stdlib::extract().ok();
 
-        let active_path = uri_to_path(uri.as_str())
-            .unwrap_or_else(|| PathBuf::from(format!("<{}>", uri.as_str())));
+        let active_path =
+            uri_to_path(&uri).unwrap_or_else(|| PathBuf::from(format!("<{}>", uri.as_str())));
 
-        let project_root = active_path.parent().and_then(find_project_root);
-        let active_package = match (&project_root, active_path.as_path()) {
-            (Some(root), _) => {
-                read_project_namespace(root).unwrap_or_else(|| package_for_path(Some(&active_path)))
+        let project = match project_of(&active_path) {
+            Ok(project) => project,
+            Err(warning) => {
+                self.client.log_message(MessageType::WARNING, warning).await;
+                None
             }
-            (None, p) => package_for_path(Some(p)),
         };
+        let overlays = self.open_document_overlays(&active_path, &buffer.text);
+        let Loaded { sources, warnings } =
+            load_bundle(project.as_ref(), &overlays, extraction_root);
+        for warning in warnings {
+            self.client.log_message(MessageType::WARNING, warning).await;
+        }
 
-        let overlays = self.open_document_overlays(uri.as_str());
-        let (sources, project_paths) = self.build_bundle(
-            &active_package,
-            &active_path,
-            text,
-            project_root.as_deref(),
-            &overlays,
-        );
+        let (active_package, project_paths, project_root) =
+            bundle_identity(&sources, &active_path, project);
+        let mut sources: Vec<SourceFile> = sources.into_iter().map(into_source_file).collect();
+        // The walk finds a project file on disk. An untitled buffer or
+        // a file outside any project is appended here.
+        if !sources.iter().any(|source| source.path == active_path) {
+            sources.push(SourceFile {
+                package: active_package.clone(),
+                path: active_path.clone(),
+                source: buffer.text.clone(),
+            });
+        }
 
         let parsed = parse_program(sources, ParseMode::for_path(&active_path));
 
@@ -314,61 +146,39 @@ impl Backend {
             .flat_map(|file| file.diagnostics.iter().cloned())
             .collect();
 
-        // Typecheck drops the source text, so capture it now in the
-        // file order spans index into.
-        let source_texts: Vec<Arc<str>> = parsed
-            .order
-            .iter()
-            .map(|path| {
-                parsed
-                    .files
-                    .get(path)
-                    .map_or_else(|| Arc::from(""), |file| Arc::from(file.source.as_str()))
-            })
-            .collect();
+        // Typecheck drops the source text, so take the table now.
+        let sources = parsed.source_table();
 
         // Both arms keep the post-typecheck ASTs and the registry.
         // Typecheck runs every pass before it reports errors, so the
         // failure path carries the same stamps as the success path
-        // and navigation stays available. `source_paths` keeps the
-        // parse order that span file ids index into.
-        let (parsed_for_state, registry, source_paths, has_errors) = match check_program(parsed) {
+        // and navigation stays available.
+        let (parsed_for_state, registry, has_errors) = match check_program(parsed) {
             Ok(checked) => {
                 all_diags.extend(checked.diagnostics.iter().cloned());
                 let CheckedProgram {
-                    packages,
-                    registry,
-                    source_paths,
-                    ..
+                    packages, registry, ..
                 } = checked;
                 (
                     parsed_from_packages(packages),
                     Some(Box::new(registry)),
-                    source_paths,
                     false,
                 )
             }
             Err(failure) => {
                 all_diags.extend(failure.diagnostics);
-                (
-                    failure.partial,
-                    failure.registry,
-                    failure.source_paths,
-                    true,
-                )
+                (failure.partial, failure.registry, true)
             }
         };
 
-        let grouped = group_by_file(all_diags, &source_paths, &active_path, &project_paths);
-        let mut project_paths = project_paths;
-        project_paths.insert(active_path.clone());
+        let grouped = group_by_file(all_diags, &sources, &active_path, &project_paths);
 
         let index = match &registry {
             Some(registry) => {
                 let analysis = Analysis::new(
                     parsed_for_state.iter().map(|parsed_file| &parsed_file.ast),
                     registry,
-                    &source_paths,
+                    &sources,
                     has_errors,
                 );
                 ReferenceIndex::build_filtered(&analysis, |file| {
@@ -386,8 +196,7 @@ impl Backend {
             encoding: self.encoding(),
             parsed: parsed_for_state,
             registry,
-            source_paths,
-            source_texts,
+            sources,
             has_errors,
             project_paths,
             project_root,
@@ -395,26 +204,32 @@ impl Backend {
         };
 
         // A newer revision means another run owns the result now.
-        if self.buffers.revision(uri.as_str()) != Some(buffer.revision) {
+        if self.buffers.revision(&uri) != Some(buffer.revision) {
             return;
         }
 
         let (active_diags, publishes) = convert_grouped(&uri, &state, grouped);
-        self.documents
-            .write()
-            .await
-            .insert(uri.as_str().to_string(), state);
+        let project_root = state.project_root.clone();
+        self.documents.write().await.insert(uri.clone(), state);
 
-        self.publish(uri, Some(buffer.version), active_diags, publishes)
-            .await;
+        self.publish(
+            uri,
+            Some(buffer.version),
+            project_root,
+            active_diags,
+            publishes,
+        )
+        .await;
     }
 
     /// Publish each file's diagnostics to its own URI and clear the
-    /// URIs that lost theirs since the previous pass.
+    /// URIs in the same project that lost theirs since its previous
+    /// pass.
     async fn publish(
         &self,
         uri: Uri,
         version: Option<i32>,
+        project_root: Option<PathBuf>,
         active_diags: Vec<Diagnostic>,
         publishes: Vec<(Uri, Vec<Diagnostic>)>,
     ) {
@@ -424,12 +239,7 @@ impl Backend {
         }
         now_published.extend(publishes.iter().map(|(uri, _)| uri.clone()));
 
-        let stale: Vec<Uri> = {
-            let mut published = self.published.write().await;
-            let stale = stale_uris(&published, &now_published, &uri);
-            *published = now_published;
-            stale
-        };
+        let stale = self.published.replace(project_root, now_published, &uri);
 
         self.client
             .publish_diagnostics(uri, active_diags, version)
@@ -446,18 +256,97 @@ impl Backend {
         }
     }
 
-    /// Canonical path to buffer text for every other open document,
-    /// so siblings compile from unsaved editor state, not disk.
-    fn open_document_overlays(&self, active_uri: &str) -> HashMap<PathBuf, String> {
-        self.buffers
+    /// Canonical path to buffer text for every open document, so the
+    /// project compiles from unsaved editor state, not disk. The
+    /// active document reads from `active_text`, the snapshot this
+    /// run owns, rather than whatever the buffer holds by now.
+    fn open_document_overlays(
+        &self,
+        active_path: &Path,
+        active_text: &str,
+    ) -> HashMap<PathBuf, String> {
+        let mut overlays: HashMap<PathBuf, String> = self
+            .buffers
             .open_texts()
             .into_iter()
-            .filter(|(doc_uri, _)| doc_uri != active_uri)
             .filter_map(|(doc_uri, text)| {
                 let canonical = fs::canonicalize(uri_to_path(&doc_uri)?).ok()?;
                 Some((canonical, text))
             })
-            .collect()
+            .collect();
+        if let Ok(canonical) = fs::canonicalize(active_path) {
+            overlays.insert(canonical, active_text.to_string());
+        }
+        overlays
+    }
+}
+
+/// Every source the active file compiles with, in bundle order. With
+/// a project, the loader reads the manifest's `src` and `test`
+/// directories and whatever dependencies are on disk, each open
+/// buffer standing in for its file. Without one, the bundle is the
+/// stdlib alone and the caller appends the active buffer.
+fn load_bundle(
+    project: Option<&Project>,
+    overlays: &HashMap<PathBuf, String>,
+    extraction_root: Option<PathBuf>,
+) -> Loaded {
+    let stdlib = || StdlibOptions {
+        extraction_root: extraction_root.clone(),
+        link_tests: true,
+    };
+    let stdlib_alone = || Loaded {
+        sources: stdlib_sources(&BTreeSet::new(), &stdlib()),
+        warnings: Vec::new(),
+    };
+    let Some(project) = project else {
+        return stdlib_alone();
+    };
+    ProjectLoader::new(&project.config, &project.root)
+        .overlays(overlays)
+        .sources(LoadOptions {
+            dependencies: Dependencies::OnDisk,
+            extensions: &["koja"],
+            include_tests: true,
+            on_error: ErrorPolicy::Lenient,
+            stdlib: Some(stdlib()),
+        })
+        .unwrap_or_else(|err| {
+            let mut loaded = stdlib_alone();
+            loaded
+                .warnings
+                .push(format!("{err}, loading the file on its own"));
+            loaded
+        })
+}
+
+/// What the run records about the active file's place in the bundle.
+/// The package is the project's namespace, or one derived from the
+/// path outside a project. The project paths are every non-stdlib
+/// source plus the active file, which the walk may not have found.
+fn bundle_identity(
+    sources: &[LoadedSource],
+    active_path: &Path,
+    project: Option<Project>,
+) -> (String, HashSet<PathBuf>, Option<PathBuf>) {
+    let (active_package, project_root) = match project {
+        Some(project) => (project.config.namespace(), Some(project.root)),
+        None => (package_for_path(Some(active_path)), None),
+    };
+    let mut project_paths: HashSet<PathBuf> = sources
+        .iter()
+        .filter(|source| source.origin != SourceOrigin::Stdlib)
+        .map(|source| source.path.clone())
+        .collect();
+    project_paths.insert(active_path.to_path_buf());
+    (active_package, project_paths, project_root)
+}
+
+fn into_source_file(loaded: LoadedSource) -> SourceFile {
+    SourceFile {
+        package: loaded.package,
+        path: loaded.path,
+        source: loaded.source,
     }
 }
 
@@ -473,7 +362,7 @@ fn convert_grouped(
         .remove(&state.active_path)
         .unwrap_or_default()
         .iter()
-        .map(|d| to_lsp_diagnostic(d, &state.source_paths, uri, &range))
+        .map(|d| to_lsp_diagnostic(d, &state.sources, uri, &range))
         .collect();
 
     let mut publishes: Vec<(Uri, Vec<Diagnostic>)> = Vec::new();
@@ -483,67 +372,11 @@ fn convert_grouped(
         };
         let converted = diags
             .iter()
-            .map(|d| to_lsp_diagnostic(d, &state.source_paths, &sibling_uri, &range))
+            .map(|d| to_lsp_diagnostic(d, &state.sources, &sibling_uri, &range))
             .collect();
         publishes.push((sibling_uri, converted));
     }
     (active_diags, publishes)
-}
-
-impl Backend {
-    /// Bundle the source list for `parse_program`, plus the project
-    /// paths eligible for published diagnostics.
-    ///
-    /// Mirrors `bundle_many_with_autoimport` in koja-driver's `pipeline`: the
-    /// embedded autoimport set is dropped for any module already
-    /// provided by the active package (so opening
-    /// `lib/global/src/debug.koja` doesn't double-define `Global.debug`),
-    /// and the qualified bundle is skipped entirely when the user is
-    /// editing `Global` because the prebaked qualified packages were
-    /// typechecked against the published Global and would clash with
-    /// the in-progress edits.
-    fn build_bundle(
-        &self,
-        active_package: &str,
-        active_path: &Path,
-        text: &str,
-        project_root: Option<&Path>,
-        overlays: &HashMap<PathBuf, String>,
-    ) -> (Vec<SourceFile>, HashSet<PathBuf>) {
-        let mut sources: Vec<SourceFile> =
-            Vec::with_capacity(self.autoimport_sources.len() + self.qualified_sources.len() + 4);
-        sources.extend(filter_stdlib(&self.autoimport_sources, active_package));
-        if active_package != "Global" {
-            sources.extend(filter_stdlib(&self.qualified_sources, active_package));
-        }
-        let mut project_paths = HashSet::new();
-        if let Some(root) = project_root {
-            for sibling in collect_sibling_sources(root, Some(active_path), overlays) {
-                project_paths.insert(sibling.path.clone());
-                sources.push(sibling);
-            }
-        }
-        sources.push(SourceFile {
-            package: active_package.to_string(),
-            path: active_path.to_path_buf(),
-            source: text.to_string(),
-        });
-        (sources, project_paths)
-    }
-}
-
-/// Clone stdlib sources, dropping any entries owned by `active_package`.
-/// Those modules come from the user's on-disk project (or the active
-/// buffer) and a second definition would collide at registry seal time.
-fn filter_stdlib(src: &[SourceFile], active_package: &str) -> Vec<SourceFile> {
-    src.iter()
-        .filter(|s| s.package != active_package)
-        .map(|s| SourceFile {
-            package: s.package.clone(),
-            path: s.path.clone(),
-            source: s.source.clone(),
-        })
-        .collect()
 }
 
 /// Regroup the checked packages into a [`ParsedProgram`] so the
@@ -587,21 +420,21 @@ fn stale_uris(published: &HashSet<Uri>, now_published: &HashSet<Uri>, active: &U
 }
 
 /// Bucket diagnostics by the file that owns them, resolving each
-/// span's file id through `source_paths`. Unresolved ids anchor to
-/// the active file. Paths outside the bundled project files (stdlib,
+/// span's file id through `sources`. Unresolved ids anchor to the
+/// active file. Paths outside the bundled project files (stdlib,
 /// synthetic markers) are dropped because the user cannot act on
 /// them.
 fn group_by_file(
     diags: Vec<KojaDiagnostic>,
-    source_paths: &[PathBuf],
+    sources: &SourceTable,
     active_path: &Path,
     project_paths: &HashSet<PathBuf>,
 ) -> HashMap<PathBuf, Vec<KojaDiagnostic>> {
     let mut grouped: HashMap<PathBuf, Vec<KojaDiagnostic>> = HashMap::new();
     for diag in diags {
-        let owner = match source_paths.get(diag.span.file.0 as usize) {
+        let owner = match sources.path_of(diag.span.file) {
             None => active_path.to_path_buf(),
-            Some(path) if path == active_path || project_paths.contains(path) => path.clone(),
+            Some(path) if path == active_path || project_paths.contains(path) => path.to_path_buf(),
             Some(_) => continue,
         };
         grouped.entry(owner).or_default().push(diag);
@@ -611,12 +444,12 @@ fn group_by_file(
 
 /// Converts a Koja compiler diagnostic to an LSP diagnostic. A
 /// related location becomes `related_information`, falling back to
-/// `own_uri` when its file id is not in `source_paths`. A fix rides
-/// in `data` for the code action handler. `range` converts a span
-/// over the text of the span's file.
+/// `own_uri` when its file id is not in `sources`. A fix rides in
+/// `data` for the code action handler. `range` converts a span over
+/// the text of the span's file.
 fn to_lsp_diagnostic(
     d: &KojaDiagnostic,
-    source_paths: &[PathBuf],
+    sources: &SourceTable,
     own_uri: &Uri,
     range: &dyn Fn(&Span) -> Range,
 ) -> Diagnostic {
@@ -639,9 +472,9 @@ fn to_lsp_diagnostic(
         .and_then(|fix| serde_json::to_value(FixData::from_fix(fix, range)).ok());
 
     let related_information = d.related.as_ref().map(|related| {
-        let uri = source_paths
-            .get(related.span.file.0 as usize)
-            .and_then(|path| path_to_uri(path))
+        let uri = sources
+            .path_of(related.span.file)
+            .and_then(path_to_uri)
             .unwrap_or_else(|| own_uri.clone());
         vec![DiagnosticRelatedInformation {
             location: Location {
@@ -694,16 +527,21 @@ mod tests {
         KojaDiagnostic::error("boom", span)
     }
 
+    /// A table of empty files at `paths`, in id order.
+    fn table(paths: &[&str]) -> SourceTable {
+        SourceTable::new(paths.iter().map(|path| (PathBuf::from(path), "")))
+    }
+
     #[test]
     fn grouping_buckets_by_owning_file() {
         let active = PathBuf::from("/proj/src/main.koja");
         let sibling = PathBuf::from("/proj/src/util.koja");
-        let source_paths = vec![active.clone(), sibling.clone()];
+        let sources = table(&["/proj/src/main.koja", "/proj/src/util.koja"]);
         let project_paths = HashSet::from([sibling.clone()]);
 
         let grouped = group_by_file(
             vec![diag(FileId(0)), diag(FileId(1)), diag(FileId(1))],
-            &source_paths,
+            &sources,
             &active,
             &project_paths,
         );
@@ -715,20 +553,25 @@ mod tests {
     #[test]
     fn grouping_anchors_unresolved_files_to_active() {
         let active = PathBuf::from("/proj/src/main.koja");
-        let grouped = group_by_file(vec![diag(FileId::UNKNOWN)], &[], &active, &HashSet::new());
+        let grouped = group_by_file(
+            vec![diag(FileId::UNKNOWN)],
+            &table(&[]),
+            &active,
+            &HashSet::new(),
+        );
         assert_eq!(grouped[&active].len(), 1);
     }
 
     #[test]
     fn grouping_drops_paths_outside_the_project() {
         let active = PathBuf::from("/proj/src/main.koja");
-        let source_paths = vec![
-            PathBuf::from("<Global.io>"),
-            PathBuf::from("/home/u/.koja/stdlib/0.16.0-abcd1234/global/src/io.koja"),
-        ];
+        let sources = table(&[
+            "<Global.io>",
+            "/home/u/.koja/stdlib/0.16.0-abcd1234/global/src/io.koja",
+        ]);
         let grouped = group_by_file(
             vec![diag(FileId(0)), diag(FileId(1))],
-            &source_paths,
+            &sources,
             &active,
             &HashSet::new(),
         );
@@ -749,19 +592,40 @@ mod tests {
     }
 
     #[test]
+    fn published_sets_are_diffed_per_project() {
+        let published = Published::default();
+        let a_main = Uri::from_str("file:///a/src/main.koja").unwrap();
+        let a_util = Uri::from_str("file:///a/src/util.koja").unwrap();
+        let b_main = Uri::from_str("file:///b/src/main.koja").unwrap();
+        let a = Some(PathBuf::from("/a"));
+        let b = Some(PathBuf::from("/b"));
+
+        assert!(
+            published
+                .replace(a.clone(), HashSet::from([a_util.clone()]), &a_main)
+                .is_empty()
+        );
+        // A pass in project `b` leaves `a`'s published set alone.
+        assert!(
+            published
+                .replace(b, HashSet::from([b_main.clone()]), &b_main)
+                .is_empty()
+        );
+        // The next pass in `a` clears what `a` lost and nothing else.
+        assert_eq!(published.replace(a, HashSet::new(), &a_main), vec![a_util]);
+    }
+
+    #[test]
     fn related_location_resolves_to_its_own_file() {
         let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
-        let source_paths = vec![
-            PathBuf::from("/proj/src/main.koja"),
-            PathBuf::from("/proj/src/util.koja"),
-        ];
+        let sources = table(&["/proj/src/main.koja", "/proj/src/util.koja"]);
         let related_span = Span {
             file: FileId(1),
             ..Span::default()
         };
         let diagnostic = diag(FileId(0)).with_related("previous function definition", related_span);
 
-        let converted = to_lsp_diagnostic(&diagnostic, &source_paths, &active, &range);
+        let converted = to_lsp_diagnostic(&diagnostic, &sources, &active, &range);
         let related = converted.related_information.expect("related information");
         assert_eq!(related.len(), 1);
         assert_eq!(related[0].message, "previous function definition");
@@ -778,12 +642,12 @@ mod tests {
         let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
         let diagnostic = diag(FileId(0)).with_fix("Drop it", vec![Edit::delete(Span::default())]);
 
-        let converted = to_lsp_diagnostic(&diagnostic, &[], &active, &range);
+        let converted = to_lsp_diagnostic(&diagnostic, &table(&[]), &active, &range);
         let data: FixData = serde_json::from_value(converted.data.expect("data")).unwrap();
         assert_eq!(data.title, "Drop it");
         assert_eq!(data.edits.len(), 1);
         assert!(
-            to_lsp_diagnostic(&diag(FileId(0)), &[], &active, &range)
+            to_lsp_diagnostic(&diag(FileId(0)), &table(&[]), &active, &range)
                 .data
                 .is_none()
         );
@@ -794,7 +658,7 @@ mod tests {
         let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
         let diagnostic = diag(FileId(0)).with_related("declared here", Span::default());
 
-        let converted = to_lsp_diagnostic(&diagnostic, &[], &active, &range);
+        let converted = to_lsp_diagnostic(&diagnostic, &table(&[]), &active, &range);
         let related = converted.related_information.expect("related information");
         assert_eq!(related[0].location.uri, active);
     }

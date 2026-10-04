@@ -10,11 +10,11 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-pub(crate) const LOCK_FILE: &str = "koja.lock";
+pub const LOCK_FILE: &str = "koja.lock";
 
 /// One pinned git dependency.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub(crate) struct LockedPackage {
+pub struct LockedPackage {
     pub name: String,
     /// Canonical form of the manifest's ref selector (e.g.
     /// `tag = v0.1.0`). A mismatch against the manifest means the
@@ -27,7 +27,7 @@ pub(crate) struct LockedPackage {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Lockfile {
+pub struct Lockfile {
     pub packages: Vec<LockedPackage>,
 }
 

@@ -165,16 +165,10 @@ pub fn qualified_sources_for(include_tests: bool) -> Vec<SourceFile> {
 }
 
 /// The qualified packages a test build of `Global` itself needs,
-/// which are [`TEST_PACKAGE`] and the packages it depends on. A
-/// Global self-compile leaves the other qualified packages out.
-pub fn test_build_sources() -> Vec<SourceFile> {
-    let mut sources = qualified_sources();
-    sources.retain(|file| TEST_BUILD_PACKAGES.contains(&file.package.as_str()));
-    sources
-}
-
-/// [`TEST_PACKAGE`] and its dependencies, in link order.
-const TEST_BUILD_PACKAGES: &[&str] = &["JSON", TEST_PACKAGE];
+/// which are [`TEST_PACKAGE`] and the packages it depends on, in
+/// link order. A Global self-compile leaves the other qualified
+/// packages out.
+pub const TEST_BUILD_PACKAGES: &[&str] = &["JSON", TEST_PACKAGE];
 
 /// [`autoimport_sources`] with paths rooted at an [`extract`]ion, so
 /// diagnostics and go-to-definition land in real files.

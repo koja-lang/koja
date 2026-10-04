@@ -25,9 +25,7 @@ mod commands;
 mod deps;
 mod diagnostics;
 mod link;
-mod loader;
 mod pipeline;
-pub mod project;
 mod serve;
 mod tasks;
 
@@ -209,7 +207,7 @@ fn main() {
     let project_root = cli
         .project
         .as_deref()
-        .map(project::resolve_project_root)
+        .map(koja_project::resolve_project_root)
         .transpose()
         .unwrap_or_else(|err| {
             eprintln!("error: {err}");

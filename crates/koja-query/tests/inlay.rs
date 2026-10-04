@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use koja_ast::span::{FileId, Position, Span};
 use koja_ast::util::dedent;
-use koja_parser::{ParseMode, SourceFile, parse_program};
+use koja_parser::{ParseMode, SourceFile, SourceTable, parse_program};
 use koja_query::inlay::{HintKind, hints};
 use koja_query::{Analysis, ReferenceIndex};
 use koja_typecheck::{CheckedProgram, check_program};
@@ -14,7 +14,19 @@ use koja_typecheck::{CheckedProgram, check_program};
 const PACKAGE: &str = "TestApp";
 const MAIN: &str = "main.koja";
 
-fn check(source: &str) -> CheckedProgram {
+/// A typechecked program with the sources its spans index into.
+struct Checked {
+    program: CheckedProgram,
+    sources: SourceTable,
+}
+
+impl Checked {
+    fn analysis(&self) -> Analysis<'_> {
+        Analysis::from_checked(&self.program, &self.sources)
+    }
+}
+
+fn check(source: &str) -> Checked {
     let mut sources = koja_stdlib::autoimport_sources();
     sources.extend(koja_stdlib::qualified_sources());
     sources.push(SourceFile {
@@ -23,14 +35,16 @@ fn check(source: &str) -> CheckedProgram {
         source: dedent(source),
     });
     let parsed = parse_program(sources, ParseMode::File);
-    check_program(parsed).unwrap_or_else(|failure| {
+    let sources = parsed.source_table();
+    let program = check_program(parsed).unwrap_or_else(|failure| {
         let messages: Vec<&str> = failure
             .diagnostics
             .iter()
             .map(|d| d.message.as_str())
             .collect();
         panic!("typecheck failed: {messages:?}")
-    })
+    });
+    Checked { program, sources }
 }
 
 fn span(file: FileId, start: (u32, u32), end: (u32, u32)) -> Span {
@@ -54,7 +68,7 @@ fn all_hints(source: &str) -> Vec<(u32, u32, String, HintKind)> {
 
 fn hints_in(source: &str, start: (u32, u32), end: (u32, u32)) -> Vec<(u32, u32, String, HintKind)> {
     let checked = check(source);
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = ReferenceIndex::build_filtered(&analysis, |file| file.package == PACKAGE);
     let main = analysis.file_id(&PathBuf::from(MAIN)).expect("main file");
     hints(&analysis, &index, main, span(main, start, end))

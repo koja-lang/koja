@@ -6,12 +6,14 @@ mod completion;
 mod convert;
 mod definition;
 mod diagnostics;
+mod document;
 mod folding;
 mod highlight;
 mod hover;
 mod inlay_hint;
 mod references;
 mod rename;
+mod server;
 mod signature_help;
 mod symbols;
 

@@ -29,30 +29,20 @@ impl Backend {
     ) -> Result<Option<Vec<CodeLens>>> {
         let uri = params.text_document.uri;
 
-        let docs = self.documents.read().await;
-        let state = match docs.get(uri.as_str()) {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-        let Some(root) = state.project_root.as_deref() else {
-            return Ok(None);
-        };
-        let Some(analysis) = state.analysis() else {
-            return Ok(None);
-        };
-        let Some(file) = analysis.file_id(&state.active_path) else {
-            return Ok(None);
-        };
-        let Some(relative) = relative_path(root, &state.active_path) else {
-            return Ok(None);
-        };
-
-        let positions = state.positions(file);
-        let lenses = tests_in_file(&analysis, file)
-            .into_iter()
-            .map(|span| run_test_lens(root, &relative, &span, &positions))
-            .collect();
-        Ok(Some(lenses))
+        self.with_analysis(&uri, |doc| {
+            let Some(root) = doc.state.project_root.as_deref() else {
+                return Ok(None);
+            };
+            let Some(relative) = relative_path(root, &doc.state.active_path) else {
+                return Ok(None);
+            };
+            let lenses = tests_in_file(&doc.analysis, doc.file)
+                .into_iter()
+                .map(|span| run_test_lens(root, &relative, &span, &doc.positions))
+                .collect();
+            Ok(Some(lenses))
+        })
+        .await
     }
 }
 

@@ -7,21 +7,22 @@ CLI binary (`koja`) and compilation pipeline orchestration.
 - `main.rs` -- Clap CLI: subcommands delegate to `commands`
 - `commands.rs` -- Implementations for build/run/check/fmt/doc/test/new/lex/parse
 - `pipeline.rs` -- Shared compile pipeline: merge type contexts, run codegen, link binary
-- `project.rs` -- Parses `koja.toml` into `ProjectConfig`
-- `resolve.rs` -- File resolution: single-file vs project mode, `SourceSet` construction
+- `deps/` -- The `koja deps` subcommands, a thin CLI over `koja_project::deps`
 - `diagnostics.rs` -- Rustc-style diagnostic printing
 - `build.rs` -- Finds `libkoja_runtime.a` and `libcrypto.a`, sets linker env vars
+
+The manifest, the source walk, and the dependency resolver live in
+`koja-project`, shared with the language server. The driver asks
+`ProjectLoader` for a bundle and passes `StdlibOptions` through it.
 
 ## Vocabulary
 
 A _package_ is a unit of distribution (your app, the stdlib, a dependency). A
-_file_ is a single `.koja` source file. A `SourceSet` is the flat collection
-of every file visible to one build invocation -- stdlib files plus the
-project's files plus every dep package's files -- keyed by FQN. There is no
-dependency graph between files: `SourceSet.order` is just "stdlib first, then
-project files" for processing convenience. The Koja language has no "module"
-concept; when you see `module` in code below this point it is the Rust
-language item (`mod foo;`).
+_file_ is a single `.koja` source file. A bundle is the flat list of every
+file visible to one build invocation, stdlib first, then the project's files
+and every dep package's files. There is no dependency graph between files.
+The Koja language has no "module" concept. When you see `module` in code
+below this point it is the Rust language item (`mod foo;`).
 
 ## Tests
 

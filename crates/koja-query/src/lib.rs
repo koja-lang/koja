@@ -18,8 +18,10 @@
 pub mod display;
 pub mod docs;
 pub mod expr_at;
+pub mod folding;
 pub mod index;
 pub mod inlay;
+pub mod outline;
 pub mod position;
 pub mod rename;
 pub mod signature;
@@ -27,10 +29,11 @@ pub mod symbol;
 pub mod test_sites;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use koja_ast::ast::File;
 use koja_ast::span::FileId;
+use koja_parser::SourceTable;
 use koja_typecheck::{CheckFailure, CheckedProgram, GlobalRegistry};
 
 pub use index::{Occurrence, ReferenceIndex, Role, SymbolKey};
@@ -38,13 +41,14 @@ pub use symbol::Symbol;
 
 /// A typechecked program viewed for queries. Borrows the files and
 /// the registry from whichever of [`CheckedProgram`] or
-/// [`CheckFailure`] produced them.
+/// [`CheckFailure`] produced them, and the sources from the
+/// [`SourceTable`] taken before typecheck ran.
 pub struct Analysis<'a> {
     files: Vec<&'a File>,
     by_id: HashMap<FileId, usize>,
     pub registry: &'a GlobalRegistry,
-    /// File table indexed by [`FileId`].
-    pub source_paths: &'a [PathBuf],
+    /// The path and text of every file, indexed by [`FileId`].
+    pub sources: &'a SourceTable,
     /// True when typecheck reported at least one error. Queries that
     /// must not act on a half-resolved program, such as rename, check
     /// this.
@@ -56,7 +60,7 @@ impl<'a> Analysis<'a> {
     pub fn new(
         files: impl IntoIterator<Item = &'a File>,
         registry: &'a GlobalRegistry,
-        source_paths: &'a [PathBuf],
+        sources: &'a SourceTable,
         has_errors: bool,
     ) -> Self {
         let files: Vec<&'a File> = files.into_iter().collect();
@@ -69,22 +73,22 @@ impl<'a> Analysis<'a> {
             files,
             by_id,
             registry,
-            source_paths,
+            sources,
             has_errors,
         }
     }
 
-    pub fn from_checked(checked: &'a CheckedProgram) -> Self {
+    pub fn from_checked(checked: &'a CheckedProgram, sources: &'a SourceTable) -> Self {
         let files = checked.packages.iter().flat_map(|pkg| pkg.files.iter());
-        Self::new(files, &checked.registry, &checked.source_paths, false)
+        Self::new(files, &checked.registry, sources, false)
     }
 
     /// `None` when the failure came from the parser, which leaves no
     /// registry behind.
-    pub fn from_failure(failure: &'a CheckFailure) -> Option<Self> {
+    pub fn from_failure(failure: &'a CheckFailure, sources: &'a SourceTable) -> Option<Self> {
         let registry = failure.registry.as_deref()?;
         let files = failure.partial.iter().map(|parsed| &parsed.ast);
-        Some(Self::new(files, registry, &failure.source_paths, true))
+        Some(Self::new(files, registry, sources, true))
     }
 
     /// Every file in the program, in table order.
@@ -97,13 +101,15 @@ impl<'a> Analysis<'a> {
     }
 
     pub fn file_id(&self, path: &Path) -> Option<FileId> {
-        self.source_paths
-            .iter()
-            .position(|candidate| candidate == path)
-            .map(|i| FileId(i as u32))
+        self.sources.file_id(path)
     }
 
     pub fn path_of(&self, file: FileId) -> Option<&'a Path> {
-        self.source_paths.get(file.0 as usize).map(PathBuf::as_path)
+        self.sources.path_of(file)
+    }
+
+    /// The text of `file` as the parse saw it.
+    pub fn text_of(&self, file: FileId) -> Option<&'a str> {
+        self.sources.text_of(file)
     }
 }

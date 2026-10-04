@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use koja_ast::util::dedent;
-use koja_parser::{ParseMode, SourceFile, parse_program};
+use koja_parser::{ParseMode, SourceFile, SourceTable, parse_program};
 use koja_query::Analysis;
 use koja_query::test_sites::tests_in_file;
 use koja_typecheck::{CheckedProgram, check_program};
@@ -12,7 +12,19 @@ use koja_typecheck::{CheckedProgram, check_program};
 const PACKAGE: &str = "TestApp";
 const MAIN: &str = "main.koja";
 
-fn check(source: &str) -> CheckedProgram {
+/// A typechecked program with the sources its spans index into.
+struct Checked {
+    program: CheckedProgram,
+    sources: SourceTable,
+}
+
+impl Checked {
+    fn analysis(&self) -> Analysis<'_> {
+        Analysis::from_checked(&self.program, &self.sources)
+    }
+}
+
+fn check(source: &str) -> Checked {
     let mut sources = koja_stdlib::autoimport_sources();
     sources.extend(koja_stdlib::qualified_sources());
     sources.push(SourceFile {
@@ -21,19 +33,21 @@ fn check(source: &str) -> CheckedProgram {
         source: dedent(source),
     });
     let parsed = parse_program(sources, ParseMode::File);
-    check_program(parsed).unwrap_or_else(|failure| {
+    let sources = parsed.source_table();
+    let program = check_program(parsed).unwrap_or_else(|failure| {
         let messages: Vec<&str> = failure
             .diagnostics
             .iter()
             .map(|d| d.message.as_str())
             .collect();
         panic!("typecheck failed: {messages:?}")
-    })
+    });
+    Checked { program, sources }
 }
 
 fn test_lines(source: &str) -> Vec<u32> {
     let checked = check(source);
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let main = analysis.file_id(&PathBuf::from(MAIN)).expect("main file");
     tests_in_file(&analysis, main)
         .into_iter()

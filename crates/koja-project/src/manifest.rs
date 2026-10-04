@@ -252,6 +252,19 @@ pub fn load_project(dir: &Path) -> Result<Option<ProjectConfig>, String> {
     Ok(Some(config))
 }
 
+/// Walk up from `start` to the nearest directory that holds a
+/// `koja.toml`. `None` when no ancestor has one, which is how an
+/// editor tells a project file from a loose one.
+pub fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start;
+    loop {
+        if dir.join("koja.toml").is_file() {
+            return Some(dir.to_path_buf());
+        }
+        dir = dir.parent()?;
+    }
+}
+
 /// Resolve an explicit project directory without changing the process
 /// working directory.
 pub fn resolve_project_root(path: &Path) -> Result<PathBuf, String> {
@@ -656,5 +669,19 @@ mod tests {
             let err = check(bad, (0, 15, 0)).unwrap_err();
             assert!(err.contains("`X.Y` or `X.Y.Z`"), "got: {err}");
         }
+    }
+
+    #[test]
+    fn project_root_is_the_nearest_manifest_up_the_tree() {
+        let root = std::env::temp_dir().join(format!("koja-root-{}", std::process::id()));
+        let nested = root.join("src").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.join("koja.toml"), "").unwrap();
+
+        assert_eq!(find_project_root(&nested), Some(root.clone()));
+        assert_eq!(find_project_root(&root), Some(root.clone()));
+        assert_eq!(find_project_root(Path::new("/")), None);
+
+        fs::remove_dir_all(&root).ok();
     }
 }

@@ -49,14 +49,14 @@ impl Buffer {
 
 #[derive(Debug, Default)]
 pub(crate) struct Buffers {
-    inner: Mutex<HashMap<String, Buffer>>,
+    inner: Mutex<HashMap<Uri, Buffer>>,
 }
 
 impl Buffers {
     /// Record a newly opened document.
-    pub(crate) fn open(&self, uri: &str, text: String, version: i32) {
+    pub(crate) fn open(&self, uri: Uri, text: String, version: i32) {
         self.lock().insert(
-            uri.to_string(),
+            uri,
             Buffer {
                 revision: 0,
                 text,
@@ -70,7 +70,7 @@ impl Buffers {
     /// newer than the text held, in which case nothing changes.
     pub(crate) fn change(
         &self,
-        uri: &str,
+        uri: &Uri,
         version: i32,
         changes: Vec<TextDocumentContentChangeEvent>,
         encoding: PositionEncoding,
@@ -91,43 +91,43 @@ impl Buffers {
     /// Bump the revision without changing the text, when something
     /// outside the document (a sibling on disk, a save) calls for a
     /// fresh analysis. Returns the new revision.
-    pub(crate) fn touch(&self, uri: &str) -> Option<u64> {
+    pub(crate) fn touch(&self, uri: &Uri) -> Option<u64> {
         let mut buffers = self.lock();
         let buffer = buffers.get_mut(uri)?;
         buffer.revision += 1;
         Some(buffer.revision)
     }
 
-    pub(crate) fn close(&self, uri: &str) {
+    pub(crate) fn close(&self, uri: &Uri) {
         self.lock().remove(uri);
     }
 
     /// A copy of the document as it stands.
-    pub(crate) fn snapshot(&self, uri: &str) -> Option<Buffer> {
+    pub(crate) fn snapshot(&self, uri: &Uri) -> Option<Buffer> {
         self.lock().get(uri).cloned()
     }
 
-    pub(crate) fn revision(&self, uri: &str) -> Option<u64> {
+    pub(crate) fn revision(&self, uri: &Uri) -> Option<u64> {
         self.lock().get(uri).map(|buffer| buffer.revision)
     }
 
-    pub(crate) fn is_open(&self, uri: &str) -> bool {
+    pub(crate) fn is_open(&self, uri: &Uri) -> bool {
         self.lock().contains_key(uri)
     }
 
-    pub(crate) fn open_uris(&self) -> Vec<String> {
+    pub(crate) fn open_uris(&self) -> Vec<Uri> {
         self.lock().keys().cloned().collect()
     }
 
     /// The URI and text of every open document.
-    pub(crate) fn open_texts(&self) -> Vec<(String, String)> {
+    pub(crate) fn open_texts(&self) -> Vec<(Uri, String)> {
         self.lock()
             .iter()
             .map(|(uri, buffer)| (uri.clone(), buffer.text.clone()))
             .collect()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Buffer>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<Uri, Buffer>> {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -138,7 +138,9 @@ impl Buffers {
 mod tests {
     use super::*;
 
-    const URI: &str = "file:///proj/src/main.koja";
+    fn uri() -> Uri {
+        "file:///proj/src/main.koja".parse().unwrap()
+    }
 
     fn change(
         range: Option<((u32, u32), (u32, u32))>,
@@ -154,15 +156,15 @@ mod tests {
     }
 
     fn text(buffers: &Buffers) -> String {
-        buffers.snapshot(URI).unwrap().text
+        buffers.snapshot(&uri()).unwrap().text
     }
 
     #[test]
     fn ranged_changes_apply_in_order() {
         let buffers = Buffers::default();
-        buffers.open(URI, "fn run\n  1\nend\n".to_string(), 1);
+        buffers.open(uri(), "fn run\n  1\nend\n".to_string(), 1);
         let revision = buffers.change(
-            URI,
+            &uri(),
             2,
             vec![
                 change(Some(((1, 2), (1, 3))), "42"),
@@ -177,25 +179,30 @@ mod tests {
     #[test]
     fn full_change_replaces_the_text() {
         let buffers = Buffers::default();
-        buffers.open(URI, "old".to_string(), 1);
-        buffers.change(URI, 2, vec![change(None, "new")], PositionEncoding::Utf16);
+        buffers.open(uri(), "old".to_string(), 1);
+        buffers.change(
+            &uri(),
+            2,
+            vec![change(None, "new")],
+            PositionEncoding::Utf16,
+        );
         assert_eq!(text(&buffers), "new");
     }
 
     #[test]
     fn ranges_use_the_negotiated_encoding() {
         let buffers = Buffers::default();
-        buffers.open(URI, "x = \"😀\" + y\n".to_string(), 1);
+        buffers.open(uri(), "x = \"😀\" + y\n".to_string(), 1);
         // `y` is UTF-16 unit 11 and byte 13.
         buffers.change(
-            URI,
+            &uri(),
             2,
             vec![change(Some(((0, 11), (0, 12))), "z")],
             PositionEncoding::Utf16,
         );
         assert_eq!(text(&buffers), "x = \"😀\" + z\n");
         buffers.change(
-            URI,
+            &uri(),
             3,
             vec![change(Some(((0, 13), (0, 14))), "w")],
             PositionEncoding::Utf8,
@@ -206,36 +213,37 @@ mod tests {
     #[test]
     fn stale_versions_are_dropped() {
         let buffers = Buffers::default();
-        buffers.open(URI, "a".to_string(), 5);
+        buffers.open(uri(), "a".to_string(), 5);
         assert_eq!(
-            buffers.change(URI, 5, vec![change(None, "b")], PositionEncoding::Utf16),
+            buffers.change(&uri(), 5, vec![change(None, "b")], PositionEncoding::Utf16),
             None
         );
         assert_eq!(
-            buffers.change(URI, 4, vec![change(None, "c")], PositionEncoding::Utf16),
+            buffers.change(&uri(), 4, vec![change(None, "c")], PositionEncoding::Utf16),
             None
         );
         assert_eq!(text(&buffers), "a");
-        assert_eq!(buffers.revision(URI), Some(0));
+        assert_eq!(buffers.revision(&uri()), Some(0));
     }
 
     #[test]
     fn touch_bumps_the_revision_only() {
         let buffers = Buffers::default();
-        buffers.open(URI, "a".to_string(), 1);
-        assert_eq!(buffers.touch(URI), Some(1));
-        let buffer = buffers.snapshot(URI).unwrap();
+        buffers.open(uri(), "a".to_string(), 1);
+        assert_eq!(buffers.touch(&uri()), Some(1));
+        let buffer = buffers.snapshot(&uri()).unwrap();
         assert_eq!((buffer.text.as_str(), buffer.version), ("a", 1));
-        assert_eq!(buffers.touch("file:///nowhere"), None);
+        let nowhere: Uri = "file:///nowhere".parse().unwrap();
+        assert_eq!(buffers.touch(&nowhere), None);
     }
 
     #[test]
     fn close_forgets_the_document() {
         let buffers = Buffers::default();
-        buffers.open(URI, "a".to_string(), 1);
-        assert!(buffers.is_open(URI));
-        buffers.close(URI);
-        assert!(!buffers.is_open(URI));
+        buffers.open(uri(), "a".to_string(), 1);
+        assert!(buffers.is_open(&uri()));
+        buffers.close(&uri());
+        assert!(!buffers.is_open(&uri()));
         assert!(buffers.open_uris().is_empty());
     }
 }

@@ -5,14 +5,26 @@ use std::path::PathBuf;
 
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
-use koja_parser::{ParseMode, SourceFile, parse_program};
+use koja_parser::{ParseMode, SourceFile, SourceTable, parse_program};
 use koja_query::Analysis;
 use koja_query::signature::function_signature;
 use koja_typecheck::{CheckedProgram, check_program};
 
 const PACKAGE: &str = "TestApp";
 
-fn check(source: &str) -> CheckedProgram {
+/// A typechecked program with the sources its spans index into.
+struct Checked {
+    program: CheckedProgram,
+    sources: SourceTable,
+}
+
+impl Checked {
+    fn analysis(&self) -> Analysis<'_> {
+        Analysis::from_checked(&self.program, &self.sources)
+    }
+}
+
+fn check(source: &str) -> Checked {
     let mut sources = koja_stdlib::autoimport_sources();
     sources.extend(koja_stdlib::qualified_sources());
     sources.push(SourceFile {
@@ -21,24 +33,27 @@ fn check(source: &str) -> CheckedProgram {
         source: dedent(source),
     });
     let parsed = parse_program(sources, ParseMode::File);
-    check_program(parsed).unwrap_or_else(|failure| {
+    let sources = parsed.source_table();
+    let program = check_program(parsed).unwrap_or_else(|failure| {
         let messages: Vec<&str> = failure
             .diagnostics
             .iter()
             .map(|d| d.message.as_str())
             .collect();
         panic!("typecheck failed: {messages:?}")
-    })
+    });
+    Checked { program, sources }
 }
 
 /// The formatted signature of `path` at `arity` in the test package.
-fn signature(checked: &CheckedProgram, path: &[&str], arity: usize) -> String {
+fn signature(checked: &Checked, path: &[&str], arity: usize) -> String {
     let identifier = Identifier::new(PACKAGE, path.iter().map(|s| s.to_string()).collect());
     let (id, _) = checked
+        .program
         .registry
         .lookup_function(&identifier, arity)
         .unwrap_or_else(|| panic!("no function {identifier:?}/{arity}"));
-    let analysis = Analysis::from_checked(checked);
+    let analysis = checked.analysis();
     function_signature(&analysis, id).expect("signature is lifted")
 }
 
