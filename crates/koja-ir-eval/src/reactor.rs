@@ -127,9 +127,10 @@ impl Reactor for EvalReactor {
     }
 }
 
-/// Register `fd` for one `IOReady` delivery to `pid` (`Fd.watch`). The
-/// reactor fills the fired direction in at `poll` time. The `readiness`
-/// here is the registered interest, a placeholder until then.
+/// Register `fd` for one `IOReady` delivery to `pid`
+/// (`IO.Descriptor.watch`). The reactor fills the fired direction in at
+/// `poll` time. The `readiness` here is the registered interest, a
+/// placeholder until then.
 pub(crate) fn watch(fd: i32, interest: Interest, pid: Pid) {
     let readiness = match interest {
         Interest::Readable => Readiness::Readable,
@@ -138,7 +139,8 @@ pub(crate) fn watch(fd: i32, interest: Interest, pid: Pid) {
     arm(fd, interest, Waker::Deliver { fd, pid, readiness });
 }
 
-/// Drop `fd` from readiness monitoring (`Fd.unwatch`). Idempotent.
+/// Drop `fd` from readiness monitoring (`IO.Descriptor.unwatch`).
+/// Idempotent.
 pub(crate) fn unwatch(fd: i32) {
     REGISTRY.with(|registry| registry.borrow_mut().remove(&fd));
 }

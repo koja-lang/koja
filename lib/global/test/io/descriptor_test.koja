@@ -57,7 +57,7 @@ end
 
 test "watch and unwatch do not crash"
   fd = try require(File.open("/dev/null", FileMode.Read))
-  fd.watch(Fd.Interest.Readable)
+  fd.watch(IO.Descriptor.Interest.Readable)
   fd.unwatch()
   _ = fd.close()
 end

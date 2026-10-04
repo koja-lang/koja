@@ -2731,7 +2731,7 @@ Three error domains cover I/O. `IO.Error` is a failure on an open stream, `File.
 
 #### `IO.Reader<E>` and `IO.Writer<E>`
 
-The stream protocols. Each is generic in `E`, the error its implementor fails with, so the protocol does not need one enum wide enough for every stream. `Fd` implements `IO.Reader<IO.Error>` and `TCPSocket` implements `IO.Reader<IO.Error | TLSError>`, and a caller sees the TLS cause by name. A type that implements `read` gets `read_string` and `read_line` from the protocol. Each method takes an options struct as its last parameter with an all-default value, so a call names only what it changes.
+The stream protocols. Each is generic in `E`, the error its implementor fails with, so the protocol does not need one enum wide enough for every stream. `IO.Descriptor` implements `IO.Reader<IO.Error>` and `TCPSocket` implements `IO.Reader<IO.Error | TLSError>`, and a caller sees the TLS cause by name. A type that implements `read` gets `read_string` and `read_line` from the protocol. Each method takes an options struct as its last parameter with an all-default value, so a call names only what it changes.
 
 - `IO.Reader.read(self, count: Int, options: IO.Reader.Options = IO.Reader.Options{}) -> Binary ! E`: reads up to `count` bytes. An empty `Binary` is end of input.
 - `IO.Reader.read_string(self, count: Int, options) -> String ! E | String.ConversionError`: reads up to `count` bytes and decodes them as UTF-8.
@@ -2751,13 +2751,13 @@ fn drain<S: IO.Reader<IO.Error>>(source: S) -> Int ! IO.Error
 end
 ```
 
-#### `Fd`
+#### `IO.Descriptor`
 
-An open file descriptor. `File.open` returns one for a file, `STDIN`, `STDOUT`, and `STDERR` name the standard streams, and the socket types wrap one. `Fd` implements `IO.Reader<IO.Error>` and `IO.Writer<IO.Error>`, and every operation on an open descriptor fails with `IO.Error`.
+An open file descriptor. `File.open` returns one for a file, `STDIN`, `STDOUT`, and `STDERR` name the standard streams, and the socket types wrap one. `IO.Descriptor` implements `IO.Reader<IO.Error>` and `IO.Writer<IO.Error>`, and every operation on an open descriptor fails with `IO.Error`. `raw` is the integer the operating system knows the descriptor by.
 
 ```koja
-struct Fd
-  descriptor: Int
+struct IO.Descriptor
+  raw: Int32
 end
 ```
 
@@ -2766,21 +2766,21 @@ Functions:
 - `read`, `read_string`, `read_line`, and `write` as the protocols define them.
 - `close(self) ! IO.Error`: closes the descriptor. A later read or write fails with `IO.Error.Closed`.
 
-Three functions are for processes that drive a descriptor directly. Reads and writes wait for readiness on their own, so most code never calls them. Each takes an `Fd.Interest`, `Readable` or `Writable`.
+Three functions are for processes that drive a descriptor directly. Reads and writes wait for readiness on their own, so most code never calls them. Each takes an `IO.Descriptor.Interest`, `Readable` or `Writable`.
 
-- `block(self, interest: Fd.Interest, timeout: Option<Duration> = Option.None) -> Bool`: suspends the current process until the descriptor is ready or `timeout` passes. Returns `true` when the wait ended on the timeout.
-- `watch(self, interest: Fd.Interest)`: registers the descriptor for one `IO.Ready` message to the mailbox of the current process. The registration fires once, so call `watch` again after each message.
+- `block(self, interest: IO.Descriptor.Interest, timeout: Option<Duration> = Option.None) -> Bool`: suspends the current process until the descriptor is ready or `timeout` passes. Returns `true` when the wait ended on the timeout.
+- `watch(self, interest: IO.Descriptor.Interest)`: registers the descriptor for one `IO.Ready` message to the mailbox of the current process. The registration fires once, so call `watch` again after each message.
 - `unwatch(self)`: removes the registration.
 
-`IO.Ready` is the message `watch` produces, `Read(Fd)`, `Write(Fd)`, or `Error(Fd)`. A process that handles it names it in its message union, as `impl Process<App, AppMsg | IO.Ready, String>`. `TCPServer` is the stdlib process that works this way, and its owner sees `TCPServer.Event` instead.
+`IO.Ready` is the message `watch` produces, `Read(IO.Descriptor)`, `Write(IO.Descriptor)`, or `Error(IO.Descriptor)`. A process that handles it names it in its message union, as `impl Process<App, AppMsg | IO.Ready, String>`. `TCPServer` is the stdlib process that works this way, and its owner sees `TCPServer.Event` instead.
 
 #### `File`
 
-Operations on paths. Each function names a file or directory by its path and fails with `File.Error`. `open` returns the `Fd` for the file, and from there reads, writes, and `close` are `Fd` methods that fail with `IO.Error`. `File` has no instance methods.
+Operations on paths. Each function names a file or directory by its path and fails with `File.Error`. `open` returns the `IO.Descriptor` for the file, and from there reads, writes, and `close` are `IO.Descriptor` methods that fail with `IO.Error`. `File` has no instance methods.
 
 Functions:
 
-- `File.open(path: String, mode: File.Mode) -> Fd ! File.Error`: opens a file with the given mode (`File.Mode.Read`, `File.Mode.Write`, `File.Mode.Append`).
+- `File.open(path: String, mode: File.Mode) -> IO.Descriptor ! File.Error`: opens a file with the given mode (`File.Mode.Read`, `File.Mode.Write`, `File.Mode.Append`).
 - `File.read(path: String) -> String ! File.Error | IO.Error | String.ConversionError`: reads an entire file as UTF-8 text (opens, reads, closes).
 - `File.read_binary(path: String) -> Binary ! File.Error | IO.Error`: reads an entire file as bytes.
 - `File.write(path: String, content: Binary | String) ! File.Error | IO.Error`: writes text or bytes (creates or truncates).
@@ -2865,7 +2865,7 @@ compact = birthday.to_string(ISO8601.Basic)
 
 ### Console I/O
 
-`IO` is the I/O namespace. Its own functions are the console, and the stream protocols `IO.Reader` and `IO.Writer`, the stream error `IO.Error`, and the readiness message `IO.Ready` nest under it. `STDIN`, `STDOUT`, and `STDERR` are `Fd` constants for direct access.
+`IO` is the I/O namespace. Its own functions are the console, and the descriptor type `IO.Descriptor`, the stream protocols `IO.Reader` and `IO.Writer`, the stream error `IO.Error`, and the readiness message `IO.Ready` nest under it. `STDIN`, `STDOUT`, and `STDERR` are `IO.Descriptor` constants for direct access.
 
 Functions:
 

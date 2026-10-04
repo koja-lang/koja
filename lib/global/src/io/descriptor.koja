@@ -1,13 +1,14 @@
-alias Fd.Interest
+alias IO.Descriptor.Interest
 alias IO.Error as IOError
 alias IO.Reader.Options as ReaderOptions
 alias IO.Writer.Options as WriterOptions
 
 @doc """
 The readiness a process waits for on a descriptor, either `Readable`
-or `Writable`. `Fd.block` and `Fd.watch` take one.
+or `Writable`. `IO.Descriptor.block` and `IO.Descriptor.watch` take
+one.
 """
-enum Fd.Interest
+enum IO.Descriptor.Interest
   Readable
   Writable
 end
@@ -15,7 +16,8 @@ end
 @doc """
 An open file descriptor. `File.open` returns one for a file, `STDIN`,
 `STDOUT`, and `STDERR` name the standard streams, and the socket types
-wrap one. Reads and writes come from the `IO.Reader` and `IO.Writer`
+wrap one. `raw` is the integer the operating system knows it by.
+Reads and writes come from the `IO.Reader` and `IO.Writer`
 conformances below, and every operation on an open descriptor fails
 with `IO.Error`.
 
@@ -23,8 +25,8 @@ with `IO.Error`.
 descriptor directly. Reads and writes wait for readiness on their own,
 so most code never calls them.
 """
-struct Fd
-  descriptor: Int32
+struct IO.Descriptor
+  raw: Int32
 
   @doc """
   Suspends the current process until this file descriptor is ready for
@@ -35,7 +37,7 @@ struct Fd
     -> Bool
 
     timed_out = koja_io_block(
-      self.descriptor,
+      self.raw,
       interest_code(interest),
       timeout_ms(timeout),
     )
@@ -47,7 +49,7 @@ struct Fd
   Closes the file descriptor.
   """
   fn close(self) ! IOError
-    if koja_fd_close(self.descriptor) != 0
+    if koja_fd_close(self.raw) != 0
       fail IOError.last()
     end
   end
@@ -57,7 +59,7 @@ struct Fd
   further `IO.Ready` messages arrive for it.
   """
   fn unwatch(self)
-    koja_rt_unwatch_fd(self.descriptor)
+    koja_rt_unwatch_fd(self.raw)
   end
 
   @doc """
@@ -68,7 +70,7 @@ struct Fd
   receiving them.
   """
   fn watch(self, interest: Interest)
-    koja_rt_watch_fd(self.descriptor, interest_code(interest))
+    koja_rt_watch_fd(self.raw, interest_code(interest))
   end
 
   priv fn interest_code(interest: Interest) -> Int
@@ -110,17 +112,17 @@ struct Fd
   priv fn koja_rt_watch_fd(fd: Int32, interest: Int64)
 end
 
-impl IO.Reader<IOError> for Fd
+impl IO.Reader<IOError> for IO.Descriptor
   @doc """
   Reads up to `count` bytes from the file descriptor. Returns an empty
   binary at end of stream. With `options.timeout` set, the read fails
   with `IO.Error.TimedOut` once that much time passes with no data.
   """
   fn read(self, count: Int, options: ReaderOptions) -> Binary ! IOError
-    ptr = Fd.koja_fd_read(
-      self.descriptor,
+    ptr = IO.Descriptor.koja_fd_read(
+      self.raw,
       count,
-      Fd.timeout_ms(options.timeout),
+      IO.Descriptor.timeout_ms(options.timeout),
     )
 
     if ptr.null?()
@@ -131,7 +133,7 @@ impl IO.Reader<IOError> for Fd
   end
 end
 
-impl IO.Writer<IOError> for Fd
+impl IO.Writer<IOError> for IO.Descriptor
   @doc """
   Writes `data` to the file descriptor and returns the number of bytes
   written. With `options.timeout` set, the write fails with
@@ -145,11 +147,11 @@ impl IO.Writer<IOError> for Fd
         s: String -> s.to_binary()
       end
 
-    result = Fd.koja_fd_write(
-      self.descriptor,
+    result = IO.Descriptor.koja_fd_write(
+      self.raw,
       CPtr.borrow(bytes),
       bytes.byte_size(),
-      Fd.timeout_ms(options.timeout),
+      IO.Descriptor.timeout_ms(options.timeout),
     )
 
     if result < 0

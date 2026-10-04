@@ -100,7 +100,9 @@ end
 # reading. The file is deleted at once, so the open descriptor is the
 # only reference and no cleanup step can be skipped by a failing
 # assertion.
-priv fn open_with(name: String, content: Binary | String) -> Fd ! Test.Failure
+priv fn open_with(name: String, content: Binary | String)
+  -> IO.Descriptor ! Test.Failure
+
   path = "/tmp/koja_io_#{name}.txt"
 
   try require(File.write(path, content))

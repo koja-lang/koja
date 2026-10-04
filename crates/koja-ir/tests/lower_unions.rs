@@ -54,7 +54,7 @@ take(Post{title: \"hi\"})
     );
 
     // Scope to the test package. The autoimported stdlib carries its
-    // own unions (e.g. `Fd.write`'s `Binary | String`), so summing
+    // own unions (e.g. `IO.Descriptor.write`'s `Binary | String`), so summing
     // across every package would also count those.
     let union_decl_count = script
         .packages
@@ -159,7 +159,7 @@ one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
 ";
     let script = lower(source);
     // Scope to the test package so stdlib unions in autoimported
-    // packages (e.g. `Fd.write`'s `Binary | String`) don't inflate
+    // packages (e.g. `IO.Descriptor.write`'s `Binary | String`) don't inflate
     // the count we're pinning the dedupe against.
     let union_decl_count = script
         .packages

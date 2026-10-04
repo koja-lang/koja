@@ -199,7 +199,7 @@ Where the JSON lines go. `File` carries the descriptor `File.open`
 returned for the `--out` path.
 """
 enum JsonReporter.Sink
-  File(Fd)
+  File(IO.Descriptor)
   Stderr
 end
 
