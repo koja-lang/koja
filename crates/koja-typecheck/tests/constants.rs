@@ -99,7 +99,7 @@ fn unannotated_generic_unit_variant_constant_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["cannot infer type parameter `T` of `Global.Option` from unit variant `None`"],
+        &["cannot infer type parameter `T` of `Option` from unit variant `None`"],
     );
 }
 
@@ -115,7 +115,7 @@ fn generic_unit_variant_against_other_type_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["`Option.None` is a `Global.Option` value, but `String` is expected"],
+        &["`Option.None` is an `Option` value, but `String` is expected"],
     );
 }
 
@@ -134,9 +134,7 @@ fn constant_mismatch_renders_type_arguments() {
 
     assert_script_fails_with(
         source,
-        &[
-            "constant value type `TestApp.Point` does not match annotation `Global.Option<Global.Int>`",
-        ],
+        &["constant value type `TestApp.Point` does not match annotation `Option<Int>`"],
     );
 }
 
@@ -285,7 +283,7 @@ fn list_against_scalar_annotation_reports_once() {
         "expected one diagnostic, got {messages:#?}"
     );
     assert!(
-        messages[0].contains("does not match annotation `Global.Int`"),
+        messages[0].contains("does not match annotation `Int`"),
         "unexpected diagnostic: {}",
         messages[0]
     );

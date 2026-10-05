@@ -27,10 +27,10 @@ call sites once instead of twice.
 
 ### Breaking cleanup
 
-- Remove `@test` after its 0.19 deprecation. Every remaining annotation
-  warns today, so the removal is a parser error with the `test "..."`
-  replacement, on the `unless` model.
-- Reshape the I/O types along [IO.md](IO.md). Landed, the three error
+- **[DONE]** Remove `@test` after its 0.19 deprecation. Every remaining
+  annotation warned, so the removal is a parser error with the
+  `test "..."` replacement, on the `unless` model.
+- **[DONE]** Reshape the I/O types along [IO.md](IO.md). The three error
   domains `IO.Error`, `File.Error`, and `Socket.Error`, the
   `IO.Reader<E>` and `IO.Writer<E>` protocols with per-call options
   and `IO.Descriptor` and `TCPSocket` on them, `File.open` returning
@@ -38,6 +38,11 @@ call sites once instead of twice.
   can tell end of input from an empty line,
   `IO.Descriptor.Interest` on the reactor methods, `try_accept` folded
   into a zero-bound `accept`, and `Fd` renamed to `IO.Descriptor`.
+- **[DONE]** Remove `TCPServer.Event.Closed`. No version of `TCPServer`
+  produced it, since the server hands each `TCPSocket` to its owner at
+  `Connected` and does not watch it after that. The variant came from
+  an earlier design in which the listener owned every client socket.
+  Owners delete the dead match arm.
 
 ### Language
 

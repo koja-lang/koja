@@ -109,9 +109,9 @@ fn union_member_dedup_collapses_repeats() {
 
 #[test]
 fn union_keeps_members_that_share_a_leaf_name() {
-    // `A.Error` and `B.Error` both display as `Error`. The display
-    // string orders union members but is not their identity, so the
-    // two stay distinct and a value of either widens into the union.
+    // `A.Error` and `B.Error` share a leaf name. The display string
+    // orders union members but is not their identity, so the two
+    // stay distinct and a value of either widens into the union.
     // Before the structural dedup, `A.Error | B.Error` collapsed to
     // `A.Error` and the `B.Error` assignment below failed.
     let source = "
@@ -145,6 +145,49 @@ fn union_keeps_members_that_share_a_leaf_name() {
           end
         ";
     typecheck(&dedent(source));
+}
+
+#[test]
+fn union_mismatch_spells_nested_members_by_full_path() {
+    // Every nested type renders by its full path, so a mismatch
+    // between types that share a leaf name reads
+    // `TestApp.A.Error | TestApp.B.Error` against `TestApp.C.Error`
+    // and not `Error | Error` against `Error`.
+    let source = "
+        struct A
+        end
+
+        enum A.Error
+          One
+        end
+
+        struct B
+        end
+
+        enum B.Error
+          Two
+        end
+
+        struct C
+        end
+
+        enum C.Error
+          Three
+        end
+
+        fn take(e: A.Error | B.Error) -> Int
+          1
+        end
+
+          take(C.Error.Three)
+        ";
+    assert_script_fails_with(
+        &dedent(source),
+        &[
+            "expects `TestApp.A.Error | TestApp.B.Error`",
+            "got `TestApp.C.Error`",
+        ],
+    );
 }
 
 #[test]
@@ -259,7 +302,10 @@ fn non_member_into_union_diagnoses() {
 
           take(C{z: 0})
         ";
-    assert_script_fails_with(source, &["expects `A | B`", "C"]);
+    assert_script_fails_with(
+        source,
+        &["expects `TestApp.A | TestApp.B`", "got `TestApp.C`"],
+    );
 }
 
 #[test]
@@ -334,7 +380,13 @@ fn union_with_outside_member_into_union_diagnoses() {
           mixed: A | C = A{x: 1}
           take(mixed)
         ";
-    assert_script_fails_with(source, &["expects `A | B`", "A | C"]);
+    assert_script_fails_with(
+        source,
+        &[
+            "expects `TestApp.A | TestApp.B`",
+            "got `TestApp.A | TestApp.C`",
+        ],
+    );
 }
 
 #[test]
@@ -452,7 +504,7 @@ fn union_hash_requires_every_member_to_hash() {
         v: A | B = A{x: 1}
         v.hash().print()
         ";
-    assert_script_fails_with(source, &["cannot hash unions containing `B`"]);
+    assert_script_fails_with(source, &["cannot hash unions containing `TestApp.B`"]);
 }
 
 #[test]
@@ -589,5 +641,8 @@ fn typed_binding_member_not_in_union_diagnoses() {
 
           describe(A{x: 1})
         ";
-    assert_script_fails_with(source, &["C", "A | B"]);
+    assert_script_fails_with(
+        source,
+        &["type `TestApp.C` is not a member of union `TestApp.A | TestApp.B`"],
+    );
 }

@@ -1,1 +1,1 @@
-`Global.CPtr` has no method `to_string`
+`CPtr` has no method `to_string`

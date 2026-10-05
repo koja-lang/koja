@@ -1387,8 +1387,7 @@ fn assert_contains_all(label: &str, haystack: &str, needles: &[&str]) {
 /// `koja test --trace` groups by struct and prints each test's name
 /// with its `path:line` plus same-line result + timing. Color follows
 /// the diagnostics rule, which needs a terminal, so a piped run never
-/// carries ANSI escapes. The fixture keeps the legacy `@test` form, so
-/// every annotation also warns on stderr while the tests still run.
+/// carries ANSI escapes.
 #[test]
 fn lang_test_trace() {
     let (stdout, stderr, code) = run_koja_test_trace(&["--trace"]);
@@ -1411,21 +1410,9 @@ fn lang_test_trace() {
         !stdout.contains('\u{1b}'),
         "expected piped output to carry no ANSI escapes, got:\n{stdout}"
     );
-    assert_contains_all(
-        "trace stderr",
-        &stderr,
-        &[
-            "warning: `@test` is deprecated. Koja 0.20 removes it.\n  ╭─ test/alpha_test.koja:2:3\n",
-            "2 │   @test \"first alpha test\"\n",
-            "╰─ move the body into a `test \"description\"` block",
-            "╭─ test/alpha_test.koja:7:3\n",
-            "╭─ test/beta_test.koja:2:3\n",
-        ],
-    );
-    assert_eq!(
-        stderr.matches("`@test` is deprecated").count(),
-        3,
-        "one warning per annotation:\n{stderr}"
+    assert!(
+        stderr.trim().is_empty(),
+        "expected a clean fixture to print nothing on stderr, got:\n{stderr}"
     );
 }
 
@@ -1654,7 +1641,7 @@ fn lang_test_reports_parse_error_in_only_test_file() {
     // Missing `end`s make the file fail to parse.
     fs::write(
         root.join("test/broken_test.koja"),
-        "struct BrokenTest\n  @test \"oops\"\n  fn test_oops -> Result<Bool, String>\n",
+        "struct BrokenTest\n  test \"oops\"\n    assert true\n",
     )
     .unwrap();
 

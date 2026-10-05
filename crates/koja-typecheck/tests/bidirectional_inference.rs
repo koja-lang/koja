@@ -305,7 +305,7 @@ fn unit_variant_under_mismatched_expected_names_the_mismatch() {
     // instead of the inference gap it causes.
     assert_script_fails_with(
         source,
-        &["`Maybe.None` is a `TestApp.Maybe` value, but `Other<T>` is expected"],
+        &["`Maybe.None` is a `TestApp.Maybe` value, but `TestApp.Other<T>` is expected"],
     );
 }
 

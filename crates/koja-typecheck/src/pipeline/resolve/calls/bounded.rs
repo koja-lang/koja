@@ -99,7 +99,7 @@ pub(super) fn resolve_bounded_method_call(
                 resolver
                     .registry
                     .get(bound.protocol_id)
-                    .map(|e| e.identifier.last().to_string())
+                    .map(|e| e.identifier.source_name())
                     .unwrap_or_else(|| format!("<id {}>", bound.protocol_id))
             })
             .collect();

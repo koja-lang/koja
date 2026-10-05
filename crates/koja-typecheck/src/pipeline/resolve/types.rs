@@ -119,9 +119,10 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
 ///
 /// The display string orders members so the union's member order
 /// (and so the IR tag byte) reads the way a user would list them,
-/// but it is not an identity. A nested type renders as its leaf, so
-/// `File.Error` and `IO.Error` both display as `Error`. The tie-break
-/// and the structural dedup keep such members distinct.
+/// but it is not an identity. Two distinct types can render the same
+/// way only when the registry is missing an entry, so the derived
+/// `Ord` tie-break and the structural dedup keep members distinct
+/// without leaning on the string.
 pub(crate) fn canonical_union(
     members: Vec<ResolvedType>,
     registry: &GlobalRegistry,
@@ -288,10 +289,12 @@ fn is_primitive_pair(
         || (is_primitive(a, registry, rhs) && is_primitive(b, registry, lhs))
 }
 
-/// Human-readable rendering of a [`ResolvedType`] for diagnostics:
-/// dereferences `Global` heads through the registry so users see
-/// `Int` rather than an opaque `#0`, and spells out type arguments
-/// (`Option<fn (Int) -> Int>`) since conformance often hinges on them.
+/// Human-readable rendering of a [`ResolvedType`] for diagnostics.
+/// Each `Global` head renders through the registry as its source
+/// spelling, `Int` or `IO.Error` rather than an opaque `#0`, so two
+/// nested types that share a leaf name stay apart, and type arguments
+/// are spelled out (`Option<fn (Int) -> Int>`) since conformance often
+/// hinges on them.
 pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     match ty {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
@@ -318,7 +321,7 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
             type_args,
         } => {
             let head = match registry.get(*id) {
-                Some(entry) => entry.identifier.last().to_string(),
+                Some(entry) => entry.identifier.source_name(),
                 None => format!("<id {id}>"),
             };
             if type_args.is_empty() {
@@ -407,7 +410,7 @@ pub(super) fn verify_bounds(
             }
             let bound_label = registry
                 .get(bound.protocol_id)
-                .map(|e| e.identifier.last().to_string())
+                .map(|e| e.identifier.source_name())
                 .unwrap_or_else(|| format!("<id {}>", bound.protocol_id));
             let bound_label = if instantiated_bound.args.is_empty() {
                 bound_label

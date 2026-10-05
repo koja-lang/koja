@@ -655,7 +655,7 @@ pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
     }
 }
 
-/// `koja test` discovers `test` blocks and `@test` functions in the
+/// `koja test` discovers `test` blocks in the
 /// current project, synthesizes a Process-shaped harness type that
 /// registers them with the `Test` package, lowers the whole thing
 /// through the pipeline, and runs it on the settled backend so the

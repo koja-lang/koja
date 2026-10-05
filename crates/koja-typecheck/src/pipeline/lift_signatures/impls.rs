@@ -156,7 +156,7 @@ pub(super) fn lift_impl(
     // method-lift loop without changing behavior for the common
     // generic-aliased case.
     let resolved_target = resolve_impl_target(impl_block, &target_identifier, scope);
-    let impl_label = format!("impl ... for {}", target_identifier.last());
+    let impl_label = format!("impl ... for {}", target_identifier.source_name());
     let resolved = resolve_protocol_impl_heads(
         &mut impl_block.trait_expr,
         &target_identifier,

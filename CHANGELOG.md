@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Trace.set_trace_id(bytes)`, `Trace.set_span_id(bytes)`, and `Trace.set_sampled(bool)` each write one field of the calling process's context and keep the rest. A codec package calls them before `Trace.root` to continue an incoming trace, and the root then keeps the trace id and sampled bit and names the set span id as its parent. A root under the zero context starts a new sampled trace instead. The two id setters fail with `Trace.Error` on a wrong length. `Trace.clear()` returns a process to the zero context between requests, and `Trace.current()` is the context a codec encodes into an outgoing header.
 - `Trace.Export`, the queue an exporter package drains. A finished `Trace.SpanRecord` joins a queue of at most 4096 records. `Trace.Export.pop()` takes the oldest and `Trace.Export.dropped()` counts what a full queue refused.
 - `koja test --only <file>:<line>` runs one test. Repeat the flag to run several.
-- Quick fixes in the language server. The `unless` removal, the `@test` deprecation, and a valued `return` in a `Unit` function carry the first ones.
+- Quick fixes in the language server. The `unless` removal and a valued `return` in a `Unit` function carry the first ones.
 - A `Run test` code lens on each `test` block.
 - The language server rechecks open documents when a `.koja` file or `koja.toml` changes on disk.
 - A `const` can hold a list, map, or set literal, such as `const PRIMES = [2, 3, 5, 7]` or `const PORTS = ["http": 80]`, and a struct or enum variant whose fields hold one. A constant value takes the same grammar as a field default, so it can also read another constant declared anywhere in the program. A collection constant is built once at program start and every read borrows the shared value. A constant that depends on itself through other constants is a compile error.
@@ -44,11 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking change.** `IO.Descriptor.read_binary` and `TCPSocket.read_binary` are removed. `read` returns `Binary` on both now, so `socket.read_binary(n)` becomes `socket.read(n)`.
 - **Breaking change.** The `File` value type and `File.close` are removed. `File.open` returns an `IO.Descriptor`, so `file.close()` becomes `descriptor.close()` on the descriptor it returned.
+- **Breaking change.** `TCPServer.Event.Closed` is removed. No version of `TCPServer` ever produced it, since the server hands each `TCPSocket` to its owner at `Connected` and does not watch it after that, so a closed connection is seen by the holder as an empty `read` or an `IO.Error`. A `TCPEvent.Closed(_) ->` arm in an owner's `handle` is deleted.
+- **Breaking change.** The `@test` annotation is removed after its 0.19 deprecation. The compiler reports an old annotation with a hint that names the replacement, so `@test "description"` on a function becomes a `test "description"` block, and a body that returned `Result<T, String>` returns nothing and uses `assert` or `fail` instead.
 - **Breaking change.** `TCPListener.try_accept` and `Socket.try_accept_raw` are removed. A zero bound on `accept` is the same poll, so `match listener.try_accept()` with `Option.Some(socket)` and `Option.None` arms becomes `match listener.accept(Option.Some(Duration.ZERO))` with `Result.Ok(socket)` and `Result.Err(Socket.Error.TimedOut)` arms, and the other `Result.Err` arm now sees the failures `try_accept` hid.
 
 ### Fixed
 
 - Two nested types with the same last name, such as `File.Error` and `IO.Error`, stay distinct in a union. Before, `File.Error | IO.Error` collapsed to one member and a value of the other was rejected.
+- Diagnostics spell a nested type by its full path, so a mismatch reads `expects IO.Error, got File.Error` where both printed as `Error` before. Types from `Global` drop the `Global.` prefix they carried in some messages, and types from every other package keep theirs, so a type reads the same way in every message.
 - A read, write, or wait that a signal interrupts fails with `Interrupted`. Before, the interpreter recorded no cause for it, so the caller saw a stale one.
 - `koja format` no longer panics on a comment inside an empty list, map, or struct literal. The literal stays broken open with the comment inside, the layout an empty call argument list already used.
 - A field default can be a struct literal named through a dotted path, such as `options: IO.Reader.Options = IO.Reader.Options{}`, or through a file alias. Enum variants with a payload, such as `Option.Some(3)`, are accepted as defaults too. Before, the dotted literal was rejected and the aliased one could panic the compiler.

@@ -259,7 +259,7 @@ pub(super) fn diagnose_unmet_conformance(
     }
     let protocol_label = registry
         .get(protocol_id)
-        .map(|entry| entry.identifier.last().to_string())
+        .map(|entry| entry.identifier.source_name())
         .unwrap_or_else(|| format!("<id {protocol_id}>"));
     diagnostics.push(Diagnostic::error(
         format!(

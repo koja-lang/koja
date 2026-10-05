@@ -256,7 +256,7 @@ fn body_that_breaks_the_channel_reports_inside_the_block() {
     let diagnostic = failure
         .diagnostics
         .iter()
-        .find(|d| d.message.contains("declares error type `Failure`"))
+        .find(|d| d.message.contains("declares error type `Test.Failure`"))
         .unwrap_or_else(|| {
             panic!(
                 "expected a channel mismatch, got {:#?}",

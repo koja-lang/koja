@@ -96,18 +96,3 @@ fn plain_functions_are_not_tests() {
     );
     assert!(lines.is_empty());
 }
-
-#[test]
-fn legacy_annotated_functions_count_at_their_fn_line() {
-    let lines = test_lines(
-        "
-        struct StackTest
-          @test \"push then pop\"
-          fn test_push_pop ! String
-            ()
-          end
-        end
-        ",
-    );
-    assert_eq!(lines, [3]);
-}

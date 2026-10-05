@@ -67,7 +67,7 @@ fn builtin_redeclaration_diagnoses_already_defined() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("`Global.String` is already defined")),
+            .any(|m| m.contains("`String` is already defined")),
         "expected an already-defined diagnostic, got: {messages:#?}",
     );
 }
@@ -87,7 +87,7 @@ fn private_builtin_diagnoses() {
 fn builtin_construction_diagnoses() {
     assert_script_fails_with(
         "s = String{}",
-        &["cannot construct builtin type `Global.String` with struct literal syntax"],
+        &["cannot construct builtin type `String` with struct literal syntax"],
     );
 }
 

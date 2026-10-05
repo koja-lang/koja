@@ -121,8 +121,9 @@ pub(super) fn resolve_enum_construction(
     {
         diagnostics.push(Diagnostic::error(
             format!(
-                "`{}.{variant}` is a `{enum_label}` value, but `{}` is expected",
+                "`{}.{variant}` is {} `{enum_label}` value, but `{}` is expected",
                 path_text(type_path),
+                indefinite_article(&enum_label),
                 display_resolution(&other, resolver.registry),
             ),
             span,
@@ -457,5 +458,14 @@ fn supplied_shape_label(data: &EnumConstructionData) -> &'static str {
         EnumConstructionData::Struct(_) => "constructed with named fields",
         EnumConstructionData::Tuple(_) => "constructed with positional arguments",
         EnumConstructionData::Unit => "constructed with no payload",
+    }
+}
+
+/// `an` before a name that starts with a vowel, `a` otherwise, so the
+/// message reads `an Option value` and `a Result value`.
+fn indefinite_article(name: &str) -> &'static str {
+    match name.chars().next() {
+        Some(first) if "aeiouAEIOU".contains(first) => "an",
+        _ => "a",
     }
 }

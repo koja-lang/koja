@@ -512,7 +512,7 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
             type_args,
         } => {
             let head = match registry.get(*id) {
-                Some(entry) => entry.identifier.qualified_name(),
+                Some(entry) => entry.identifier.source_name(),
                 None => "<unknown>".to_string(),
             };
             if type_args.is_empty() {

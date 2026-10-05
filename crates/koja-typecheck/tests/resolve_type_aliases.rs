@@ -351,7 +351,7 @@ fn tuple_alias_does_not_satisfy_custom_protocol_bound() {
     assert_file_fails_with(
         source,
         &[
-            "does not implement protocol `Marked`",
+            "does not implement protocol `TestApp.Marked`",
             "required by type parameter `T`",
         ],
     );
