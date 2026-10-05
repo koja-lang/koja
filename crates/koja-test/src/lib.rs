@@ -1,8 +1,8 @@
 //! Test discovery and harness synthesis for `koja test`.
 //!
 //! The driver feeds a parsed project (sources + test fixtures) into
-//! [`discover_tests`] to enumerate every `test "..."` block and
-//! `@test`-annotated function belonging to the current project.
+//! [`discover_tests`] to enumerate every `test "..."` block
+//! belonging to the current project.
 //! [`generate_harness`] then
 //! produces a Koja source string for a synthetic
 //! [`HARNESS_ENTRY`] type implementing
@@ -19,9 +19,7 @@
 
 use std::path::Path;
 
-use koja_ast::ast::{
-    AnnotationValue, Function, Item, Name, TestDecl, TypeExpr, name_texts, synthesized_test_name,
-};
+use koja_ast::ast::{Item, Name, TestDecl, TypeExpr, name_texts, synthesized_test_name};
 use koja_parser::ParsedProgram;
 
 /// Name of the synthesized test-harness entry type. Reserved for
@@ -31,9 +29,11 @@ use koja_parser::ParsedProgram;
 pub const HARNESS_ENTRY: &str = "KojaTestHarness";
 
 /// A discovered test, registered as `Outer.Inner.fn_name` or bare
-/// `fn_name` by the generated harness. `file` and `line` record the
-/// source location (`file` is rendered relative to the project root)
-/// for navigable trace and failure output.
+/// `fn_name` by the generated harness. `fn_name` is the function the
+/// `test` block desugars to, which already has the `Test.Spec.run`
+/// shape `fn () -> Result<(), Test.Failure>`. `file` and `line`
+/// record the source location (`file` is rendered relative to the
+/// project root) for navigable trace and failure output.
 #[derive(Clone, Debug)]
 pub struct TestCase {
     pub description: String,
@@ -42,21 +42,6 @@ pub struct TestCase {
     pub line: u32,
     /// `None` for a top-level `test` block.
     pub owner: Option<Owner>,
-    pub shape: Shape,
-}
-
-/// How the harness turns a test function into a `Test.Spec.run`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Shape {
-    /// The function already is `fn () -> Result<(), Test.Failure>`,
-    /// so the harness registers a reference to it. Every `test` block
-    /// and every `@test` function on a `Test.Failure` channel.
-    Spec,
-    /// An `@test` function on some other `Result<_, E>`. The harness
-    /// wraps the call in a closure that keeps `Ok` and turns `Err(e)`
-    /// into `Test.Failure.Error` with `e` interpolated, so a `String`
-    /// renders bare and everything else through `Debug`.
-    Legacy,
 }
 
 /// The type a member test became a method on.
@@ -96,13 +81,12 @@ impl TestCase {
     }
 }
 
-/// Walks the parsed program and collects top-level `test` blocks,
+/// Walks the parsed program and collects top-level `test` blocks and
 /// member `test` blocks in struct, enum, impl, extend, and builtin
-/// bodies (through nested types), and `@test`-annotated struct
-/// functions. Only scans files belonging to the current project
-/// (matched by the per-file `package` field), so deps' fixtures don't
-/// sneak into the harness. `root` relativizes each test's source path
-/// for clean, navigable `path:line` output.
+/// bodies (through nested types). Only scans files belonging to the
+/// current project (matched by the per-file `package` field), so
+/// deps' fixtures don't sneak into the harness. `root` relativizes
+/// each test's source path for clean, navigable `path:line` output.
 pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -> Vec<TestCase> {
     let mut tests = Vec::new();
 
@@ -119,7 +103,6 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -
             .into_owned();
         let mut collector = Collector {
             file: &display_path,
-            package: project_name,
             path: file.ast.path.as_deref(),
             tests: &mut tests,
         };
@@ -137,32 +120,18 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -
 
 struct Collector<'a> {
     file: &'a str,
-    package: &'a str,
     path: Option<&'a Path>,
     tests: &'a mut Vec<TestCase>,
 }
 
 impl Collector<'_> {
     fn push(&mut self, description: String, owner: Option<&Owner>, line: u32) {
-        let fn_name = synthesized_test_name(self.path, line);
-        self.push_named(description, fn_name, owner, line, Shape::Spec);
-    }
-
-    fn push_named(
-        &mut self,
-        description: String,
-        fn_name: String,
-        owner: Option<&Owner>,
-        line: u32,
-        shape: Shape,
-    ) {
         self.tests.push(TestCase {
             description,
             file: self.file.to_string(),
-            fn_name,
+            fn_name: synthesized_test_name(self.path, line),
             line,
             owner: owner.cloned(),
-            shape,
         });
     }
 
@@ -204,17 +173,6 @@ impl Collector<'_> {
             Item::Struct(s) => {
                 let owner = Owner::type_path(qualify(outer, &s.path));
                 self.member_tests(&s.tests, &owner);
-                for func in &s.functions {
-                    if let Some(description) = annotated_test_description(func) {
-                        self.push_named(
-                            description,
-                            func.name.text.clone(),
-                            Some(&owner),
-                            func.span.start.line,
-                            annotated_test_shape(func, self.package),
-                        );
-                    }
-                }
                 for nested in &s.nested {
                     self.nested(nested, &owner.path);
                 }
@@ -247,59 +205,10 @@ fn type_expr_path(target: &TypeExpr) -> Option<Vec<String>> {
     }
 }
 
-/// The description of an `@test` function, or `None` when the
-/// function has no `@test` annotation. A bare `@test` falls back to
-/// the function name.
-fn annotated_test_description(func: &Function) -> Option<String> {
-    let ann = func.annotations.iter().find(|a| a.name == "test")?;
-    Some(match &ann.value {
-        Some(AnnotationValue::String(s)) => s.clone(),
-        _ => func.name.text.clone(),
-    })
-}
-
-/// Whether an `@test` function already has the `Test.Spec.run` shape,
-/// a unit success value on a `Test.Failure` channel. Inside the `Test`
-/// package itself the channel is spelled `Failure`.
-fn annotated_test_shape(func: &Function, package: &str) -> Shape {
-    let unit_success = match &func.return_type {
-        None => true,
-        Some(TypeExpr::Unit { .. }) => true,
-        Some(_) => false,
-    };
-    let failure_channel = match func.error_type.as_ref().and_then(type_expr_path) {
-        Some(path) => path == ["Test", "Failure"] || (package == "Test" && path == ["Failure"]),
-        None => false,
-    };
-    if unit_success && failure_channel {
-        Shape::Spec
-    } else {
-        Shape::Legacy
-    }
-}
-
 /// Escape a Rust string for embedding inside a double-quoted Koja
 /// string literal in the generated harness source.
 fn escape_koja_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// The `run` field of one registered spec. A reference to the test
-/// function when it already has the spec shape, or a closure that
-/// adapts a legacy result.
-fn spec_run(test: &TestCase) -> String {
-    let call = test.call_path();
-    match test.shape {
-        Shape::Spec => format!("&{call}/0"),
-        Shape::Legacy => format!(
-            r##"fn () -> Result<(), Test.Failure>
-        match {call}()
-          Result.Ok(_) -> Result.Ok(())
-          Result.Err(error) -> Result.Err(Test.Failure.Error("#{{error}}"))
-        end
-      end"##
-        ),
-    }
 }
 
 /// Keep the tests whose [`TestCase::id`] is in `only`, in discovery
@@ -327,7 +236,7 @@ pub fn select_tests(tests: Vec<TestCase>, only: &[String]) -> Result<Vec<TestCas
 ///
 /// Each test becomes one `Test.Spec` with its description, location,
 /// group (the owner type, or the file for a top-level block), and a
-/// `run` built by [`spec_run`]. The harness hands the plan to
+/// `run` that references the test function. The harness hands the plan to
 /// `Test.run` with `Test.Options.from_env`, so every flag the driver
 /// resolved arrives through `KOJA_TEST_*` variables, then monitors
 /// the runner and maps its exit to the process result. A `Normal`
@@ -346,14 +255,14 @@ pub fn generate_harness(tests: &[TestCase]) -> String {
         file: "{file}",
         group: "{group}",
         line: {line},
-        run: {run},
+        run: &{call}/0,
       }},
 "#,
             description = escape_koja_string(&test.description),
             file = escape_koja_string(&test.file),
             group = escape_koja_string(&test.group()),
             line = test.line,
-            run = spec_run(test),
+            call = test.call_path(),
         ));
     }
 
@@ -405,7 +314,6 @@ mod tests {
             fn_name: String::new(),
             line,
             owner: None,
-            shape: Shape::Spec,
         }
     }
 

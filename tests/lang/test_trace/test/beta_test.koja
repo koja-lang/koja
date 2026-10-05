@@ -1,6 +1,5 @@
 struct BetaTest
-  @test "beta passes"
-  fn test_pass -> Result<Bool, String>
-    Result.Ok(true)
+  test "beta passes"
+    assert true
   end
 end

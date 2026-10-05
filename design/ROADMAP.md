@@ -27,9 +27,9 @@ call sites once instead of twice.
 
 ### Breaking cleanup
 
-- Remove `@test` after its 0.19 deprecation. Every remaining annotation
-  warns today, so the removal is a parser error with the `test "..."`
-  replacement, on the `unless` model.
+- **[DONE]** Remove `@test` after its 0.19 deprecation. Every remaining
+  annotation warned, so the removal is a parser error with the
+  `test "..."` replacement, on the `unless` model.
 - **[DONE]** Reshape the I/O types along [IO.md](IO.md). The three error
   domains `IO.Error`, `File.Error`, and `Socket.Error`, the
   `IO.Reader<E>` and `IO.Writer<E>` protocols with per-call options

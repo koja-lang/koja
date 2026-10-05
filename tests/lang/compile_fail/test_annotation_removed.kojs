@@ -1,0 +1,4 @@
+@test "adds two numbers"
+fn test_add ! String
+  ()
+end

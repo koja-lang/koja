@@ -11,11 +11,10 @@
 //! [`lookup_type`] the resolver used.
 
 use koja_ast::ast::{
-    Annotation, AnnotationKind, AnnotationValue, Diagnostic, Edit, Expr, ExprKind, File, Function,
-    Item, Name, Pattern, ProtocolMethod, TypeExpr, TypeParam, name_texts,
+    Annotation, AnnotationKind, Diagnostic, Expr, ExprKind, File, Function, Item, Name, Pattern,
+    ProtocolMethod, TypeExpr, TypeParam, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
-use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 use koja_ast::visit::{self, Visitor};
 
@@ -187,26 +186,6 @@ impl Walker<'_, '_> {
         }
     }
 
-    /// The `@test` annotation is the pre-0.19 test form. The harness
-    /// still runs it, so the warning is the only nudge toward `test`
-    /// blocks. Desugared blocks carry no annotation, so they never
-    /// reach here with one.
-    fn warn_legacy_test(&mut self, function: &Function) {
-        let Some(annotation) = function.annotations.iter().find(|a| a.name == "test") else {
-            return;
-        };
-        let diagnostic = Diagnostic::warning_with_hint(
-            "`@test` is deprecated. Koja 0.20 removes it.",
-            "move the body into a `test \"description\"` block",
-            annotation.span,
-        );
-        let diagnostic = match legacy_test_edit(function, annotation) {
-            Some(edit) => diagnostic.with_fix("Rewrite as a `test` block", vec![edit]),
-            None => diagnostic,
-        };
-        self.diagnostics.push(diagnostic);
-    }
-
     fn warn_use(&mut self, id: GlobalRegistryId, span: Span) {
         let Some(entry) = self.scope.registry.get(id) else {
             return;
@@ -227,35 +206,6 @@ impl Walker<'_, '_> {
     }
 }
 
-/// The edit that turns an `@test` function into a `test` block.
-/// Everything from the annotation through the end of the signature
-/// becomes `test "description"`, and the body stays. Only the plain
-/// shape gets one. A second annotation has no place on a `test`
-/// block, parameters have no `test` equivalent, and a header that
-/// ends at `)` has no span for the paren, so those keep the hint
-/// alone.
-fn legacy_test_edit(function: &Function, annotation: &Annotation) -> Option<Edit> {
-    if function.annotations.len() != 1 || !function.params.is_empty() {
-        return None;
-    }
-    let header_end = function
-        .error_type
-        .as_ref()
-        .or(function.return_type.as_ref())
-        .map(type_expr_span)?;
-    let description = match &annotation.value {
-        Some(AnnotationValue::String(text)) => text.clone(),
-        _ => function.name.text.clone(),
-    };
-    let replacement = format!("test \"{}\"", quote_description(&description));
-    Some(Edit::replace(annotation.span.to(header_end), replacement))
-}
-
-/// Escape a description for a plain string literal.
-fn quote_description(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
 impl<'ast> Visitor<'ast> for Walker<'_, '_> {
     fn visit_item(&mut self, item: &'ast Item) {
         if self.suppressed(item) {
@@ -265,7 +215,6 @@ impl<'ast> Visitor<'ast> for Walker<'_, '_> {
     }
 
     fn visit_function(&mut self, function: &'ast Function) {
-        self.warn_legacy_test(function);
         if is_deprecated(&function.annotations) {
             return;
         }

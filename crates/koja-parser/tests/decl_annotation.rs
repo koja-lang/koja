@@ -8,6 +8,8 @@
 //! - multiple stacked annotations
 //! - annotations propagate to every supported declaration kind:
 //!   struct / enum / fn / const / type alias / protocol
+//! - the removed `@test` is reported once, with its replacement, and
+//!   the declaration under it parses as plain
 
 use koja_ast::ast::{AnnotationValue, Item};
 
@@ -160,4 +162,74 @@ fn annotation_followed_by_non_declaration_fails() {
         ",
         &["annotation must be followed by a declaration"],
     );
+}
+
+#[test]
+fn test_annotation_is_rejected_with_replacement_hint() {
+    let result = parse_failing_with(
+        "
+        struct StackTest
+          @test \"push then pop\"
+          fn test_push_pop ! String
+            ()
+          end
+        end
+
+        @test
+        fn top_level ! String
+          ()
+        end
+        ",
+        &["`@test` was removed in 0.20"],
+    );
+    assert_eq!(
+        result.errors.len(),
+        2,
+        "one error per annotation and nothing else: {:#?}",
+        result.errors
+    );
+    for error in &result.errors {
+        let hint = error
+            .hint
+            .as_ref()
+            .expect("removal diagnostic carries a hint");
+        assert!(
+            hint.contains("`test \"description\"` block"),
+            "hint should name the replacement: {hint}"
+        );
+        assert!(error.fix.is_none(), "the removal carries no fix");
+    }
+    // The span starts at `@` and covers the payload, so the first
+    // one ends past the `@test` keyword.
+    assert_eq!(result.errors[0].span.start.line, 2);
+    assert_eq!(result.errors[0].span.start.column, 3);
+    assert_eq!(result.errors[0].span.end.line, 2);
+    assert!(result.errors[0].span.end.column > 8);
+    assert_eq!(result.errors[1].span.start.line, 8);
+    assert_eq!(result.errors[1].span.start.column, 1);
+}
+
+#[test]
+fn test_annotation_is_dropped_and_the_function_parses_plain() {
+    let result = parse_failing_with(
+        "
+        struct StackTest
+          @doc \"documented\"
+          @test \"push then pop\"
+          fn test_push_pop ! String
+            ()
+          end
+        end
+        ",
+        &["`@test` was removed in 0.20"],
+    );
+    let Item::Struct(decl) = &result.ast.items[0] else {
+        panic!("expected a struct item");
+    };
+    assert_eq!(decl.functions.len(), 1);
+    let function = &decl.functions[0];
+    assert_eq!(function.name.text, "test_push_pop");
+    assert_eq!(function.annotations.len(), 1, "only `@doc` stays");
+    assert_eq!(function.annotations[0].name, "doc");
+    assert!(function.body.is_some());
 }

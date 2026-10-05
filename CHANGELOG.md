@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IO.Descriptor.Interest`, with `Readable` and `Writable`, names the readiness a process waits for. `IO.Descriptor.block` and `IO.Descriptor.watch` take one.
 - `koja shell` now accepts `:q` as an alias for `:quit`.
 - `koja test --only <file>:<line>` runs one test. Repeat the flag to run several.
-- Quick fixes in the language server. The `unless` removal, the `@test` deprecation, and a valued `return` in a `Unit` function carry the first ones.
+- Quick fixes in the language server. The `unless` removal and a valued `return` in a `Unit` function carry the first ones.
 - A `Run test` code lens on each `test` block.
 - The language server rechecks open documents when a `.koja` file or `koja.toml` changes on disk.
 - A `const` can hold a list, map, or set literal, such as `const PRIMES = [2, 3, 5, 7]` or `const PORTS = ["http": 80]`, and a struct or enum variant whose fields hold one. A constant value takes the same grammar as a field default, so it can also read another constant declared anywhere in the program. A collection constant is built once at program start and every read borrows the shared value. A constant that depends on itself through other constants is a compile error.
@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change.** `IO.Descriptor.read_binary` and `TCPSocket.read_binary` are removed. `read` returns `Binary` on both now, so `socket.read_binary(n)` becomes `socket.read(n)`.
 - **Breaking change.** The `File` value type and `File.close` are removed. `File.open` returns an `IO.Descriptor`, so `file.close()` becomes `descriptor.close()` on the descriptor it returned.
 - **Breaking change.** `TCPServer.Event.Closed` is removed. No version of `TCPServer` ever produced it, since the server hands each `TCPSocket` to its owner at `Connected` and does not watch it after that, so a closed connection is seen by the holder as an empty `read` or an `IO.Error`. A `TCPEvent.Closed(_) ->` arm in an owner's `handle` is deleted.
+- **Breaking change.** The `@test` annotation is removed after its 0.19 deprecation. The compiler reports an old annotation with a hint that names the replacement, so `@test "description"` on a function becomes a `test "description"` block, and a body that returned `Result<T, String>` returns nothing and uses `assert` or `fail` instead.
 - **Breaking change.** `TCPListener.try_accept` and `Socket.try_accept_raw` are removed. A zero bound on `accept` is the same poll, so `match listener.try_accept()` with `Option.Some(socket)` and `Option.None` arms becomes `match listener.accept(Option.Some(Duration.ZERO))` with `Result.Ok(socket)` and `Result.Err(Socket.Error.TimedOut)` arms, and the other `Result.Err` arm now sees the failures `try_accept` hid.
 
 ### Fixed

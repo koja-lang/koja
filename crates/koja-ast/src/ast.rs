@@ -204,8 +204,6 @@ pub enum AnnotationKind<'a> {
         lib: Option<&'a str>,
         name: Option<&'a str>,
     },
-    /// `@test`: driver test-runner marker.
-    Test,
     /// Anything else: unrecognized name, malformed value shape, or
     /// any annotation the compiler hasn't been taught about. Carries
     /// the raw `name` + `value` borrow so unrecognized-annotation
@@ -265,7 +263,6 @@ impl Annotation {
                     value: self.value.as_ref(),
                 },
             },
-            "test" if self.value.is_none() => AnnotationKind::Test,
             _ => AnnotationKind::Unknown {
                 name: &self.name,
                 value: self.value.as_ref(),
@@ -1645,21 +1642,6 @@ mod annotation_tests {
                 name: "doc",
                 value: None
             }
-        ));
-    }
-
-    #[test]
-    fn test_marker_classifies() {
-        let a = ann("test", None);
-        assert_eq!(a.kind(), AnnotationKind::Test);
-    }
-
-    #[test]
-    fn test_with_value_falls_through_to_unknown() {
-        let a = ann("test", str_value("x"));
-        assert!(matches!(
-            a.kind(),
-            AnnotationKind::Unknown { name: "test", .. }
         ));
     }
 
