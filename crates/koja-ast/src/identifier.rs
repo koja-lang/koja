@@ -9,6 +9,12 @@ use std::fmt;
 /// methods (`is_in_package`, `is_in_global`, `qualified_name`, ...). Internal
 /// representation can evolve without breaking consumers.
 ///
+/// Two renderings. [`Self::qualified_name`] always includes the package
+/// and is the stable key for mangling and debug dumps.
+/// [`Self::source_name`], which `Display` uses, is the spelling source
+/// code writes with no alias in scope, so diagnostics read `IO.Error`
+/// and `Net.TCPSocket` rather than `Global.IO.Error`.
+///
 /// An `Identifier` is by construction a *resolved* global -- there is no
 /// in-flight or sentinel state inside it. The "not yet resolved" case lives
 /// at the AST node level via [`Resolution::Unresolved`].
@@ -59,9 +65,25 @@ impl Identifier {
     }
 
     /// `package.A.B.C` -- the canonical fully-qualified rendering, used as
-    /// a stable string key (e.g. for mangling, debug output, diagnostics).
+    /// a stable string key (e.g. for mangling and the `--emit-ast` dump).
+    /// Diagnostics use [`Self::source_name`] instead.
     pub fn qualified_name(&self) -> String {
         format!("{}.{}", self.package, self.path.join("."))
+    }
+
+    /// The name as source code spells it with no alias in scope. A
+    /// `Global` identifier is its path alone (`IO.Error`, `Binary`),
+    /// since that package is auto-imported. Every other package keeps
+    /// its prefix (`Net.TCPSocket`, `Postgres.Error`), the same for the
+    /// current package as for a dependency, so the rendering does not
+    /// depend on where it is read.
+    pub fn source_name(&self) -> String {
+        let path = self.path.join(".");
+        if self.is_in_global() {
+            path
+        } else {
+            format!("{}.{path}", self.package)
+        }
     }
 
     pub fn is_in_package(&self, pkg: &str) -> bool {
@@ -75,7 +97,38 @@ impl Identifier {
 
 impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.qualified_name())
+        write!(f, "{}", self.source_name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Identifier;
+
+    #[test]
+    fn source_name_drops_the_global_package() {
+        let nested = Identifier::new("Global", vec!["IO".into(), "Error".into()]);
+        assert_eq!(nested.source_name(), "IO.Error");
+        assert_eq!(nested.to_string(), "IO.Error");
+
+        let single = Identifier::single("Global", "Binary");
+        assert_eq!(single.source_name(), "Binary");
+    }
+
+    #[test]
+    fn source_name_keeps_every_other_package() {
+        let nested = Identifier::new("Net", vec!["Socket".into(), "Error".into()]);
+        assert_eq!(nested.source_name(), "Net.Socket.Error");
+        assert_eq!(nested.to_string(), "Net.Socket.Error");
+    }
+
+    #[test]
+    fn qualified_name_always_includes_the_package() {
+        let global = Identifier::new("Global", vec!["IO".into(), "Error".into()]);
+        assert_eq!(global.qualified_name(), "Global.IO.Error");
+
+        let net = Identifier::single("Net", "TCPSocket");
+        assert_eq!(net.qualified_name(), "Net.TCPSocket");
     }
 }
 

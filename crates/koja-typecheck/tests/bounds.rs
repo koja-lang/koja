@@ -158,7 +158,7 @@ fn call_site_with_unimplemented_bound_diagnoses() {
     assert_script_fails_with(
         source,
         &[
-            "does not implement protocol `Greeter`",
+            "does not implement protocol `TestApp.Greeter`",
             "required by type parameter `T`",
         ],
     );
@@ -181,7 +181,7 @@ fn tuple_call_site_with_custom_bound_diagnoses() {
     assert_script_fails_with(
         source,
         &[
-            "does not implement protocol `Marked`",
+            "does not implement protocol `TestApp.Marked`",
             "required by type parameter `T`",
         ],
     );
@@ -268,13 +268,13 @@ fn call_site_with_partial_multi_bound_diagnoses_missing_protocol() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("does not implement protocol `Shower`")),
+            .any(|m| m.contains("does not implement protocol `TestApp.Shower`")),
         "expected missing-Shower-bound diagnostic, got {messages:?}",
     );
     assert!(
         !messages
             .iter()
-            .any(|m| m.contains("does not implement protocol `Greeter`")),
+            .any(|m| m.contains("does not implement protocol `TestApp.Greeter`")),
         "did not expect a Greeter diagnostic (Point implements Greeter); got {messages:?}",
     );
 }
@@ -317,7 +317,10 @@ fn threaded_type_parameter_requires_matching_protocol_arguments() {
         end
         ";
 
-    assert_script_fails_with(source, &["does not implement protocol `Source<Int>`"]);
+    assert_script_fails_with(
+        source,
+        &["does not implement protocol `TestApp.Source<Int>`"],
+    );
 }
 
 #[test]
@@ -401,7 +404,7 @@ fn parameterized_bound_rejects_mismatched_protocol_argument() {
     assert_script_fails_with(
         source,
         &[
-            "does not implement protocol `Source<Int>`",
+            "does not implement protocol `TestApp.Source<Int>`",
             "required by type parameter `E`",
         ],
     );
@@ -488,5 +491,8 @@ fn conditional_conformance_rejects_mismatched_protocol_argument() {
         use_marker(Pair{fallback: \"no\", source: IntSource{value: 1}})
         ";
 
-    assert_script_fails_with(source, &["does not implement protocol `Marker<String>`"]);
+    assert_script_fails_with(
+        source,
+        &["does not implement protocol `TestApp.Marker<String>`"],
+    );
 }

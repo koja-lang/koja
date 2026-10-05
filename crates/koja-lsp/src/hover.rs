@@ -72,7 +72,8 @@ fn global_hover(
     entry: &RegistryEntry,
 ) -> Option<String> {
     let registry = analysis.registry;
-    let name = entry.identifier.last();
+    let name = entry.identifier.source_name();
+    let name = name.as_str();
     let type_params = entry.type_params.as_slice();
     let signature = match &entry.kind {
         GlobalKind::Function(_) => signature::function_signature(analysis, id)?,

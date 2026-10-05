@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Two nested types with the same last name, such as `File.Error` and `IO.Error`, stay distinct in a union. Before, `File.Error | IO.Error` collapsed to one member and a value of the other was rejected.
+- Diagnostics spell a nested type by its full path, so a mismatch reads `expects IO.Error, got File.Error` where both printed as `Error` before. Types from `Global` drop the `Global.` prefix they carried in some messages, and types from every other package keep theirs, so a type reads the same way in every message.
 - A read, write, or wait that a signal interrupts fails with `Interrupted`. Before, the interpreter recorded no cause for it, so the caller saw a stale one.
 - `koja format` no longer panics on a comment inside an empty list, map, or struct literal. The literal stays broken open with the comment inside, the layout an empty call argument list already used.
 - A field default can be a struct literal named through a dotted path, such as `options: IO.Reader.Options = IO.Reader.Options{}`, or through a file alias. Enum variants with a payload, such as `Option.Some(3)`, are accepted as defaults too. Before, the dotted literal was rejected and the aliased one could panic the compiler.

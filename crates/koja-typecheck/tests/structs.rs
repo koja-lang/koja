@@ -228,7 +228,7 @@ fn builtin_struct_literal_construction_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["cannot construct builtin type `Global.Int` with struct literal syntax"],
+        &["cannot construct builtin type `Int` with struct literal syntax"],
     );
 }
 
@@ -310,7 +310,7 @@ fn field_access_on_non_struct_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["field access requires a struct receiver, got `Global.Int` (builtin)"],
+        &["field access requires a struct receiver, got `Int` (builtin)"],
     );
 }
 
@@ -808,7 +808,10 @@ fn generic_protocol_impl_with_wrong_concrete_arg_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["does not match protocol", "Global.String", "Global.Int"],
+        &[
+            "does not match protocol `TestApp.Match`",
+            "expected `String`, got `Int`",
+        ],
     );
 }
 

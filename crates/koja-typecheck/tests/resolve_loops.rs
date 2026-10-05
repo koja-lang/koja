@@ -182,7 +182,7 @@ fn for_over_unrelated_struct_requires_enumeration_conformance() {
         ";
     assert_script_fails_with(
         source,
-        &["type `Bare` in a `for` loop must implement `Enumeration<T, Cursor>`"],
+        &["type `TestApp.Bare` in a `for` loop must implement `Enumeration<T, Cursor>`"],
     );
 }
 
@@ -221,7 +221,7 @@ fn for_requires_nominal_conformance_even_with_matching_functions() {
         ";
     assert_script_fails_with(
         source,
-        &["type `Structural` in a `for` loop must implement `Enumeration<T, Cursor>`"],
+        &["type `TestApp.Structural` in a `for` loop must implement `Enumeration<T, Cursor>`"],
     );
 }
 

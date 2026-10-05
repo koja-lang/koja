@@ -323,6 +323,6 @@ fn conditional_protocol_method_is_unavailable_on_unmet_instantiation() {
 
     common::assert_script_fails_with(
         source,
-        &["`Box<Int>` does not implement `Show`, so `show` is unavailable"],
+        &["`TestApp.Box<Int>` does not implement `TestApp.Show`, so `show` is unavailable"],
     );
 }

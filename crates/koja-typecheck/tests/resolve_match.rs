@@ -1305,7 +1305,10 @@ fn match_nested_missing_case_reports_witness_pattern() {
 
           classify(Option.None)
         ";
-    assert_script_fails_with(source, &["not exhaustive", "`Option.Some(Color.Green)`"]);
+    assert_script_fails_with(
+        source,
+        &["not exhaustive", "`Option.Some(TestApp.Color.Green)`"],
+    );
 }
 
 #[test]
@@ -1358,7 +1361,10 @@ fn match_struct_bool_fields_combine_and_report_named_witness() {
 
           classify(Flags{a: true, b: true})
         ";
-    assert_script_fails_with(source, &["not exhaustive", "`Flags{a: false, b: false}`"]);
+    assert_script_fails_with(
+        source,
+        &["not exhaustive", "`TestApp.Flags{a: false, b: false}`"],
+    );
 }
 
 #[test]
@@ -1431,7 +1437,10 @@ fn match_guarded_nested_arm_does_not_count_toward_coverage() {
 
           classify(Option.None)
         ";
-    assert_script_fails_with(source, &["not exhaustive", "`Option.Some(Color.Green)`"]);
+    assert_script_fails_with(
+        source,
+        &["not exhaustive", "`Option.Some(TestApp.Color.Green)`"],
+    );
 }
 
 /// Typecheck a script and return the type of its trailing expression.
@@ -1538,7 +1547,7 @@ fn match_binding_with_holes_in_every_arm_still_cannot_infer() {
         end
         o
         ",
-        &["cannot infer type parameter `T` of `Global.Option`"],
+        &["cannot infer type parameter `T` of `Option`"],
     );
 }
 
@@ -1563,6 +1572,6 @@ fn match_many_missing_cases_lists_three_then_counts_the_rest() {
         ";
     assert_script_fails_with(
         source,
-        &["`Suit.Diamonds`, `Suit.Hearts`, `Suit.Spades` and 1 more"],
+        &["`TestApp.Suit.Diamonds`, `TestApp.Suit.Hearts`, `TestApp.Suit.Spades` and 1 more"],
     );
 }

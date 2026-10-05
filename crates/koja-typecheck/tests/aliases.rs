@@ -116,7 +116,7 @@ fn alias_shadowing_global_is_error() {
     assert_file_fails_with(
         "alias Crypto.SHA256 as Int\n\
          fn main\n  1\nend\n",
-        &["alias `Int` would shadow", "Global.Int"],
+        &["alias `Int` would shadow", "existing builtin `Int`"],
     );
 }
 

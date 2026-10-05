@@ -1,1 +1,1 @@
-match is not exhaustive. Missing pattern(s) `Option.Some(Color.Green)`
+match is not exhaustive. Missing pattern(s) `Option.Some(match_nested_partial_exhaustive.Color.Green)`

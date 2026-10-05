@@ -361,6 +361,6 @@ fn equality_infers_generic_left_operand_from_right() {
 fn equality_with_generic_calls_on_both_sides_still_cannot_infer() {
     assert_script_fails_with(
         "CPtr.null() == CPtr.null()\n",
-        &["cannot infer type parameter `T` of `Global.CPtr`"],
+        &["cannot infer type parameter `T` of `CPtr`"],
     );
 }
