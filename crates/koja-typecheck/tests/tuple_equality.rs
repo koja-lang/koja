@@ -110,8 +110,8 @@ fn non_equality_element_diagnoses() {
     assert_fails_with_hint(
         &source,
         &[
-            "cannot compare tuples containing `Box<Float>`",
-            "`Box<Float>` does not implement `Equality`",
+            "cannot compare tuples containing `TestApp.Box<Float>`",
+            "`TestApp.Box<Float>` does not implement `Equality`",
         ],
     );
 }

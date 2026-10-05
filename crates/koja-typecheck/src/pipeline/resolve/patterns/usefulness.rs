@@ -648,7 +648,7 @@ fn render_witness(
 fn type_name(id: GlobalRegistryId, registry: &GlobalRegistry) -> String {
     registry
         .get(id)
-        .map(|entry| entry.identifier.last().to_string())
+        .map(|entry| entry.identifier.source_name())
         .unwrap_or_else(|| "_".to_string())
 }
 

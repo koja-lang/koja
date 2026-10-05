@@ -120,7 +120,7 @@ fn discharge_recurses_through_nesting() {
 fn discharge_rejects_unsatisfying_instantiation() {
     assert_script_fails_with(
         &codec_script("render([1, 2]).print()"),
-        &["does not implement protocol `Encodable`"],
+        &["does not implement protocol `TestApp.Encodable`"],
     );
 }
 
@@ -145,7 +145,7 @@ fn generic_threading_requires_the_declared_bound() {
             wrap([\"a\"]).print()
             ",
         ),
-        &["does not implement protocol `Encodable`"],
+        &["does not implement protocol `TestApp.Encodable`"],
     );
 }
 

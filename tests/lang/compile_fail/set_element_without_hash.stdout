@@ -1,1 +1,1 @@
-type `Key` does not implement protocol `Hash` (required by type parameter `T` in `Global.Set`)
+type `set_element_without_hash.Key` does not implement protocol `Hash` (required by type parameter `T` in `Set`)

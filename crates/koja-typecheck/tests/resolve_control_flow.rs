@@ -265,8 +265,5 @@ fn cond_binding_with_holes_in_every_arm_still_cannot_infer() {
           else -> Option.None
         end
         ";
-    assert_script_fails_with(
-        source,
-        &["cannot infer type parameter `T` of `Global.Option`"],
-    );
+    assert_script_fails_with(source, &["cannot infer type parameter `T` of `Option`"]);
 }

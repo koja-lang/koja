@@ -281,7 +281,7 @@ fn bound_rejects_the_other_instantiation() {
 
         render([\"a\"]).print()
         ",
-        &["does not implement protocol `Encodable`"],
+        &["does not implement protocol `TestApp.Encodable`"],
     );
 }
 
@@ -377,7 +377,7 @@ fn duplicate_concrete_instantiation_diagnosed() {
             1.print()
             ",
         )],
-        &["duplicate `impl", "Global.List<Global.Int>`"],
+        &["duplicate `impl TestApp.Encodable for List<Int>`"],
     );
 }
 
@@ -414,7 +414,7 @@ fn duplicate_concrete_instantiation_across_packages_diagnosed() {
                 ",
             ),
         ],
-        &["duplicate `impl", "Global.List<Global.Int>`"],
+        &["duplicate `impl Lib.Encodable for List<Int>`"],
     );
 }
 
