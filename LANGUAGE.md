@@ -19,7 +19,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
 - [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`, Runtime Observability
 - [Testing](#testing): `test` Blocks, `assert`, `Test.Failure`, Setup and Skips, Panics, Running Tests
-- [Annotations](#annotations): `@deprecated`, `@doc`, `@test` (deprecated)
+- [Annotations](#annotations): `@deprecated`, `@doc`
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
 - [Standard Library](#standard-library): Core Types, Collections, String Functions, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
 - [Tooling](#tooling): CLI Commands, Custom Tasks, LSP, Formatter
@@ -2166,6 +2166,9 @@ and short labels like `@link` library names stay on one line.
 
 The FFI annotations `@extern` and `@link` are covered in [C FFI](#c-ffi).
 
+`@test` was removed in 0.20. The compiler points an old annotation at its
+replacement, the [`test` block](#testing).
+
 ### `@deprecated`
 
 Marks a declaration as deprecated. Every use produces a compile warning:
@@ -2211,19 +2214,6 @@ end
 `@doc` on a `priv` declaration is a compile error, since private items never appear in generated documentation.
 
 Doc strings support Markdown and are rendered by `koja doc`.
-
-### `@test`
-
-Deprecated in 0.19 and removed in 0.20. Use a [`test` block](#testing).
-
-`@test "description"` on a function marks it as a test case. `koja test` still runs it, on a `! String` or `! Test.Failure` channel or with a `-> Result<T, String>` return, and reports a warning at the annotation:
-
-```
-warning: `@test` is deprecated. Koja 0.20 removes it.
-help: move the body into a `test "description"` block
-```
-
-Old and new forms run side by side in one project, so a package can migrate one file at a time.
 
 ---
 

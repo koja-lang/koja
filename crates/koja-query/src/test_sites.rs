@@ -16,9 +16,7 @@ use koja_ast::visit::{self, Visitor};
 use crate::Analysis;
 
 /// The span of every test in `file`, in source order. A `test` block
-/// spans from its keyword to its `end`. A legacy `@test` function
-/// spans from `fn` to its `end`, which is the line discovery uses for
-/// it too.
+/// spans from its keyword to its `end`.
 pub fn tests_in_file(analysis: &Analysis<'_>, file: FileId) -> Vec<Span> {
     let Some(ast) = analysis.file(file) else {
         return Vec::new();
@@ -37,13 +35,9 @@ struct Collector {
 
 impl<'ast> Visitor<'ast> for Collector {
     fn visit_function(&mut self, function: &'ast Function) {
-        if is_test(function) {
+        if function.origin == FunctionOrigin::Test {
             self.spans.push(function.span);
         }
         visit::walk_function(self, function);
     }
-}
-
-fn is_test(function: &Function) -> bool {
-    function.origin == FunctionOrigin::Test || function.annotations.iter().any(|a| a.name == "test")
 }

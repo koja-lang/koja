@@ -331,11 +331,10 @@ fn protocol_default_ranges_cannot_overlap_explicit_arities() {
 }
 
 #[test]
-fn adapters_do_not_inherit_test_or_doc_annotations() {
+fn adapters_do_not_inherit_doc_annotations() {
     let checked = typecheck_file(&dedent(
         r#"
         struct Example
-          @test "uses a default"
           @doc "Checks a default."
           fn check(value: Int = 1) -> Result<Bool, String>
             Result.Ok(value == 1)
@@ -344,19 +343,12 @@ fn adapters_do_not_inherit_test_or_doc_annotations() {
         "#,
     ));
     let declaration = common::find_struct_decl(&checked, "Example");
-    let test_count = declaration
-        .functions
-        .iter()
-        .flat_map(|function| &function.annotations)
-        .filter(|annotation| annotation.name == "test")
-        .count();
     let doc_count = declaration
         .functions
         .iter()
         .flat_map(|function| &function.annotations)
         .filter(|annotation| matches!(annotation.kind(), AnnotationKind::Doc(_)))
         .count();
-    assert_eq!(test_count, 1);
     assert_eq!(doc_count, 1);
 }
 

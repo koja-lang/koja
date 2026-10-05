@@ -4,7 +4,8 @@
 //! is `@name` optionally followed by a single value: `false`, a
 //! quoted string, or a triple-quoted string. Other shapes (numbers,
 //! identifiers, structured values) are not currently part of the
-//! surface.
+//! surface. `@test` was removed in 0.20 and is reported with its
+//! replacement, the `test "..."` block.
 
 use koja_ast::ast::{Annotation, AnnotationValue};
 use koja_ast::token::TokenKind;
@@ -15,29 +16,36 @@ impl Parser {
     pub(crate) fn parse_annotations(&mut self) -> Vec<Annotation> {
         let mut annotations = Vec::new();
         while self.at(&TokenKind::At) {
-            annotations.push(self.parse_annotation());
+            if let Some(annotation) = self.parse_annotation() {
+                annotations.push(annotation);
+            }
             self.skip_newlines();
         }
         annotations
     }
 
-    pub(crate) fn parse_annotation(&mut self) -> Annotation {
+    /// Parses one annotation. A removed `@test` is reported and
+    /// dropped, so the declaration it sat on parses as plain and
+    /// later passes report nothing spurious.
+    pub(crate) fn parse_annotation(&mut self) -> Option<Annotation> {
         let start = self.current_span();
         self.advance(); // @
-        // `test` is a keyword since the `test "..."` block landed, but
-        // the `@test` annotation stays readable through its
-        // deprecation window.
-        let name = if self.eat(&TokenKind::Test).is_some() {
-            "test".to_string()
-        } else {
-            self.expect_ident()
-        };
+        if self.eat(&TokenKind::Test).is_some() {
+            self.parse_annotation_value();
+            self.error_with_hint(
+                "`@test` was removed in 0.20".to_string(),
+                "move the body into a `test \"description\"` block".to_string(),
+                self.span_from(start),
+            );
+            return None;
+        }
+        let name = self.expect_ident();
         let value = self.parse_annotation_value();
-        Annotation {
+        Some(Annotation {
             name,
             value,
             span: self.span_from(start),
-        }
+        })
     }
 
     fn parse_annotation_value(&mut self) -> Option<AnnotationValue> {

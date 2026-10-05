@@ -262,15 +262,15 @@ fn stacked_annotations_on_function() {
     assert_fmt(
         "
         @doc \"Hashes a password.\"
-        @test
-        fn test_hash
+        @deprecated \"Use hash2.\"
+        fn hash
           x = 1
         end
         ",
         "
         @doc \"Hashes a password.\"
-        @test
-        fn test_hash
+        @deprecated \"Use hash2.\"
+        fn hash
           x = 1
         end
         ",
