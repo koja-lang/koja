@@ -55,7 +55,7 @@ before = Process.context()
 (inside, spawned, under_call) =
   Trace.root(
     "request",
-    Trace.SpanKind.Server,
+    Trace.RootOptions{kind: Trace.SpanKind.Server},
     fn (span: Trace.Span) -> (Process.Context, Process.Context, Ref<EchoMsg, Process.Context>)
       inside = Process.context()
       echo = spawn Echo.start(())
