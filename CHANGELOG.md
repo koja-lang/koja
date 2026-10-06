@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The language server rechecks open documents when a `.koja` file or `koja.toml` changes on disk.
 - A `const` can hold a list, map, or set literal, such as `const PRIMES = [2, 3, 5, 7]` or `const PORTS = ["http": 80]`, and a struct or enum variant whose fields hold one. A constant value takes the same grammar as a field default, so it can also read another constant declared anywhere in the program. A collection constant is built once at program start and every read borrows the shared value. A constant that depends on itself through other constants is a compile error.
 - A union widens into a wider union that holds all of its members, the same way one member does. A `Cat | Dog` value flows into a `Cat | Dog | Fish` slot, and a function that fails with `ParseError | NetError` can be called with `try`, or rescued with `rescue e -> fail e`, from one that fails with `ParseError | NetError | AuthError`. Before, both were type errors.
+- `@experimental` marks a declaration as unstable. Every use warns with `` `Name` is experimental and may change in a later release. ``, the tag's optional message, and a hint that names the opt-in. It goes where `@deprecated` goes, with the same carve-outs inside the tagged declaration and in `impl`/`extend` blocks on a tagged target, and does not combine with `@doc false`. `koja doc` marks a tagged item `experimental` and renders an `Experimental` callout.
+- `experimental = true` under `[project]` in `koja.toml` accepts `@experimental` declarations in that package's own files without a warning. The flag is per package, so a dependency's flag does not cover the project and the project's flag does not cover a dependency.
 
 ### Changed
 

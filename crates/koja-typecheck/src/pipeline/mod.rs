@@ -23,8 +23,8 @@
 //!   their borrowing statement.
 //! - [`definite_assignment::check_file`]: reject reads of locals not
 //!   assigned on every path.
-//! - [`deprecation::check_file`]: warn on uses of `@deprecated`
-//!   declarations.
+//! - [`stability::check_file`]: warn on uses of `@deprecated` and
+//!   `@experimental` declarations.
 //! - [`seal::seal_ast`]: assert sealed-AST invariants.
 //!
 //! Errors return before seal, so seal only sees successful trees.
@@ -34,12 +34,12 @@ pub(crate) mod borrows;
 pub(crate) mod collect;
 pub(crate) mod defaults;
 pub(crate) mod definite_assignment;
-pub(crate) mod deprecation;
 pub(crate) mod desugar;
 pub(crate) mod lift_signatures;
 pub(crate) mod local_scope;
 pub(crate) mod resolve;
 pub(crate) mod seal;
+pub(crate) mod stability;
 pub(crate) mod synthesize;
 pub(crate) mod unify;
 pub(crate) mod visibility;

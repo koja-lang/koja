@@ -4,7 +4,7 @@
 //! `ParsedProgram` on failure. Seal is asserted as the last sub-pass
 //! and panics on violation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use koja_ast::ast::{Diagnostic, File, Severity};
@@ -13,10 +13,21 @@ use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
 use crate::pipeline::{
-    aliases, borrows, collect, defaults, definite_assignment, deprecation, desugar,
-    lift_signatures, resolve, seal, synthesize, visibility,
+    aliases, borrows, collect, defaults, definite_assignment, desugar, lift_signatures, resolve,
+    seal, stability, synthesize, visibility,
 };
 use crate::registry::GlobalRegistry;
+
+/// Knobs the driver passes into [`check_program_with`]. The default
+/// is what [`check_program`] uses.
+#[derive(Debug, Clone, Default)]
+pub struct CheckOptions {
+    /// Packages whose manifest set `experimental = true`. Uses of
+    /// `@experimental` declarations inside these packages do not
+    /// warn. Keyed by package namespace, the same string
+    /// [`CheckedPackage::package`] carries.
+    pub experimental_packages: BTreeSet<String>,
+}
 
 /// A package fragment of a [`CheckedProgram`].
 #[derive(Debug, Clone)]
@@ -72,10 +83,21 @@ impl CheckedProgram {
 /// 9. Resolve and type-check every body, rewriting `for` on the way.
 /// 10. Reject escaping `CPtr.borrow` results.
 /// 11. Reject reads of locals not definitely assigned on every path.
-/// 12. Warn on uses of `@deprecated` declarations.
+/// 12. Warn on uses of `@deprecated` and `@experimental` declarations.
 /// 13. Return [`CheckFailure`] if any errors were collected.
 /// 14. Seal AST and registry invariants.
+///
+/// Runs with [`CheckOptions::default`]. Callers with a project
+/// manifest use [`check_program_with`].
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
+    check_program_with(parsed, &CheckOptions::default())
+}
+
+/// [`check_program`] with explicit [`CheckOptions`].
+pub fn check_program_with(
+    parsed: ParsedProgram,
+    options: &CheckOptions,
+) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
             diagnostics: Vec::new(),
@@ -151,9 +173,9 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         definite_assignment::check_file(file, &registry, diags);
     });
 
-    // Deprecation warnings also read post-resolve stamps.
+    // Stability warnings also read post-resolve stamps.
     for_each_file(&packages, &mut diagnostics, |file, package, diags| {
-        deprecation::check_file(file, package, &registry, diags);
+        stability::check_file(file, package, &registry, options, diags);
     });
 
     if diagnostics.iter().any(|d| d.severity == Severity::Error) {

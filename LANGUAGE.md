@@ -2196,6 +2196,45 @@ positions, construction, patterns, constant reads), except inside the
 deprecated declaration itself and inside `impl`/`extend` blocks whose target
 is deprecated, so deprecating a type does not flag its own functions.
 
+### `@experimental`
+
+Marks a declaration as unstable. It stays documented and callable, and
+every use produces a compile warning:
+
+```koja
+@experimental """
+The export record shape is not final.
+"""
+struct Trace.Export
+  # ...
+end
+```
+
+```
+warning: `Trace.Export` is experimental and may change in a later release. The export record shape is not final. (hint: set `experimental = true` under `[project]` in koja.toml to accept this)
+```
+
+The message is optional. Bare `@experimental` warns with the fixed sentence
+alone. This differs from `@deprecated`, where the message must name the
+replacement. An empty message is a compile error.
+
+`@experimental` is accepted on the same declarations as `@deprecated` and
+suppresses warnings at the same places, inside the tagged declaration and
+inside `impl`/`extend` blocks whose target is tagged. A declaration can carry
+both tags, and a use then produces both warnings.
+
+A package accepts experimental declarations with `experimental = true` under
+`[project]` in its `koja.toml`. The flag silences the warning in that
+package's own files only. A dependency's flag does not cover the project, and
+the project's flag does not cover a dependency. Scripts and single files have
+no manifest and always warn.
+
+`@experimental` and `@doc false` do not combine. `@doc false` hides a
+declaration from the docs, which is the marker for an internal you do not
+want others to depend on. `@experimental` keeps the declaration in the docs
+with a callout and warns at each use. Putting both on one declaration is a
+compile error.
+
 ### `@doc`
 
 Documents a function, struct, or enum:
@@ -2209,7 +2248,11 @@ fn add(a: Int32, b: Int32) -> Int32
 end
 ```
 
-`@doc false` excludes an item from generated documentation.
+`@doc false` excludes an item from generated documentation. Use it on a
+public declaration that exists for another package's benefit and that you do
+not want others to depend on. It is a documentation convention, not a
+compiler wall. To publish an unstable declaration with a warning instead of
+hiding it, use [`@experimental`](#experimental).
 
 `@doc` on a `priv` declaration is a compile error, since private items never appear in generated documentation.
 
@@ -3280,6 +3323,7 @@ Fields:
 - `src`: source directories (default `["src"]`).
 - `test`: test directories (default `["test"]`).
 - `koja`: minimum compiler version, e.g. `koja = "0.17.0"`. A bare version, no operators. An older compiler refuses the package (and any package depending on it) with an error naming both versions.
+- `experimental`: `true` accepts [`@experimental`](#experimental) declarations in this package's own files without a warning (default `false`). Each package in the graph sets its own flag.
 
 A `[dependencies]` table declares path and git dependencies (see [Dependencies](#dependencies)), and a `[tasks]` table exports custom CLI tasks (see [Custom Tasks](#custom-tasks)).
 

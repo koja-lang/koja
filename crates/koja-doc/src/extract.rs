@@ -46,11 +46,19 @@ impl PackageKind {
     }
 }
 
+/// The `@experimental` tag on an item. `message` is the optional
+/// payload, dedented and trimmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocExperimental {
+    pub message: Option<String>,
+}
+
 /// Summary of a documentable item for the flat index listing.
 #[derive(Debug)]
 pub struct DocItem {
     pub deprecated: Option<String>,
     pub doc: Option<String>,
+    pub experimental: Option<DocExperimental>,
     pub kind: String,
     pub href: String,
     pub name: String,
@@ -95,6 +103,7 @@ pub struct DocImplementor {
 pub struct DocConstant {
     pub deprecated: Option<String>,
     pub doc: Option<String>,
+    pub experimental: Option<DocExperimental>,
     pub name: String,
 }
 
@@ -104,6 +113,7 @@ pub struct DocEnum {
     pub conformances: Vec<DocConformance>,
     pub deprecated: Option<String>,
     pub doc: Option<String>,
+    pub experimental: Option<DocExperimental>,
     pub functions: Vec<DocFunction>,
     pub name: String,
     pub variants: Vec<String>,
@@ -126,6 +136,7 @@ pub struct DocFunction {
     pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub error_type: Option<String>,
+    pub experimental: Option<DocExperimental>,
     pub name: String,
     pub params: Vec<DocParam>,
     pub return_type: Option<String>,
@@ -145,6 +156,7 @@ pub struct DocParam {
 pub struct DocProtocol {
     pub deprecated: Option<String>,
     pub doc: Option<String>,
+    pub experimental: Option<DocExperimental>,
     pub functions: Vec<DocFunction>,
     pub implementors: Vec<DocImplementor>,
     pub name: String,
@@ -158,6 +170,7 @@ pub struct DocBuiltin {
     pub conformances: Vec<DocConformance>,
     pub deprecated: Option<String>,
     pub doc: Option<String>,
+    pub experimental: Option<DocExperimental>,
     pub functions: Vec<DocFunction>,
     pub name: String,
     pub type_params: Vec<String>,
@@ -169,6 +182,7 @@ pub struct DocStruct {
     pub conformances: Vec<DocConformance>,
     pub deprecated: Option<String>,
     pub doc: Option<String>,
+    pub experimental: Option<DocExperimental>,
     pub fields: Vec<DocField>,
     pub functions: Vec<DocFunction>,
     pub name: String,
@@ -752,6 +766,7 @@ fn finalize_package(pkg: &mut DocPackage) {
         pkg.items.push(DocItem {
             deprecated: b.deprecated.clone(),
             doc: b.doc.clone(),
+            experimental: b.experimental.clone(),
             kind: "builtin".to_string(),
             href: b.name.clone(),
             name: b.name.clone(),
@@ -761,6 +776,7 @@ fn finalize_package(pkg: &mut DocPackage) {
         pkg.items.push(DocItem {
             deprecated: c.deprecated.clone(),
             doc: c.doc.clone(),
+            experimental: c.experimental.clone(),
             kind: "const".to_string(),
             href: c.name.clone(),
             name: c.name.clone(),
@@ -770,6 +786,7 @@ fn finalize_package(pkg: &mut DocPackage) {
         pkg.items.push(DocItem {
             deprecated: e.deprecated.clone(),
             doc: e.doc.clone(),
+            experimental: e.experimental.clone(),
             kind: "enum".to_string(),
             href: e.name.clone(),
             name: e.name.clone(),
@@ -779,6 +796,7 @@ fn finalize_package(pkg: &mut DocPackage) {
         pkg.items.push(DocItem {
             deprecated: f.deprecated.clone(),
             doc: f.doc.clone(),
+            experimental: f.experimental.clone(),
             kind: "fn".to_string(),
             href: f.page_name(),
             name: f.display_name(),
@@ -788,6 +806,7 @@ fn finalize_package(pkg: &mut DocPackage) {
         pkg.items.push(DocItem {
             deprecated: p.deprecated.clone(),
             doc: p.doc.clone(),
+            experimental: p.experimental.clone(),
             kind: "protocol".to_string(),
             href: p.name.clone(),
             name: p.name.clone(),
@@ -797,6 +816,7 @@ fn finalize_package(pkg: &mut DocPackage) {
         pkg.items.push(DocItem {
             deprecated: s.deprecated.clone(),
             doc: s.doc.clone(),
+            experimental: s.experimental.clone(),
             kind: "struct".to_string(),
             href: s.name.clone(),
             name: s.name.clone(),
@@ -824,6 +844,20 @@ fn annotation_deprecated(annotations: &[koja_ast::ast::Annotation]) -> Option<St
         };
         let message = dedent(message).trim().to_string();
         (!message.is_empty()).then_some(message)
+    })
+}
+
+/// The `@experimental` tag, with its message dedented and trimmed
+/// when one is present.
+fn annotation_experimental(annotations: &[koja_ast::ast::Annotation]) -> Option<DocExperimental> {
+    annotations.iter().find_map(|annotation| {
+        let AnnotationKind::Experimental { message } = annotation.kind() else {
+            return None;
+        };
+        let message = message
+            .map(|text| dedent(text).trim().to_string())
+            .filter(|text| !text.is_empty());
+        Some(DocExperimental { message })
     })
 }
 
@@ -937,6 +971,7 @@ fn extract_constant(c: &koja_ast::ast::Constant, path: &[String]) -> Option<DocC
     Some(DocConstant {
         deprecated: annotation_deprecated(&c.annotations),
         doc: annotation_string(&c.annotations),
+        experimental: annotation_experimental(&c.annotations),
         name: path.join("."),
     })
 }
@@ -953,6 +988,7 @@ fn extract_enum(e: &EnumDecl, path: &[String]) -> Option<DocEnum> {
         conformances: header_conformances(&e.conformances),
         deprecated: annotation_deprecated(&e.annotations),
         doc: annotation_string(&e.annotations),
+        experimental: annotation_experimental(&e.annotations),
         functions,
         name: path.join("."),
         variants,
@@ -976,6 +1012,7 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
         deprecated: annotation_deprecated(&f.annotations),
         doc: annotation_string(&f.annotations),
         error_type: f.error_type.as_ref().map(type_expr_to_string),
+        experimental: annotation_experimental(&f.annotations),
         name: f.name.text.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
@@ -1019,6 +1056,7 @@ fn extract_protocol(p: &ProtocolDecl, path: &[String]) -> Option<DocProtocol> {
     Some(DocProtocol {
         deprecated: annotation_deprecated(&p.annotations),
         doc: annotation_string(&p.annotations),
+        experimental: annotation_experimental(&p.annotations),
         functions,
         implementors: Vec::new(),
         name: path.join("."),
@@ -1046,6 +1084,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
         deprecated: annotation_deprecated(&m.annotations),
         doc: annotation_string(&m.annotations),
         error_type: m.error_type.as_ref().map(type_expr_to_string),
+        experimental: annotation_experimental(&m.annotations),
         name: m.name.text.clone(),
         params,
         return_type: m.return_type.as_ref().map(type_expr_to_string),
@@ -1077,6 +1116,7 @@ fn extract_struct(s: &StructDecl, path: &[String]) -> Option<DocStruct> {
         conformances: header_conformances(&s.conformances),
         deprecated: annotation_deprecated(&s.annotations),
         doc: annotation_string(&s.annotations),
+        experimental: annotation_experimental(&s.annotations),
         fields,
         functions,
         name: path.join("."),
@@ -1096,6 +1136,7 @@ fn extract_builtin(b: &BuiltinDecl) -> Option<DocBuiltin> {
         conformances: Vec::new(),
         deprecated: annotation_deprecated(&b.annotations),
         doc: annotation_string(&b.annotations),
+        experimental: annotation_experimental(&b.annotations),
         functions: b.functions.iter().filter_map(extract_function).collect(),
         name: b.name().to_string(),
         type_params: b

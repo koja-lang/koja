@@ -393,7 +393,12 @@ fn adapter_annotations(
 ) -> Vec<koja_ast::ast::Annotation> {
     annotations
         .iter()
-        .filter(|annotation| matches!(annotation.kind(), AnnotationKind::Deprecated { .. }))
+        .filter(|annotation| {
+            matches!(
+                annotation.kind(),
+                AnnotationKind::Deprecated { .. } | AnnotationKind::Experimental { .. }
+            )
+        })
         .cloned()
         .collect()
 }

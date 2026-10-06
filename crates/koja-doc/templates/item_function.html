@@ -16,10 +16,13 @@
     <h1>{{ f.name }}</h1>
     <span class="kind-chip">fn</span>
     {% if f.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
+    {% if f.experimental.is_some() %}<span class="experimental-badge">experimental</span>{% endif %}
   </div>
 
   {% let deprecated = f.deprecated %}
   {% include "deprecation_notice.html" %}
+  {% let experimental = f.experimental %}
+  {% include "experimental_notice.html" %}
 
   <div class="detail-signature codeblock"><code>{{ f.signature_html()|safe }}</code></div>
 

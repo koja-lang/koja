@@ -2,7 +2,7 @@
 //!
 //! Loads the active buffer's project through the compiler's
 //! [`ProjectLoader`] with the open editor buffers as overlays, runs
-//! the pipeline ([`parse_program`] then [`check_program`]), groups
+//! the pipeline ([`parse_program`] then [`check_program_with`]), groups
 //! parse-phase and check-phase diagnostics by the file that owns
 //! them, and publishes each group to its own URI.
 //!
@@ -25,7 +25,7 @@ use koja_project::{
     SourceOrigin, StdlibOptions, find_project_root, load_project, stdlib_sources,
 };
 use koja_query::{Analysis, ReferenceIndex};
-use koja_typecheck::{CheckedPackage, CheckedProgram, check_program};
+use koja_typecheck::{CheckOptions, CheckedPackage, CheckedProgram, check_program_with};
 
 use crate::backend::Backend;
 use crate::code_action::FixData;
@@ -119,11 +119,17 @@ impl Backend {
             }
         };
         let overlays = self.open_document_overlays(&active_path, &buffer.text);
-        let Loaded { sources, warnings } =
-            load_bundle(project.as_ref(), &overlays, extraction_root);
+        let Loaded {
+            experimental_packages,
+            sources,
+            warnings,
+        } = load_bundle(project.as_ref(), &overlays, extraction_root);
         for warning in warnings {
             self.client.log_message(MessageType::WARNING, warning).await;
         }
+        let check_options = CheckOptions {
+            experimental_packages,
+        };
 
         let (active_package, project_paths, project_root) =
             bundle_identity(&sources, &active_path, project);
@@ -153,23 +159,24 @@ impl Backend {
         // Typecheck runs every pass before it reports errors, so the
         // failure path carries the same stamps as the success path
         // and navigation stays available.
-        let (parsed_for_state, registry, has_errors) = match check_program(parsed) {
-            Ok(checked) => {
-                all_diags.extend(checked.diagnostics.iter().cloned());
-                let CheckedProgram {
-                    packages, registry, ..
-                } = checked;
-                (
-                    parsed_from_packages(packages),
-                    Some(Box::new(registry)),
-                    false,
-                )
-            }
-            Err(failure) => {
-                all_diags.extend(failure.diagnostics);
-                (failure.partial, failure.registry, true)
-            }
-        };
+        let (parsed_for_state, registry, has_errors) =
+            match check_program_with(parsed, &check_options) {
+                Ok(checked) => {
+                    all_diags.extend(checked.diagnostics.iter().cloned());
+                    let CheckedProgram {
+                        packages, registry, ..
+                    } = checked;
+                    (
+                        parsed_from_packages(packages),
+                        Some(Box::new(registry)),
+                        false,
+                    )
+                }
+                Err(failure) => {
+                    all_diags.extend(failure.diagnostics);
+                    (failure.partial, failure.registry, true)
+                }
+            };
 
         let grouped = group_by_file(all_diags, &sources, &active_path, &project_paths);
 
@@ -296,6 +303,7 @@ fn load_bundle(
         link_tests: true,
     };
     let stdlib_alone = || Loaded {
+        experimental_packages: BTreeSet::new(),
         sources: stdlib_sources(&BTreeSet::new(), &stdlib()),
         warnings: Vec::new(),
     };

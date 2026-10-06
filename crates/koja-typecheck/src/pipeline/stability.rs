@@ -1,8 +1,14 @@
-//! Post-resolve deprecation warnings. Every use that resolves to a
-//! `@deprecated` registry entry warns at the use span. Uses inside
-//! the deprecated decl itself, and inside `impl` / `extend` blocks
-//! whose target is deprecated, are suppressed so deprecating a type
-//! does not flag its own methods.
+//! Post-resolve stability warnings. Every use that resolves to a
+//! `@deprecated` or `@experimental` registry entry warns at the use
+//! span. Uses inside the tagged decl itself, and inside `impl` /
+//! `extend` blocks whose target is tagged, are suppressed so tagging
+//! a type does not flag its own methods.
+//!
+//! Experimental warnings are also suppressed for every file in a
+//! package that opted in through `experimental = true` in its
+//! manifest. The driver passes those packages in
+//! [`CheckOptions::experimental_packages`]. Deprecation warnings
+//! have no opt-out.
 //!
 //! Expression uses read the [`Resolution::Global`] stamps resolve
 //! left behind (idents, static receivers) or the [`ResolvedType`]
@@ -22,12 +28,14 @@ use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::resolve::types::{lookup_type, peel_alias};
-use crate::registry::{GlobalKind, GlobalRegistry};
+use crate::program::CheckOptions;
+use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
 
 pub(crate) fn check_file(
     file: &File,
     package: &str,
     registry: &GlobalRegistry,
+    options: &CheckOptions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let aliases = collect_file_aliases(file);
@@ -37,6 +45,7 @@ pub(crate) fn check_file(
         registry,
     };
     let mut walker = Walker {
+        allow_experimental: options.experimental_packages.contains(package),
         diagnostics,
         scope,
         type_params: Vec::new(),
@@ -44,16 +53,27 @@ pub(crate) fn check_file(
     walker.visit_file(file);
 }
 
-/// Whether the decl carries a well-formed `@deprecated` annotation.
-/// Its own body and signature never warn about other deprecated
-/// items (or itself).
-fn is_deprecated(annotations: &[Annotation]) -> bool {
-    annotations
-        .iter()
-        .any(|a| matches!(a.kind(), AnnotationKind::Deprecated { .. }))
+/// Whether the decl carries a well-formed `@deprecated` or
+/// `@experimental` annotation. Its own body and signature never warn
+/// about other tagged items (or itself).
+fn is_tagged(annotations: &[Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        matches!(
+            a.kind(),
+            AnnotationKind::Deprecated { .. } | AnnotationKind::Experimental { .. }
+        )
+    })
+}
+
+/// Whether the registry entry carries either stability tag.
+fn entry_is_tagged(entry: &RegistryEntry) -> bool {
+    entry.deprecation.is_some() || entry.experimental.is_some()
 }
 
 struct Walker<'a, 'd> {
+    /// Whether the file's package opted in to experimental
+    /// declarations, which silences every experimental warning in it.
+    allow_experimental: bool,
     diagnostics: &'d mut Vec<Diagnostic>,
     scope: ResolutionScope<'a>,
     /// Generic-param names in scope, so a single-segment type path
@@ -69,40 +89,40 @@ impl Walker<'_, '_> {
         self.type_params.truncate(depth);
     }
 
-    /// Whether the item's own uses never warn. A deprecated decl
+    /// Whether the item's own uses never warn. A tagged decl
     /// suppresses itself, and an `impl` / `extend` block is
-    /// suppressed when its target is deprecated. Functions decide
-    /// for themselves in [`Visitor::visit_function`].
+    /// suppressed when its target is tagged. Functions decide for
+    /// themselves in [`Visitor::visit_function`].
     fn suppressed(&self, item: &Item) -> bool {
         match item {
             Item::Alias(_) | Item::Function(_) => false,
-            Item::Builtin(decl) => is_deprecated(&decl.annotations),
-            Item::Constant(constant) => is_deprecated(&constant.annotations),
-            Item::Enum(decl) => is_deprecated(&decl.annotations),
-            Item::Extend(block) => self.target_is_deprecated(&block.target),
-            Item::Impl(block) => self.target_is_deprecated(&block.target),
-            Item::Protocol(decl) => is_deprecated(&decl.annotations),
-            Item::Struct(decl) => is_deprecated(&decl.annotations),
+            Item::Builtin(decl) => is_tagged(&decl.annotations),
+            Item::Constant(constant) => is_tagged(&constant.annotations),
+            Item::Enum(decl) => is_tagged(&decl.annotations),
+            Item::Extend(block) => self.target_is_tagged(&block.target),
+            Item::Impl(block) => self.target_is_tagged(&block.target),
+            Item::Protocol(decl) => is_tagged(&decl.annotations),
+            Item::Struct(decl) => is_tagged(&decl.annotations),
             Item::Test(_) => {
                 unreachable!("desugar turns test blocks into functions or drops them")
             }
-            Item::TypeAlias(alias) => is_deprecated(&alias.annotations),
+            Item::TypeAlias(alias) => is_tagged(&alias.annotations),
         }
     }
 
-    /// Whether an `impl`/`extend` target resolves to a deprecated
-    /// entry, using the same path lookup collect keyed the block by.
-    fn target_is_deprecated(&self, target: &TypeExpr) -> bool {
+    /// Whether an `impl`/`extend` target resolves to a tagged entry,
+    /// using the same path lookup collect keyed the block by.
+    fn target_is_tagged(&self, target: &TypeExpr) -> bool {
         let Some(path) = nominal_target_path(target) else {
             return false;
         };
         matches!(
             lookup_type(&name_texts(path), self.scope),
-            Some((_, entry)) if entry.deprecation.is_some()
+            Some((_, entry)) if entry_is_tagged(entry)
         )
     }
 
-    /// Warn when a source type path names a deprecated entry.
+    /// Warn when a source type path names a tagged entry.
     /// In-scope generic params shadow globals, so those never warn.
     fn warn_type_path(&mut self, path: &[Name], span: Span) {
         if path.len() == 1 && self.type_params.contains(&path[0].text) {
@@ -114,17 +134,11 @@ impl Walker<'_, '_> {
         self.warn_use(id, span);
     }
 
-    /// Warn when a method call lands on a deprecated function entry.
-    /// The receiver's own deprecation is warned separately, by the
-    /// `Ident` hook for statics or wherever the value was produced
-    /// for instances.
-    fn warn_deprecated_method(
-        &mut self,
-        receiver: &Expr,
-        method: &Name,
-        explicit_arity: usize,
-        span: Span,
-    ) {
+    /// Warn when a method call lands on a tagged function entry.
+    /// The receiver's own tag is warned separately, by the `Ident`
+    /// hook for statics or wherever the value was produced for
+    /// instances.
+    fn warn_method(&mut self, receiver: &Expr, method: &Name, explicit_arity: usize, span: Span) {
         let static_type_id = match &receiver.kind {
             ExprKind::Ident {
                 resolution: Resolution::Global(id),
@@ -175,7 +189,7 @@ impl Walker<'_, '_> {
     }
 
     /// Warn when a construction expression's resolved head names a
-    /// deprecated type.
+    /// tagged type.
     fn warn_resolution_head(&mut self, resolution: &ResolvedType, span: Span) {
         if let ResolvedType::Named {
             resolution: Resolution::Global(id),
@@ -186,23 +200,39 @@ impl Walker<'_, '_> {
         }
     }
 
+    /// Push one warning per stability tag on the entry. A decl that
+    /// carries both tags warns twice at the same span.
     fn warn_use(&mut self, id: GlobalRegistryId, span: Span) {
         let Some(entry) = self.scope.registry.get(id) else {
             return;
         };
-        let Some(message) = entry.deprecation.as_ref() else {
-            return;
-        };
-        // The LSP keys its deprecated-tag detection off this message
-        // shape (koja-lsp's `is_deprecation_warning`). Keep the two
-        // in sync when changing the wording.
-        self.diagnostics.push(Diagnostic::warning(
-            format!(
-                "`{}` is deprecated. {message}",
-                entry.identifier.path().join("."),
-            ),
-            span,
-        ));
+        let name = entry.identifier.path().join(".");
+        if let Some(message) = entry.deprecation.as_ref() {
+            // The LSP keys its deprecated-tag detection off this
+            // message shape (koja-lsp's `is_deprecation_warning`).
+            // Keep the two in sync when changing the wording.
+            self.diagnostics.push(Diagnostic::warning(
+                format!("`{name}` is deprecated. {message}"),
+                span,
+            ));
+        }
+        if let Some(tag) = entry
+            .experimental
+            .as_ref()
+            .filter(|_| !self.allow_experimental)
+        {
+            let mut text = format!("`{name}` is experimental and may change in a later release.");
+            if let Some(message) = tag.message.as_ref() {
+                text.push(' ');
+                text.push_str(message);
+            }
+            self.diagnostics.push(Diagnostic::warning_with_hint(
+                text,
+                "set `experimental = true` under `[project]` in koja.toml to accept this"
+                    .to_string(),
+                span,
+            ));
+        }
     }
 }
 
@@ -215,7 +245,7 @@ impl<'ast> Visitor<'ast> for Walker<'_, '_> {
     }
 
     fn visit_function(&mut self, function: &'ast Function) {
-        if is_deprecated(&function.annotations) {
+        if is_tagged(&function.annotations) {
             return;
         }
         self.scoped(|walker| visit::walk_function(walker, function));
@@ -256,7 +286,7 @@ impl<'ast> Visitor<'ast> for Walker<'_, '_> {
                 method,
                 args,
                 ..
-            } => self.warn_deprecated_method(receiver, method, args.len(), expr.span),
+            } => self.warn_method(receiver, method, args.len(), expr.span),
             _ => {}
         }
         visit::walk_expr(self, expr);

@@ -125,6 +125,12 @@ pub struct LoadOptions {
 /// never has any.
 #[derive(Default)]
 pub struct Loaded {
+    /// Namespaces of the packages whose manifest set
+    /// `experimental = true`. The project is in the set when its own
+    /// manifest did, and each dependency is in the set when its
+    /// manifest did. The typechecker silences experimental warnings
+    /// inside these packages only.
+    pub experimental_packages: BTreeSet<String>,
     pub sources: Vec<LoadedSource>,
     pub warnings: Vec<String>,
 }
@@ -165,6 +171,9 @@ impl<'a> ProjectLoader<'a> {
 
         let mut collection = Collection::default();
         collection.claimed.insert(namespace.clone());
+        if self.config.experimental {
+            collection.experimental.insert(namespace.clone());
+        }
 
         self.push_package(
             &namespace,
@@ -195,6 +204,7 @@ impl<'a> ProjectLoader<'a> {
         };
         sources.append(&mut collection.out);
         Ok(Loaded {
+            experimental_packages: collection.experimental,
             sources,
             warnings: collection.warnings,
         })
@@ -289,6 +299,9 @@ impl<'a> ProjectLoader<'a> {
         };
         for dep in resolved {
             collection.claimed.insert(dep.namespace.clone());
+            if dep.experimental {
+                collection.experimental.insert(dep.namespace.clone());
+            }
             self.push_package(
                 &dep.namespace,
                 &dep.src,
@@ -304,12 +317,14 @@ impl<'a> ProjectLoader<'a> {
 
 /// Mutable accumulator threaded through a single [`ProjectLoader::sources`]
 /// run. It holds the project and dependency sources, the packages
-/// they claim (which the stdlib rule leaves out), the paths already
-/// seen (so overlapping roots do not double-count a file), and the
-/// warnings a `Lenient` load collects.
+/// they claim (which the stdlib rule leaves out), the packages that
+/// opted in to experimental declarations, the paths already seen (so
+/// overlapping roots do not double-count a file), and the warnings a
+/// `Lenient` load collects.
 #[derive(Default)]
 struct Collection {
     claimed: BTreeSet<String>,
+    experimental: BTreeSet<String>,
     out: Vec<LoadedSource>,
     seen_paths: BTreeSet<PathBuf>,
     warnings: Vec<String>,
@@ -528,6 +543,52 @@ mod tests {
                 .iter()
                 .any(|s| s.path.ends_with("main_test.koja") && s.origin == SourceOrigin::Project)
         );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn experimental_packages_collects_each_opted_in_manifest() {
+        let root = unique_temp("experimental");
+        write(
+            &root.join("koja.toml"),
+            "[project]\nname = \"main\"\nversion = \"0.1.0\"\nexperimental = true\n\n\
+             [dependencies]\nopted = { path = \"libs/opted\" }\nplain = { path = \"libs/plain\" }\n",
+        );
+        write(&root.join("src/main.koja"), "// main\n");
+        write(
+            &root.join("libs/opted/koja.toml"),
+            "[project]\nname = \"opted\"\nversion = \"0.1.0\"\nexperimental = true\n",
+        );
+        write(&root.join("libs/opted/src/opted.koja"), "// opted\n");
+        write(
+            &root.join("libs/plain/koja.toml"),
+            "[project]\nname = \"plain\"\nversion = \"0.1.0\"\n",
+        );
+        write(&root.join("libs/plain/src/plain.koja"), "// plain\n");
+        let config = manifest::load_project(&root).unwrap().unwrap();
+
+        let loaded = ProjectLoader::new(&config, &root)
+            .sources(strict(false))
+            .unwrap();
+        assert_eq!(
+            loaded.experimental_packages,
+            BTreeSet::from(["Main".to_string(), "Opted".to_string()])
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn unflagged_manifests_leave_experimental_packages_empty() {
+        let root = unique_temp("not-experimental");
+        scaffold(&root, "greeter");
+        let config = manifest::load_project(&root).unwrap().unwrap();
+
+        let loaded = ProjectLoader::new(&config, &root)
+            .sources(strict(false))
+            .unwrap();
+        assert!(loaded.experimental_packages.is_empty());
 
         fs::remove_dir_all(&root).ok();
     }
