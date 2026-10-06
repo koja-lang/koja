@@ -16,10 +16,13 @@
     <h1>{{ b.name }}{% if !b.type_params.is_empty() %}&lt;{{ b.type_params.join(", ") }}&gt;{% endif %}</h1>
     <span class="kind-chip">builtin</span>
     {% if b.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
+    {% if b.experimental.is_some() %}<span class="experimental-badge">experimental</span>{% endif %}
   </div>
 
   {% let deprecated = b.deprecated %}
   {% include "deprecation_notice.html" %}
+  {% let experimental = b.experimental %}
+  {% include "experimental_notice.html" %}
 
   {% if let Some(doc) = b.doc %}
   <div class="detail-doc">{{ doc|md }}</div>
@@ -35,6 +38,7 @@
     <div class="summary-row">
       <div class="summary-name"><a href="#{{ f.anchor() }}">{{ f.name }}/{{ f.arity }}</a></div>
       {% if f.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
+      {% if f.experimental.is_some() %}<span class="experimental-badge">experimental</span>{% endif %}
       {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
     </div>
     {% endfor %}

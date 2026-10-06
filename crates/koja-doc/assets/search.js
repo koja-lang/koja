@@ -98,6 +98,9 @@
         (hit.deprecated
           ? '<span class="deprecated-badge">deprecated</span>'
           : "") +
+        (hit.experimental
+          ? '<span class="experimental-badge">experimental</span>'
+          : "") +
         '<span class="search-result-kind">' +
         escapeHtml(hit.kind) +
         "</span>" +

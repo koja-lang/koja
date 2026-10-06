@@ -30,6 +30,9 @@ const REV_MARKER: &str = ".koja-rev";
 /// One package in the resolved dependency graph, ready for the
 /// loader to walk.
 pub struct ResolvedDep {
+    /// The dep's own `experimental = true` opt-in, which silences
+    /// experimental warnings inside its files only.
+    pub experimental: bool,
     /// Lowercase package identity (the `deps/<name>` directory).
     pub name: String,
     /// PascalCase code namespace stamped on the package's files.
@@ -254,6 +257,7 @@ impl Resolver {
         let dep_config = load_dep_manifest(&canonical, alias)?;
         self.claim_package(&dep_config, declared_by)?;
         self.resolved.push(ResolvedDep {
+            experimental: dep_config.experimental,
             name: dep_config.name.clone(),
             namespace: dep_config.namespace(),
             root: canonical.clone(),
@@ -333,6 +337,7 @@ impl Resolver {
         }
 
         self.resolved.push(ResolvedDep {
+            experimental: dep_config.experimental,
             name,
             namespace: dep_config.namespace(),
             root: dep_root.clone(),

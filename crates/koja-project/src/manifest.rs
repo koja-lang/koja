@@ -164,6 +164,11 @@ pub struct ProjectConfig {
     /// The project entry point type. Must be a PascalCase type implementing `Process<C, M, R>`.
     #[serde(default)]
     pub entry: Option<String>,
+    /// Accept `@experimental` declarations in this package's own
+    /// files without a warning. Does not cover dependencies, and a
+    /// dependency's opt-in does not cover this package.
+    #[serde(default)]
+    pub experimental: bool,
     /// Minimum compiler version, e.g. "0.15.0". A bare version, no operators.
     #[serde(default)]
     pub koja: Option<String>,
@@ -456,6 +461,28 @@ mod tests {
             "#,
         );
         assert_eq!(config.binary_name(), "gh");
+    }
+
+    #[test]
+    fn experimental_defaults_to_false_and_reads_the_flag() {
+        let plain = parse(
+            r#"
+            [project]
+            name = "gh"
+            version = "0.1.0"
+            "#,
+        );
+        assert!(!plain.experimental);
+
+        let opted = parse(
+            r#"
+            [project]
+            name = "gh"
+            version = "0.1.0"
+            experimental = true
+            "#,
+        );
+        assert!(opted.experimental);
     }
 
     #[test]

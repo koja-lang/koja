@@ -81,7 +81,9 @@ use koja_project::{
     StdlibOptions, manifest, stdlib_sources,
 };
 use koja_test::{HARNESS_ENTRY, discover_tests, generate_harness, select_tests};
-use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
+use koja_typecheck::{
+    CheckFailure, CheckOptions, CheckedProgram, check_program_with, format_registry,
+};
 
 use crate::commands::{load_project_or_exit, try_load_project};
 use crate::diagnostics::{DiagnosticFormat, SourceTable, render_program_diagnostics};
@@ -485,16 +487,19 @@ pub fn cmd_check(project_root: Option<&Path>, file: Option<String>, emit_ast: bo
 pub fn cmd_shell(project_root: Option<&Path>) {
     let ShellSession {
         baseline,
+        options,
         session_package,
     } = shell_session(project_root);
-    koja_shell::run(baseline, session_package);
+    koja_shell::run(baseline, session_package, options);
 }
 
-/// What the REPL evaluates against: the baseline sources plus the
-/// package the session source belongs to (the project's package in a
-/// project, so its modules resolve unqualified, otherwise `REPL`).
+/// What the REPL evaluates against. The baseline sources, the
+/// [`CheckOptions`] the project manifests produced, and the package
+/// the session source belongs to (the project's package in a project,
+/// so its modules resolve unqualified, otherwise `REPL`).
 struct ShellSession {
     baseline: Vec<SourceFile>,
+    options: CheckOptions,
     session_package: String,
 }
 
@@ -538,6 +543,9 @@ fn shell_session(project_root: Option<&Path>) -> ShellSession {
             }
             ShellSession {
                 baseline: loaded.sources.into_iter().map(into_source_file).collect(),
+                options: CheckOptions {
+                    experimental_packages: loaded.experimental_packages,
+                },
                 session_package: config.namespace(),
             }
         }
@@ -550,6 +558,7 @@ fn shell_session(project_root: Option<&Path>) -> ShellSession {
 fn stdlib_session() -> ShellSession {
     ShellSession {
         baseline: stdlib_bundle(true),
+        options: CheckOptions::default(),
         session_package: koja_shell::SESSION_PACKAGE.to_string(),
     }
 }
@@ -744,7 +753,11 @@ fn run_task(
     };
 
     let program = if provider.toolchain {
-        lower_task_harness(stdlib_bundle(false), provider)
+        let bundled = ProjectBundle {
+            options: CheckOptions::default(),
+            sources: stdlib_bundle(false),
+        };
+        lower_task_harness(bundled, provider)
     } else {
         let (config, root) = project
             .as_ref()
@@ -814,7 +827,7 @@ fn build_task_program(
 ) -> IRProgram {
     let bundled = collect_project_sources_or_exit(config, root, false);
 
-    let checked = check_bundle(bundled.clone(), ParseMode::File);
+    let checked = check_bundle(bundled.sources.clone(), ParseMode::File, &bundled.options);
     check_task_conformance(&checked, task_name, provider);
 
     lower_task_harness(bundled, provider)
@@ -823,8 +836,8 @@ fn build_task_program(
 /// Splice the task harness into the provider's package, check, and
 /// lower with [`TASK_HARNESS_ENTRY`] as the entry. Bails the process
 /// on any failure.
-fn lower_task_harness(bundled: Vec<SourceFile>, provider: &TaskProvider) -> IRProgram {
-    let mut parsed = parse_program(bundled, ParseMode::File);
+fn lower_task_harness(bundled: ProjectBundle, provider: &TaskProvider) -> IRProgram {
+    let mut parsed = parse_program(bundled.sources, ParseMode::File);
     splice_generated_source(
         &mut parsed,
         provider.namespace.clone(),
@@ -832,8 +845,8 @@ fn lower_task_harness(bundled: Vec<SourceFile>, provider: &TaskProvider) -> IRPr
         generate_task_harness(&provider.type_name),
     );
     let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    let checked = check_program_with(parsed, &bundled.options)
+        .unwrap_or_else(|failure| bail_check_failure(failure, &sources));
 
     let entry = Identifier::new(
         provider.namespace.clone(),
@@ -968,23 +981,29 @@ fn read_and_check(path: &Path, mode: ParseMode, include_tests: bool) -> (Checked
         path: path.to_path_buf(),
         source,
     });
-    let checked = check_bundle(bundled, mode);
+    let checked = check_bundle(bundled, mode, &CheckOptions::default());
     (checked, package)
 }
 
 /// Parse and typecheck a bundled compilation unit, printing any
 /// warnings. Bails the process with rendered diagnostics on
-/// failure.
-fn check_bundle(bundled: Vec<SourceFile>, mode: ParseMode) -> CheckedProgram {
-    check_parsed(parse_program(bundled, mode))
+/// failure. Single-file and script callers pass
+/// [`CheckOptions::default`], project callers pass the options their
+/// [`ProjectBundle`] carries.
+fn check_bundle(
+    bundled: Vec<SourceFile>,
+    mode: ParseMode,
+    options: &CheckOptions,
+) -> CheckedProgram {
+    check_parsed(parse_program(bundled, mode), options)
 }
 
 /// [`check_bundle`] for an already-parsed program, for callers that
 /// splice generated sources between parse and check.
-fn check_parsed(parsed: ParsedProgram) -> CheckedProgram {
+fn check_parsed(parsed: ParsedProgram, options: &CheckOptions) -> CheckedProgram {
     let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    let checked = check_program_with(parsed, options)
+        .unwrap_or_else(|failure| bail_check_failure(failure, &sources));
     print_check_warnings(&checked, &sources);
     checked
 }
@@ -1096,7 +1115,7 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
 /// `emit_ast` is set).
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
     let bundled = collect_project_sources_or_exit(config, root, true);
-    let checked = check_bundle(bundled, ParseMode::File);
+    let checked = check_bundle(bundled.sources, ParseMode::File, &bundled.options);
     if emit_ast {
         emit_checked_ast(&checked);
     } else {
@@ -1153,7 +1172,10 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
     // `test/stack_test.koja:12:12` like the harness lines do. Stdlib
     // paths are synthetic and never under the root, so they pass
     // through unchanged.
-    let bundled = collect_project_sources_or_exit(config, root, true)
+    let bundled = collect_project_sources_or_exit(config, root, true);
+    let check_options = bundled.options;
+    let sources = bundled
+        .sources
         .into_iter()
         .map(|file| SourceFile {
             path: file
@@ -1164,7 +1186,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
             ..file
         })
         .collect();
-    let mut parsed = parse_program(bundled, ParseMode::File);
+    let mut parsed = parse_program(sources, ParseMode::File);
     if parsed.has_errors() {
         let sources = capture_sources(&parsed);
         eprintln!(
@@ -1197,7 +1219,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
         generate_harness(&tests),
     );
 
-    let checked = check_parsed(parsed);
+    let checked = check_parsed(parsed, &check_options);
     let entry = Identifier::single(namespace, HARNESS_ENTRY);
     let program = match lower_program(&checked, &entry) {
         Ok(program) => program,
@@ -1417,7 +1439,7 @@ fn exec_binary(binary: &str, args: &[String], remove_after: bool) -> ! {
 /// process with a formatted error on any failure.
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
     let bundled = collect_project_sources_or_exit(config, root, false);
-    let checked = check_bundle(bundled, ParseMode::File);
+    let checked = check_bundle(bundled.sources, ParseMode::File, &bundled.options);
     let entry = resolve_project_entry(config);
     match lower_program(&checked, &entry) {
         Ok(program) => program,
@@ -1463,7 +1485,7 @@ fn collect_project_sources_or_exit(
     config: &ProjectConfig,
     root: &Path,
     include_tests: bool,
-) -> Vec<SourceFile> {
+) -> ProjectBundle {
     let loaded = ProjectLoader::new(config, root)
         .sources(LoadOptions {
             dependencies: Dependencies::Sync,
@@ -1479,7 +1501,19 @@ fn collect_project_sources_or_exit(
             eprintln!("error: {err}");
             process::exit(1);
         });
-    loaded.sources.into_iter().map(into_source_file).collect()
+    ProjectBundle {
+        options: CheckOptions {
+            experimental_packages: loaded.experimental_packages,
+        },
+        sources: loaded.sources.into_iter().map(into_source_file).collect(),
+    }
+}
+
+/// A loaded project as the typechecker consumes it, the parser inputs
+/// and the [`CheckOptions`] its manifests produced.
+struct ProjectBundle {
+    options: CheckOptions,
+    sources: Vec<SourceFile>,
 }
 
 /// Default output path for project builds:
@@ -1641,7 +1675,7 @@ mod tests {
             path: PathBuf::from("probe.kojs"),
             source: source.to_string(),
         });
-        let checked = check_bundle(bundled, ParseMode::Script);
+        let checked = check_bundle(bundled, ParseMode::Script, &CheckOptions::default());
         lower_script(&checked).expect("script lowers")
     }
 

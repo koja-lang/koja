@@ -278,6 +278,23 @@ fn stacked_annotations_on_function() {
 }
 
 #[test]
+fn experimental_annotations_bare_and_with_message_are_canonical() {
+    assert_unchanged(
+        "
+        @experimental
+        struct Span
+          id: Int
+        end
+
+        @experimental \"The export record shape is not final.\"
+        fn export(span: Span) -> Int
+          span.id
+        end
+        ",
+    );
+}
+
+#[test]
 fn extern_c_function_no_body() {
     assert_fmt(
         "

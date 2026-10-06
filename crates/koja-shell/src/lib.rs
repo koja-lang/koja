@@ -25,7 +25,7 @@ use koja_ast::token::TokenKind;
 use koja_ir::{IRScript, IRType, lower_script};
 use koja_ir_eval::{Interpreter, Value};
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
-use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
+use koja_typecheck::{CheckFailure, CheckOptions, CheckedProgram, check_program_with};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
@@ -99,7 +99,7 @@ enum InputOutcome {
 /// multi-line block, where applicable) is added as one entry so
 /// up-arrow recalls prior commands within the session, but
 /// nothing is persisted to disk.
-pub fn run(baseline: Vec<SourceFile>, session_package: String) {
+pub fn run(baseline: Vec<SourceFile>, session_package: String, options: CheckOptions) {
     print!("{BANNER}");
     if !baseline.is_empty() {
         println!("{} source file(s) in scope", baseline.len());
@@ -114,7 +114,7 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
         }
     };
 
-    let mut session = Session::new(baseline, session_package);
+    let mut session = Session::new(baseline, session_package, options);
     editor.set_helper(Some(ShellHelper::new(session.initial_completion())));
     loop {
         let input = match read_input(&mut editor, session.counter()) {
@@ -253,6 +253,9 @@ struct Session {
     /// scope the REPL evaluates against, not session input.
     baseline: Vec<SourceFile>,
     counter: u32,
+    /// Typecheck knobs the driver read from the project manifests.
+    /// Fixed for the session, like the baseline.
+    options: CheckOptions,
     /// Package the synthesized session source belongs to. In a project
     /// this is the project's package name, so its modules resolve
     /// unqualified, otherwise [`SESSION_PACKAGE`].
@@ -261,10 +264,11 @@ struct Session {
 }
 
 impl Session {
-    fn new(baseline: Vec<SourceFile>, package: String) -> Self {
+    fn new(baseline: Vec<SourceFile>, package: String, options: CheckOptions) -> Self {
         Self {
             baseline,
             counter: 1,
+            options,
             package,
             statements: Vec::new(),
         }
@@ -318,7 +322,7 @@ impl Session {
     /// real errors on the first eval.
     fn initial_completion(&self) -> CompletionContext {
         let (sources, path) = self.sources();
-        match check_fragment(sources, &path, false) {
+        match check_fragment(sources, &path, false, &self.options) {
             Ok(checked) => CompletionContext::of(&checked, self.package.clone(), &path),
             Err(_) => CompletionContext::empty(self.package.clone()),
         }
@@ -327,7 +331,7 @@ impl Session {
     /// Synthesize the full session source and evaluate it.
     fn run(&self) -> Result<EvalOutcome, String> {
         let (sources, path) = self.sources();
-        eval_fragment(sources, &path, &self.package)
+        eval_fragment(sources, &path, &self.package, &self.options)
     }
 
     /// The baseline plus the synthesized session fragment, and the
@@ -388,14 +392,16 @@ struct EvalOutcome {
 /// `sources` is the driver-supplied baseline (stdlib prelude plus, in
 /// a project, the project + dependency sources) with the REPL
 /// fragment appended last. `fragment_path` identifies that fragment
-/// file for the rewrite and the binding walk, and `package` labels
-/// the completion snapshot.
+/// file for the rewrite and the binding walk, `package` labels the
+/// completion snapshot, and `options` are the session's typecheck
+/// knobs.
 fn eval_fragment(
     sources: Vec<SourceFile>,
     fragment_path: &Path,
     package: &str,
+    options: &CheckOptions,
 ) -> Result<EvalOutcome, String> {
-    let checked = check_fragment(sources.clone(), fragment_path, false)?;
+    let checked = check_fragment(sources.clone(), fragment_path, false, options)?;
     let completion = CompletionContext::of(&checked, package.to_string(), fragment_path);
     let probe = lower_checked(&checked)?;
     if probe.return_type == IRType::Unit {
@@ -405,8 +411,8 @@ fn eval_fragment(
             rendered: None,
         });
     }
-    let formatted =
-        check_fragment(sources, fragment_path, true).and_then(|wrapped| lower_checked(&wrapped));
+    let formatted = check_fragment(sources, fragment_path, true, options)
+        .and_then(|wrapped| lower_checked(&wrapped));
     let value = match formatted {
         Ok(script) => run_script(&script)?,
         Err(_) => run_script(&probe)?,
@@ -429,12 +435,13 @@ fn check_fragment(
     sources: Vec<SourceFile>,
     fragment_path: &Path,
     wrap: bool,
+    options: &CheckOptions,
 ) -> Result<CheckedProgram, String> {
     let mut parsed = parse_program(sources, ParseMode::Script);
     if wrap {
         wrap_trailing_in_format(&mut parsed, fragment_path);
     }
-    check_program(parsed).map_err(format_check_failure)
+    check_program_with(parsed, options).map_err(format_check_failure)
 }
 
 fn lower_checked(checked: &CheckedProgram) -> Result<IRScript, String> {
@@ -645,7 +652,8 @@ mod tests {
         source: &str,
     ) -> Result<Option<String>, String> {
         let (sources, path) = fragment_sources(baseline, package, source);
-        eval_fragment(sources, &path, package).map(|outcome| outcome.rendered)
+        eval_fragment(sources, &path, package, &CheckOptions::default())
+            .map(|outcome| outcome.rendered)
     }
 
     #[test]

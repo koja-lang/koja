@@ -11,6 +11,7 @@
         href="{{ ctx.root_prefix }}{{ pkg }}/{{ item.href }}.html" title="{{ item.name }}">
         <span class="rail-label">{{ item.name }}</span>
         {% if item.deprecated.is_some() %}<span class="rail-kind">deprecated</span>{% endif %}
+        {% if item.experimental.is_some() %}<span class="rail-kind">experimental</span>{% endif %}
       </a>
     </li>
     {% endfor %}

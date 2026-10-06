@@ -2,11 +2,13 @@
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
-//! Single public entry point: [`check_program`]. It runs every
-//! sub-pass internally and returns a sealed [`CheckedProgram`] on
-//! success or a [`CheckFailure`] on failure. Diagnostics flow through
-//! the shared `koja_ast::ast::Diagnostic` vocabulary. Seal violations
-//! panic (compiler bugs, not user errors).
+//! Single public entry point: [`check_program`], or
+//! [`check_program_with`] when the caller has [`CheckOptions`] from
+//! a project manifest. It runs every sub-pass internally and returns
+//! a sealed [`CheckedProgram`] on success or a [`CheckFailure`] on
+//! failure. Diagnostics flow through the shared
+//! `koja_ast::ast::Diagnostic` vocabulary. Seal violations panic
+//! (compiler bugs, not user errors).
 //!
 //! Project-mode files keep their function items on `File.items`.
 //! Script-mode files keep their top-level statements on `File.body`.
@@ -29,10 +31,12 @@ mod registry;
 pub use error::CheckFailure;
 pub use koja_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
 pub use pipeline::{Substitution, peel_alias, substitute};
-pub use program::{CheckedPackage, CheckedProgram, check_program};
+pub use program::{
+    CheckOptions, CheckedPackage, CheckedProgram, check_program, check_program_with,
+};
 pub use registry::{
     BoundOverlay, BuiltinDefinition, BuiltinShape, Candidate, CandidateDetail, CandidateKind,
-    Conformance, ConformanceScope, ConstantDefinition, Dispatch, EnumDefinition,
+    Conformance, ConformanceScope, ConstantDefinition, Dispatch, EnumDefinition, ExperimentalTag,
     FunctionDefinition, FunctionOrigin, FunctionSignature, GlobalKind, GlobalRegistry, KEYWORDS,
     ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
     ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,

@@ -29,8 +29,8 @@ use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedTyp
 use koja_ast::util::dedent;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::{
-    CheckFailure, CheckedProgram, EnumDefinition, FunctionSignature, GlobalKind, StructDefinition,
-    check_program,
+    CheckFailure, CheckOptions, CheckedProgram, EnumDefinition, FunctionSignature, GlobalKind,
+    StructDefinition, check_program_with,
 };
 
 pub const PACKAGE: &str = "TestApp";
@@ -74,6 +74,7 @@ pub fn parse_and_check(source: &str, mode: ParseMode) -> Result<CheckedProgram, 
             source: source.to_string(),
         }],
         mode,
+        &CheckOptions::default(),
     )
 }
 
@@ -84,6 +85,16 @@ pub fn check_packages(
     files: &[(&str, &str, &str)],
     mode: ParseMode,
 ) -> Result<CheckedProgram, CheckFailure> {
+    check_packages_with(files, mode, &CheckOptions::default())
+}
+
+/// [`check_packages`] with explicit [`CheckOptions`], for the
+/// per-package knobs a manifest would set.
+pub fn check_packages_with(
+    files: &[(&str, &str, &str)],
+    mode: ParseMode,
+    options: &CheckOptions,
+) -> Result<CheckedProgram, CheckFailure> {
     let sources = files
         .iter()
         .map(|(package, name, body)| SourceFile {
@@ -92,7 +103,7 @@ pub fn check_packages(
             source: dedent(body),
         })
         .collect();
-    check_sources(sources, mode)
+    check_sources(sources, mode, options)
 }
 
 /// [`check_packages`] with every file in the test package. Used to
@@ -111,11 +122,12 @@ pub fn check_multi_file(
 fn check_sources(
     user_sources: Vec<SourceFile>,
     mode: ParseMode,
+    options: &CheckOptions,
 ) -> Result<CheckedProgram, CheckFailure> {
     let mut sources = koja_stdlib::autoimport_sources();
     sources.extend(koja_stdlib::qualified_sources());
     sources.extend(user_sources);
-    check_program(parse_program(sources, mode))
+    check_program_with(parse_program(sources, mode), options)
 }
 
 pub fn diagnostic_messages(failure: &CheckFailure) -> Vec<String> {

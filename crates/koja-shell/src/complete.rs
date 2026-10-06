@@ -258,13 +258,15 @@ mod tests {
     use super::*;
     use crate::testutil::{baseline_with_project, fragment_sources};
     use crate::{SESSION_PACKAGE, check_fragment};
+    use koja_typecheck::CheckOptions;
 
     /// Context built the way [`crate::Session`] does: baseline plus
     /// the session `fragment`, checked, then snapshotted.
     fn context(package: &str, fragment: &str) -> CompletionContext {
         let baseline = baseline_with_project();
         let (sources, path) = fragment_sources(&baseline, package, fragment);
-        let checked = check_fragment(sources, &path, false).expect("fragment should check");
+        let checked = check_fragment(sources, &path, false, &CheckOptions::default())
+            .expect("fragment should check");
         CompletionContext::of(&checked, package.to_string(), &path)
     }
 

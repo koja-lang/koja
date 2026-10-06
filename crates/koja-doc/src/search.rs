@@ -11,8 +11,8 @@
 //! the only escaping concern is doc-string content.
 
 use crate::extract::{
-    DocBuiltin, DocConformance, DocConstant, DocEnum, DocFunction, DocPackage, DocProject,
-    DocProtocol, DocStruct,
+    DocBuiltin, DocConformance, DocConstant, DocEnum, DocExperimental, DocFunction, DocPackage,
+    DocProject, DocProtocol, DocStruct,
 };
 
 /// Format `project` as the contents of `doc/search-index.json`,
@@ -36,9 +36,23 @@ pub fn search_index_json(project: &DocProject) -> String {
         out.push_str(&format!("\"brief\":{},", json_str(&symbol.brief())));
         match symbol.deprecated() {
             Some(message) => {
-                out.push_str(&format!("\"deprecated\":{}", json_str(message)));
+                out.push_str(&format!("\"deprecated\":{},", json_str(message)));
             }
-            None => out.push_str("\"deprecated\":null"),
+            None => out.push_str("\"deprecated\":null,"),
+        }
+        match symbol.experimental() {
+            Some(DocExperimental {
+                message: Some(message),
+            }) => {
+                out.push_str(&format!(
+                    "\"experimental\":{{\"message\":{}}}",
+                    json_str(message)
+                ));
+            }
+            Some(DocExperimental { message: None }) => {
+                out.push_str("\"experimental\":{\"message\":null}");
+            }
+            None => out.push_str("\"experimental\":null"),
         }
         out.push('}');
     }
@@ -95,6 +109,17 @@ impl Symbol<'_> {
             SymbolTarget::Function(f) => f.deprecated.as_deref(),
             SymbolTarget::Protocol(p) => p.deprecated.as_deref(),
             SymbolTarget::Struct(s) => s.deprecated.as_deref(),
+        }
+    }
+
+    pub fn experimental(&self) -> Option<&DocExperimental> {
+        match &self.target {
+            SymbolTarget::Builtin(b) => b.experimental.as_ref(),
+            SymbolTarget::Constant(c) => c.experimental.as_ref(),
+            SymbolTarget::Enum(e) => e.experimental.as_ref(),
+            SymbolTarget::Function(f) => f.experimental.as_ref(),
+            SymbolTarget::Protocol(p) => p.experimental.as_ref(),
+            SymbolTarget::Struct(s) => s.experimental.as_ref(),
         }
     }
 
