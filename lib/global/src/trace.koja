@@ -10,6 +10,7 @@ span.attribute("http.response.status_code", 200)
 
 A variable does not convert. Wrap it with `Trace.Attribute.from`.
 """
+@experimental
 struct Trace.Attribute: BoolLiteral, FloatLiteral, IntLiteral, StringLiteral
   value: Bool | Float | Int | String
 
@@ -40,6 +41,7 @@ end
 @doc """
 Why `Trace.Parent.new` refused an id.
 """
+@experimental
 enum Trace.Error
   # `span_id` needs 8 bytes.
   InvalidSpanId
@@ -59,6 +61,7 @@ options = Trace.RootOptions{kind: Trace.SpanKind.Server, parent: Option.Some(par
 Trace.root("GET /entities", options, work)
 ```
 """
+@experimental
 struct Trace.Parent
   sampled: Bool
   span: Int
@@ -112,6 +115,7 @@ What role a span plays in a request. `Server` handles an incoming
 request, `Client` makes an outgoing one, and `Internal` is work in
 between, such as a database query.
 """
+@experimental
 enum Trace.SpanKind
   Client
   Internal
@@ -135,6 +139,7 @@ Trace.root(
 )
 ```
 """
+@experimental
 struct Trace.RootOptions
   kind: Trace.SpanKind = Trace.SpanKind.Internal
   parent: Option<Trace.Parent> = Option.None
@@ -145,6 +150,7 @@ How a span ended. `Unset` is the default and means nothing went wrong
 that the code chose to report. `Error` carries a short message. `Ok` is
 an explicit success mark and is rarely needed.
 """
+@experimental
 enum Trace.Status
   Error(String)
   Ok
@@ -157,6 +163,7 @@ A finished span, the record an exporter pops from `Trace.Export`.
 is `Option.None` for the root of a trace. Timestamps come from
 `Timestamp.now()`, so they are wall-clock microseconds.
 """
+@experimental
 struct Trace.SpanRecord
   attributes: Map<String, Trace.Attribute>
   context: Process.Context
@@ -175,6 +182,7 @@ handle to a record the runtime holds, not a value, so `attribute` and
 closure returns. Under an unsampled context the handle is a no-op and
 records nothing.
 """
+@experimental
 struct Trace.Span
   handle: Int
 
@@ -251,6 +259,7 @@ Trace.root(
 rows = Trace.span("db.query", span -> db.query(sql))
 ```
 """
+@experimental
 struct Trace
   @doc """
   The calling process's context, the value to inject into an outgoing
@@ -393,6 +402,7 @@ The queue of finished spans an exporter drains. The runtime holds at
 most 4096 records. When the queue is full a new record is dropped and
 counted, so a stalled exporter costs spans, not memory.
 """
+@experimental
 struct Trace.Export
   @doc """
   How many finished spans the runtime has dropped because the queue
@@ -414,6 +424,7 @@ end
 # of open span records. `span_take` empties a slot and `span_put`
 # refills it. `span_close` pops the innermost record, which must be the
 # handle given.
+@experimental
 priv struct TraceRuntime
   @intrinsic
   fn export_dropped -> Int

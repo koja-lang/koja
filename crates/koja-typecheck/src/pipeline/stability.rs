@@ -1,8 +1,9 @@
 //! Post-resolve stability warnings. Every use that resolves to a
 //! `@deprecated` or `@experimental` registry entry warns at the use
-//! span. Uses inside the tagged decl itself, and inside `impl` /
-//! `extend` blocks whose target is tagged, are suppressed so tagging
-//! a type does not flag its own methods.
+//! span. Uses inside the tagged decl itself, inside a decl nested
+//! under it, and inside `impl` / `extend` blocks whose target is
+//! tagged, are suppressed so tagging a type does not flag its own
+//! methods or constants.
 //!
 //! Experimental warnings are also suppressed for every file in a
 //! package that opted in through `experimental = true` in its
@@ -90,24 +91,44 @@ impl Walker<'_, '_> {
     }
 
     /// Whether the item's own uses never warn. A tagged decl
-    /// suppresses itself, and an `impl` / `extend` block is
+    /// suppresses itself, a decl nested under a tagged owner is
+    /// suppressed with it, and an `impl` / `extend` block is
     /// suppressed when its target is tagged. Functions decide for
     /// themselves in [`Visitor::visit_function`].
     fn suppressed(&self, item: &Item) -> bool {
         match item {
             Item::Alias(_) | Item::Function(_) => false,
-            Item::Builtin(decl) => is_tagged(&decl.annotations),
-            Item::Constant(constant) => is_tagged(&constant.annotations),
-            Item::Enum(decl) => is_tagged(&decl.annotations),
+            Item::Builtin(decl) => is_tagged(&decl.annotations) || self.owner_is_tagged(&decl.path),
+            Item::Constant(constant) => {
+                is_tagged(&constant.annotations) || self.owner_is_tagged(&constant.path)
+            }
+            Item::Enum(decl) => is_tagged(&decl.annotations) || self.owner_is_tagged(&decl.path),
             Item::Extend(block) => self.target_is_tagged(&block.target),
             Item::Impl(block) => self.target_is_tagged(&block.target),
-            Item::Protocol(decl) => is_tagged(&decl.annotations),
-            Item::Struct(decl) => is_tagged(&decl.annotations),
+            Item::Protocol(decl) => {
+                is_tagged(&decl.annotations) || self.owner_is_tagged(&decl.path)
+            }
+            Item::Struct(decl) => is_tagged(&decl.annotations) || self.owner_is_tagged(&decl.path),
             Item::Test(_) => {
                 unreachable!("desugar turns test blocks into functions or drops them")
             }
             Item::TypeAlias(alias) => is_tagged(&alias.annotations),
         }
+    }
+
+    /// Whether a proper prefix of `path` names a tagged type. Desugar
+    /// hoists a decl written inside a type body to the qualified form
+    /// without the owner's annotations, so this is how a nested
+    /// `const` or type stays inside its tagged owner. The qualified
+    /// form written at top level is the same shape and gets the same
+    /// treatment.
+    fn owner_is_tagged(&self, path: &[Name]) -> bool {
+        (1..path.len()).any(|end| {
+            matches!(
+                lookup_type(&name_texts(&path[..end]), self.scope),
+                Some((_, entry)) if entry_is_tagged(entry)
+            )
+        })
     }
 
     /// Whether an `impl`/`extend` target resolves to a tagged entry,
@@ -200,6 +221,32 @@ impl Walker<'_, '_> {
         }
     }
 
+    /// Warn for the type that owns constant `id` when that type is
+    /// tagged. Resolve folds `Owner.NAME` into one identifier stamped
+    /// with the constant, so the owner's name is gone by the time the
+    /// walker runs. A static call keeps its receiver and warns through
+    /// it, and a constant read should match.
+    fn warn_constant_owner(&mut self, id: GlobalRegistryId, span: Span) {
+        let Some(entry) = self.scope.registry.get(id) else {
+            return;
+        };
+        if !matches!(entry.kind, GlobalKind::Constant(_)) {
+            return;
+        }
+        let Some((_, owner_path)) = entry.identifier.path().split_last() else {
+            return;
+        };
+        if owner_path.is_empty() {
+            return;
+        }
+        let owner = Identifier::new(entry.identifier.package(), owner_path.to_vec());
+        if let Some((owner_id, owner_entry)) = self.scope.registry.lookup(&owner)
+            && entry_is_tagged(owner_entry)
+        {
+            self.warn_use(owner_id, span);
+        }
+    }
+
     /// Push one warning per stability tag on the entry. A decl that
     /// carries both tags warns twice at the same span.
     fn warn_use(&mut self, id: GlobalRegistryId, span: Span) {
@@ -276,8 +323,11 @@ impl<'ast> Visitor<'ast> for Walker<'_, '_> {
             ExprKind::Ident {
                 resolution: Resolution::Global(id),
                 ..
+            } => {
+                self.warn_use(*id, expr.span);
+                self.warn_constant_owner(*id, expr.span);
             }
-            | ExprKind::NamedFunctionReference {
+            ExprKind::NamedFunctionReference {
                 target: Resolution::Global(id),
                 ..
             } => self.warn_use(*id, expr.span),

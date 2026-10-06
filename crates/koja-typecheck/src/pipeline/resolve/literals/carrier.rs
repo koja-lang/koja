@@ -173,7 +173,11 @@ pub(super) fn dispatch_via_carrier(
         } => {
             let mut inner = Expr::new(inner_kind, span);
             inner.resolution = inner_resolution;
-            let receiver = static_receiver(path, *ident_span);
+            // The receiver is compiler-made and copies the carrier's
+            // declaration position, so it is synthetic like the
+            // method name. Position lookups and the stability pass
+            // skip it. The user wrote a literal, not the type's name.
+            let receiver = static_receiver(path, ident_span.as_synthetic());
             expr.kind = ExprKind::MethodCall {
                 receiver: Box::new(receiver),
                 method: Name::new(spec.from_method, span.as_synthetic()),

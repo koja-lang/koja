@@ -2237,9 +2237,11 @@ The message is required and should tell the caller what to use instead. Bare
 `@deprecated` is accepted on functions (top-level, inline, and `impl`/`extend`
 members), structs, enums, constants, type aliases, and protocols, including
 `priv` declarations. Warnings fire at every resolved use site (calls, type
-positions, construction, patterns, constant reads), except inside the
-deprecated declaration itself and inside `impl`/`extend` blocks whose target
-is deprecated, so deprecating a type does not flag its own functions.
+positions, construction, patterns, constant reads). Reading a constant a
+deprecated type owns, such as `Old.ZERO`, warns for the type. Warnings do not
+fire inside the deprecated declaration itself, inside a declaration nested in
+it, or inside `impl`/`extend` blocks whose target is deprecated, so
+deprecating a type does not flag its own functions or constants.
 
 ### `@experimental`
 

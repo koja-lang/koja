@@ -311,6 +311,7 @@ build a context by hand. `Trace` is the only constructor, a trace read
 off the wire enters through the `Trace` setters, and the field list
 can grow.
 """
+@experimental
 struct Process.Context
   flags: Int
   span: Int
@@ -353,6 +354,7 @@ extend Process
   context the process was spawned with, or whatever an enclosing
   `Trace.span` installed.
   """
+  @experimental
   @intrinsic
   fn context -> Process.Context
 

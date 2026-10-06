@@ -395,6 +395,37 @@ fn call_to_experimental_method_warns() {
 }
 
 #[test]
+fn literal_conversion_to_experimental_type_does_not_warn() {
+    // `1` becomes `Attribute.from_int(1)`. The receiver the resolver
+    // builds for that is not a use, so the explicit `Attribute` in
+    // `Attribute.unwrap(1)` is the only warning.
+    let source = "
+        @experimental
+        struct Attribute: IntLiteral
+          value: Int
+
+          fn from_int(value: Int) -> Attribute
+            Attribute{value: value}
+          end
+
+          fn unwrap(attribute: Attribute) -> Int
+            attribute.value
+          end
+        end
+
+        fn work -> Int
+          Attribute.unwrap(1)
+        end
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert_eq!(
+        warnings,
+        vec!["`Attribute` is experimental and may change in a later release.".to_string()],
+        "the literal must not add a second warning",
+    );
+}
+
+#[test]
 fn experimental_type_alias_use_warns() {
     let warnings = script_warnings(
         "
@@ -615,6 +646,88 @@ fn experimental_struct_members_do_not_warn() {
     assert!(
         warnings.is_empty(),
         "an experimental type's own members must not warn: {warnings:?}",
+    );
+}
+
+#[test]
+fn nested_decls_of_experimental_struct_do_not_warn() {
+    // Desugar hoists `const ZERO` and `enum Kind` to `Span.ZERO` and
+    // `Span.Kind` without the owner's tag. Their bodies still count
+    // as inside `Span`.
+    let source = "
+        @experimental
+        struct Span
+          id: Int
+
+          const ZERO = Span{id: 0}
+
+          enum Kind
+            Root
+            Child
+
+            fn of(span: Span) -> Span.Kind
+              span.id == 0 ? Span.Kind.Root : Span.Kind.Child
+            end
+          end
+        end
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert!(
+        warnings.is_empty(),
+        "decls nested under an experimental type must not warn: {warnings:?}",
+    );
+}
+
+#[test]
+fn read_of_nested_constant_warns_for_the_experimental_owner() {
+    // Resolve folds `Span.ZERO` into one identifier for the constant,
+    // so the owner's tag has to be found through the constant.
+    let source = "
+        @experimental
+        struct Span
+          id: Int
+
+          const ZERO = Span{id: 0}
+        end
+
+        fn origin() -> Int
+          Span.ZERO.id
+        end
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert_eq!(
+        warnings,
+        vec!["`Span` is experimental and may change in a later release.".to_string()],
+    );
+}
+
+#[test]
+fn read_of_untagged_package_constant_does_not_warn() {
+    let source = "
+        const LIMIT = 3
+
+        fn limit() -> Int
+          LIMIT
+        end
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn qualified_nested_const_of_experimental_struct_does_not_warn() {
+    let source = "
+        @experimental
+        struct Span
+          id: Int
+        end
+
+        const Span.ZERO = Span{id: 0}
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert!(
+        warnings.is_empty(),
+        "a qualified nested const is inside its owner too: {warnings:?}",
     );
 }
 
