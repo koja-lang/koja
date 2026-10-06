@@ -1,6 +1,8 @@
 <div class="detail" id="{{ f.anchor() }}">
   {% let deprecated = f.deprecated %}
   {% include "deprecation_notice.html" %}
+  {% let experimental = f.experimental %}
+  {% include "experimental_notice.html" %}
 
   <div class="detail-signature codeblock">
     <a class="anchor" href="#{{ f.anchor() }}" aria-label="Link to {{ f.name }}">#</a><code>{{ f.signature_html()|safe }}</code>

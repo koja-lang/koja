@@ -1,0 +1,6 @@
+{% if let Some(tag) = experimental %}
+<aside class="experimental-notice">
+  <div class="experimental-title">Experimental</div>
+  <div class="experimental-message">{% if let Some(message) = tag.message %}{{ message|md }}{% else %}<p>May change in a later release.</p>{% endif %}</div>
+</aside>
+{% endif %}

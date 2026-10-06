@@ -101,6 +101,13 @@ impl GlobalKind {
     }
 }
 
+/// The `@experimental` tag on a declaration. The message is the
+/// optional payload, always non-empty when present.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExperimentalTag {
+    pub message: Option<String>,
+}
+
 /// A single registered declaration, with its canonical [`Identifier`],
 /// [`GlobalKind`], source spans, and any generic-decl param names
 /// declared on it.
@@ -109,6 +116,8 @@ pub struct RegistryEntry {
     /// `@deprecated` message, always non-empty. `None` means not
     /// deprecated.
     pub deprecation: Option<String>,
+    /// `@experimental` tag. `None` means not experimental.
+    pub experimental: Option<ExperimentalTag>,
     /// Canonical path-based name.
     pub identifier: Identifier,
     /// Declaration kind and its lifted payload.
@@ -376,6 +385,7 @@ impl GlobalRegistry {
             id,
             RegistryEntry {
                 deprecation: None,
+                experimental: None,
                 identifier,
                 kind: GlobalKind::Function(FunctionDefinition {
                     arity,
@@ -484,6 +494,17 @@ impl GlobalRegistry {
         entry.deprecation = Some(message);
     }
 
+    /// Stamp an `@experimental` tag onto an entry. Collect calls this
+    /// at most once per decl, right after a fresh insert.
+    pub(crate) fn set_experimental(&mut self, id: GlobalRegistryId, tag: ExperimentalTag) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!(
+                "set_experimental on missing registry id {id}. This is a collect invariant violation"
+            )
+        });
+        entry.experimental = Some(tag);
+    }
+
     /// Stamp a resolved variant roster onto an enum entry. Panics
     /// unless the entry's kind is exactly `Enum(None)`.
     pub(crate) fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
@@ -586,6 +607,7 @@ impl GlobalRegistry {
             id,
             RegistryEntry {
                 deprecation: None,
+                experimental: None,
                 identifier,
                 kind,
                 name_span,

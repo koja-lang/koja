@@ -308,7 +308,9 @@ fn has_feature_gap(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     for annotation in &decl.annotations {
         if matches!(
             annotation.kind(),
-            AnnotationKind::Deprecated { .. } | AnnotationKind::Doc(_)
+            AnnotationKind::Deprecated { .. }
+                | AnnotationKind::Doc(_)
+                | AnnotationKind::Experimental { .. }
         ) {
             continue;
         }

@@ -6,7 +6,7 @@
 
 use std::ptr;
 
-use crate::extract::{DocConformance, DocFunction, DocProject};
+use crate::extract::{DocConformance, DocExperimental, DocFunction, DocProject};
 use crate::search::{Symbol, SymbolTarget, collect_symbols};
 
 /// Result of a terminal doc search.
@@ -136,11 +136,13 @@ fn list_line(symbol: &Symbol) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let kind = if symbol.deprecated().is_some() {
-        format!("{}, deprecated", symbol.kind)
-    } else {
-        symbol.kind.to_string()
-    };
+    let mut kind = symbol.kind.to_string();
+    if symbol.deprecated().is_some() {
+        kind.push_str(", deprecated");
+    }
+    if symbol.experimental().is_some() {
+        kind.push_str(", experimental");
+    }
     if brief.is_empty() {
         format!("- {} ({kind})", symbol.qualified_name())
     } else {
@@ -151,6 +153,7 @@ fn list_line(symbol: &Symbol) -> String {
 fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
     let mut out = format!("# {} ({})\n", header_name(hit), hit.kind);
     push_deprecation(&mut out, hit.deprecated());
+    push_experimental(&mut out, hit.experimental());
 
     match &hit.target {
         SymbolTarget::Builtin(b) => {
@@ -236,12 +239,28 @@ fn push_doc(out: &mut String, doc: &Option<String>) {
 
 fn push_deprecation(out: &mut String, message: Option<&str>) {
     if let Some(message) = message {
-        out.push_str("\n> **Deprecated**\n>\n");
-        for line in message.trim().lines() {
-            out.push_str("> ");
-            out.push_str(line);
-            out.push('\n');
-        }
+        push_blockquote(out, "Deprecated", message);
+    }
+}
+
+/// The experimental callout. A tag without a message gets the fixed
+/// line the compiler warning uses.
+fn push_experimental(out: &mut String, tag: Option<&DocExperimental>) {
+    if let Some(tag) = tag {
+        let message = tag
+            .message
+            .as_deref()
+            .unwrap_or("May change in a later release.");
+        push_blockquote(out, "Experimental", message);
+    }
+}
+
+fn push_blockquote(out: &mut String, title: &str, message: &str) {
+    out.push_str(&format!("\n> **{title}**\n>\n"));
+    for line in message.trim().lines() {
+        out.push_str("> ");
+        out.push_str(line);
+        out.push('\n');
     }
 }
 
@@ -283,6 +302,7 @@ fn push_function_details(out: &mut String, functions: &[DocFunction], heading: &
     for f in functions {
         out.push_str(&format!("\n{heading} `{}`\n", f.signature_text()));
         push_deprecation(out, f.deprecated.as_deref());
+        push_experimental(out, f.experimental.as_ref());
         push_doc(out, &f.doc);
     }
 }
@@ -310,6 +330,7 @@ mod tests {
             doc: Some(
                 "A growable list. Backed by a heap block. Items may be optional.".to_string(),
             ),
+            experimental: None,
             functions: vec![DocFunction {
                 arity: 2,
                 deprecated: None,
@@ -317,6 +338,7 @@ mod tests {
                     "Append an item.\n\n## Examples\n\n```koja\nlist.append(1)\n```".to_string(),
                 ),
                 error_type: None,
+                experimental: None,
                 name: "append".to_string(),
                 params: vec![
                     DocParam {
@@ -338,6 +360,7 @@ mod tests {
             conformances: vec![],
             deprecated: None,
             doc: Some("An optional value. `Config.port` reads one.".to_string()),
+            experimental: None,
             functions: vec![],
             name: "Option".to_string(),
             variants: vec!["Some(T)".to_string(), "None".to_string()],
@@ -348,6 +371,9 @@ mod tests {
             conformances: vec![],
             deprecated: None,
             doc: Some("Connection settings.".to_string()),
+            experimental: Some(DocExperimental {
+                message: Some("Field names are not final.".to_string()),
+            }),
             fields: vec![DocField {
                 default: Some("5432".to_string()),
                 name: "port".to_string(),
@@ -362,12 +388,14 @@ mod tests {
         json.constants.push(DocConstant {
             deprecated: None,
             doc: Some("Maximum nesting depth.".to_string()),
+            experimental: Some(DocExperimental { message: None }),
             name: "MAX_DEPTH".to_string(),
         });
         json.enums.push(DocEnum {
             conformances: vec![],
             deprecated: None,
             doc: None,
+            experimental: None,
             functions: vec![],
             name: "Option".to_string(),
             variants: vec![],
@@ -406,6 +434,31 @@ mod tests {
         assert!(text.starts_with("# MyApp.Config (struct)\n"));
         assert!(text.contains("Connection settings."));
         assert!(text.contains("## Fields\n\n- port: Int = 5432\n"));
+    }
+
+    #[test]
+    fn experimental_message_renders_as_a_blockquote_after_the_header() {
+        let project = sample_project();
+        let text = hits(search(&project, "config"));
+        assert!(text.starts_with(
+            "# MyApp.Config (struct)\n\n> **Experimental**\n>\n> Field names are not final.\n"
+        ));
+    }
+
+    #[test]
+    fn bare_experimental_renders_the_fixed_line() {
+        let project = sample_project();
+        let text = hits(search(&project, "MAX_DEPTH"));
+        assert!(text.starts_with(
+            "# JSON.MAX_DEPTH (const)\n\n> **Experimental**\n>\n> May change in a later release.\n"
+        ));
+    }
+
+    #[test]
+    fn list_lines_flag_experimental_symbols() {
+        let project = sample_project();
+        let text = hits(search(&project, "max_dep"));
+        assert!(text.contains("- JSON.MAX_DEPTH (const, experimental): Maximum nesting depth.\n"));
     }
 
     #[test]

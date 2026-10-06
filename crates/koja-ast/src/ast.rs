@@ -189,6 +189,10 @@ pub enum AnnotationKind<'a> {
     /// has no consumer in the codebase and lands in
     /// [`Self::Unknown`].
     Doc(DocAttr),
+    /// `@experimental` or `@experimental "message"`. The message is
+    /// optional. `@experimental false` lands in [`Self::Unknown`] and
+    /// typecheck rejects it.
+    Experimental { message: Option<&'a str> },
     /// `@extern "C"` (today's only valid ABI). Future ABIs would
     /// surface here under different `abi` strings, and the typecheck
     /// layer is responsible for restricting which ABIs are
@@ -235,6 +239,16 @@ impl Annotation {
                 }
                 Some(AnnotationValue::False) => AnnotationKind::Doc(DocAttr::Suppressed),
                 None => AnnotationKind::Unknown {
+                    name: &self.name,
+                    value: self.value.as_ref(),
+                },
+            },
+            "experimental" => match &self.value {
+                None => AnnotationKind::Experimental { message: None },
+                Some(AnnotationValue::String(message)) => AnnotationKind::Experimental {
+                    message: Some(message),
+                },
+                Some(AnnotationValue::False) => AnnotationKind::Unknown {
                     name: &self.name,
                     value: self.value.as_ref(),
                 },
@@ -1558,6 +1572,35 @@ mod annotation_tests {
             a.kind(),
             AnnotationKind::Unknown {
                 name: "extern",
+                value: Some(AnnotationValue::False),
+            }
+        ));
+    }
+
+    #[test]
+    fn experimental_bare_classifies_without_message() {
+        let a = ann("experimental", None);
+        assert_eq!(a.kind(), AnnotationKind::Experimental { message: None });
+    }
+
+    #[test]
+    fn experimental_string_classifies_with_message() {
+        let a = ann("experimental", str_value("The shape is not final."));
+        assert_eq!(
+            a.kind(),
+            AnnotationKind::Experimental {
+                message: Some("The shape is not final."),
+            },
+        );
+    }
+
+    #[test]
+    fn experimental_with_false_value_falls_through_to_unknown() {
+        let a = ann("experimental", Some(AnnotationValue::False));
+        assert!(matches!(
+            a.kind(),
+            AnnotationKind::Unknown {
+                name: "experimental",
                 value: Some(AnnotationValue::False),
             }
         ));

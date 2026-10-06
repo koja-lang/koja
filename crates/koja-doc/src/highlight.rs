@@ -325,6 +325,7 @@ mod tests {
             deprecated: None,
             doc: None,
             error_type: Some("PoolError".to_string()),
+            experimental: None,
             name: "checkout".to_string(),
             params: vec![
                 DocParam {

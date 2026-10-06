@@ -24,9 +24,9 @@
 //! enforce path-len / target-exists / no-shadow rules.
 
 use koja_ast::ast::{
-    Annotation, AnnotationKind, BuiltinDecl, Constant, Diagnostic, EnumDecl, ExtendBlock, File,
-    Function, ImplBlock, ImplMember, Item, Name, Param, ProtocolDecl, ProtocolMethod, StructDecl,
-    TypeAlias, TypeExpr, Visibility, is_intrinsic, name_texts, path_text,
+    Annotation, AnnotationKind, BuiltinDecl, Constant, Diagnostic, DocAttr, EnumDecl, ExtendBlock,
+    File, Function, ImplBlock, ImplMember, Item, Name, Param, ProtocolDecl, ProtocolMethod,
+    StructDecl, TypeAlias, TypeExpr, Visibility, is_intrinsic, name_texts, path_text,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -34,7 +34,9 @@ use koja_ast::span::Span;
 
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
-use crate::registry::{ClaimOutcome, GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
+use crate::registry::{
+    ClaimOutcome, ExperimentalTag, GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope,
+};
 
 /// Pass 1 of collect. Register every named decl (functions,
 /// structs, enums, protocols, constants, type aliases) so that
@@ -341,11 +343,11 @@ fn register_function_with_identifier(
     if reject_self_param(function, &identifier, self_context, diagnostics) {
         return;
     }
-    let deprecation = deprecation_message(&function.annotations, diagnostics);
+    let tags = stability_tags(&function.annotations, diagnostics);
     let visibility = function_visibility_scope(function.visibility, owner_type);
     let outcome = registry.insert_function(identifier, function, visibility);
     let inserted = fresh_id(outcome, function.name.span);
-    record_insert(inserted, deprecation, registry, diagnostics);
+    record_insert(inserted, tags, registry, diagnostics);
 }
 
 /// The id of a fresh registry entry, or the `already defined` error
@@ -419,11 +421,14 @@ fn diagnose_doc_on_private(
 
 /// Annotations skipped by the per-decl "unsupported annotation" gap
 /// helpers because a dedicated check owns them. `@doc` is checked by
-/// [`diagnose_doc_on_private`] and `@deprecated` by
-/// [`deprecation_message`], matched by name so malformed shapes
-/// are not double-diagnosed.
+/// [`diagnose_doc_on_private`], `@deprecated` by
+/// [`deprecation_message`], and `@experimental` by
+/// [`experimental_tag`], matched by name so malformed shapes are not
+/// double-diagnosed.
 fn has_dedicated_validation(annotation: &Annotation) -> bool {
-    annotation.name == "deprecated" || matches!(annotation.kind(), AnnotationKind::Doc(_))
+    annotation.name == "deprecated"
+        || annotation.name == "experimental"
+        || matches!(annotation.kind(), AnnotationKind::Doc(_))
 }
 
 /// Diagnose every annotation on a decl that no pass consumes yet.
@@ -475,6 +480,73 @@ fn deprecation_message(
         }
     }
     message
+}
+
+/// The validated `@experimental` tag on a decl. Bare `@experimental`
+/// carries no message and a string payload carries a trimmed,
+/// non-empty one. Empty and non-string payloads are rejected.
+/// `@experimental` with `@doc false` is rejected too, since a hidden
+/// declaration cannot carry a documented caveat.
+fn experimental_tag(
+    annotations: &[Annotation],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ExperimentalTag> {
+    let suppressed = annotations
+        .iter()
+        .any(|annotation| annotation.kind() == AnnotationKind::Doc(DocAttr::Suppressed));
+    let mut tag = None;
+    for annotation in annotations {
+        if annotation.name != "experimental" {
+            continue;
+        }
+        if suppressed {
+            diagnostics.push(Diagnostic::error_with_hint(
+                "`@experimental` is not valid with `@doc false`".to_string(),
+                "`@doc false` hides a declaration, `@experimental` documents it with a warning. \
+                 Keep one."
+                    .to_string(),
+                annotation.span,
+            ));
+            continue;
+        }
+        match annotation.kind() {
+            AnnotationKind::Experimental { message: None } => {
+                tag = Some(ExperimentalTag { message: None });
+            }
+            // Trimmed so `"""` payloads do not drag their surrounding
+            // newlines into every warning.
+            AnnotationKind::Experimental {
+                message: Some(text),
+            } if !text.trim().is_empty() => {
+                tag = Some(ExperimentalTag {
+                    message: Some(text.trim().to_string()),
+                });
+            }
+            _ => diagnostics.push(Diagnostic::error_with_hint(
+                "`@experimental` takes no value or a message".to_string(),
+                "e.g. `@experimental` or `@experimental \"\"\"The export record shape is not \
+                 final.\"\"\"`"
+                    .to_string(),
+                annotation.span,
+            )),
+        }
+    }
+    tag
+}
+
+/// The stability tags collected from one declaration's annotations,
+/// stamped onto its registry entry by [`record_insert`].
+struct StabilityTags {
+    deprecation: Option<String>,
+    experimental: Option<ExperimentalTag>,
+}
+
+/// Validate both stability annotations on a decl in one call.
+fn stability_tags(annotations: &[Annotation], diagnostics: &mut Vec<Diagnostic>) -> StabilityTags {
+    StabilityTags {
+        deprecation: deprecation_message(annotations, diagnostics),
+        experimental: experimental_tag(annotations, diagnostics),
+    }
 }
 
 /// Reject a `self` receiver only when registration is happening
@@ -561,11 +633,11 @@ fn register_type_decl<D: TypeDecl>(
         header.annotations,
         diagnostics,
     );
-    let deprecation = deprecation_message(header.annotations, diagnostics);
+    let tags = stability_tags(header.annotations, diagnostics);
     let path = name_texts(header.path);
     let identifier = Identifier::new(package, path.clone());
     let inserted = decl.insert(&identifier, registry, diagnostics);
-    let type_id = record_type_insert(inserted, &identifier, deprecation, registry, diagnostics);
+    let type_id = record_type_insert(inserted, &identifier, tags, registry, diagnostics);
     for function in header.functions {
         let method_identifier = Identifier::member(package, &path, function.name.as_str());
         register_function_with_identifier(
@@ -586,27 +658,29 @@ fn register_type_decl<D: TypeDecl>(
 fn record_type_insert(
     inserted: Result<GlobalRegistryId, Diagnostic>,
     identifier: &Identifier,
-    deprecation: Option<String>,
+    tags: StabilityTags,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
-    record_insert(inserted, deprecation, registry, diagnostics)
+    record_insert(inserted, tags, registry, diagnostics)
         .or_else(|| registry.lookup(identifier).map(|(id, _)| id))
 }
 
-/// Finish a decl insert. A fresh entry takes its `@deprecated`
-/// message and returns its id. A collision is diagnosed and returns
-/// `None`.
+/// Finish a decl insert. A fresh entry takes its stability tags and
+/// returns its id. A collision is diagnosed and returns `None`.
 fn record_insert(
     inserted: Result<GlobalRegistryId, Diagnostic>,
-    deprecation: Option<String>,
+    tags: StabilityTags,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
     match inserted {
         Ok(id) => {
-            if let Some(message) = deprecation {
+            if let Some(message) = tags.deprecation {
                 registry.set_deprecation(id, message);
+            }
+            if let Some(tag) = tags.experimental {
+                registry.set_experimental(id, tag);
             }
             Some(id)
         }
@@ -886,10 +960,10 @@ fn register_protocol(
         type_params.push(param.name.text.clone());
     }
     let visibility = package_visibility_scope(decl.visibility);
-    let deprecation = deprecation_message(&decl.annotations, diagnostics);
+    let tags = stability_tags(&decl.annotations, diagnostics);
     let outcome = registry.insert_protocol(identifier, decl, type_params, visibility);
     let inserted = fresh_id(outcome, decl.name().span);
-    record_insert(inserted, deprecation, registry, diagnostics);
+    record_insert(inserted, tags, registry, diagnostics);
 }
 
 /// Register a `const NAME = expr` declaration, package-level or
@@ -921,10 +995,10 @@ fn register_constant(
     );
     let identifier = Identifier::new(package, name_texts(&constant.path));
     let visibility = package_visibility_scope(constant.visibility);
-    let deprecation = deprecation_message(&constant.annotations, diagnostics);
+    let tags = stability_tags(&constant.annotations, diagnostics);
     let outcome = registry.insert_constant(identifier, constant, visibility);
     let inserted = fresh_id(outcome, constant.name().span);
-    record_insert(inserted, deprecation, registry, diagnostics);
+    record_insert(inserted, tags, registry, diagnostics);
 }
 
 /// Register a `type X = ...` alias with the package-qualified
@@ -954,10 +1028,10 @@ fn register_type_alias(
     );
     let identifier = Identifier::single(package, alias.name.text.clone());
     let visibility = package_visibility_scope(alias.visibility);
-    let deprecation = deprecation_message(&alias.annotations, diagnostics);
+    let tags = stability_tags(&alias.annotations, diagnostics);
     let outcome = registry.insert_type_alias(identifier, alias, visibility);
     let inserted = fresh_id(outcome, alias.name.span);
-    record_insert(inserted, deprecation, registry, diagnostics);
+    record_insert(inserted, tags, registry, diagnostics);
 }
 
 /// The dotted type path of an `impl` / `extend` target (`[Foo]`,

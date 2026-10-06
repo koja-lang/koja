@@ -95,6 +95,18 @@ impl Fixture {
         String::from_utf8_lossy(&output.stderr).into_owned()
     }
 
+    /// Stderr of a successful run, where the driver prints warnings.
+    fn koja_ok_stderr(&self, args: &[&str]) -> String {
+        let output = self.koja(args);
+        assert!(
+            output.status.success(),
+            "koja {args:?} failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    }
+
     fn lock_contents(&self) -> String {
         fs::read_to_string(self.project().join("koja.lock")).expect("koja.lock exists")
     }
@@ -573,5 +585,116 @@ fn dependency_constants_and_function_values_end_to_end() {
     assert!(
         stdout.contains("8252"),
         "expected the doubled constant sum in output: {stdout}"
+    );
+}
+
+/// Write the experimental fixture. A `tracelib` dependency declares
+/// an `@experimental` struct and uses it internally, and a root
+/// project uses it too. `root_opts_in` and `dep_opts_in` set
+/// `experimental = true` in the matching manifest.
+fn write_experimental_fixture(fx: &Fixture, root_opts_in: bool, dep_opts_in: bool) {
+    let flag = |on: bool| if on { "experimental = true\n" } else { "" };
+    let dep = fx.root.join("repos").join("tracelib");
+    fs::create_dir_all(dep.join("src")).unwrap();
+    fs::write(
+        dep.join("koja.toml"),
+        format!(
+            "[project]\nname = \"tracelib\"\nversion = \"0.1.0\"\n{}",
+            flag(dep_opts_in)
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dep.join("src").join("tracelib.koja"),
+        dedent(
+            r#"
+            @experimental "The span shape is not final."
+            struct Span
+              id: Int
+            end
+
+            fn root_span() -> Span
+              Span{id: 1}
+            end
+            "#,
+        ),
+    )
+    .unwrap();
+
+    let project = fx.project();
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("koja.toml"),
+        format!(
+            "[project]\nname = \"root\"\nversion = \"0.1.0\"\n{}\n\
+             [dependencies]\ntracelib = {{ path = \"../repos/tracelib\" }}\n",
+            flag(root_opts_in)
+        ),
+    )
+    .unwrap();
+    fs::write(
+        project.join("src").join("main.koja"),
+        dedent(
+            r#"
+            fn span_id(span: Tracelib.Span) -> Int
+              span.id
+            end
+            "#,
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn experimental_warns_per_package_until_each_manifest_opts_in() {
+    let warning = "`Span` is experimental and may change in a later release. \
+                   The span shape is not final.";
+
+    // Neither opted in: the root warns at its use site, and the dep
+    // warns at its own use site too.
+    let fx = Fixture::new("experimental-off");
+    write_experimental_fixture(&fx, false, false);
+    let stderr = fx.koja_ok_stderr(&["check"]);
+    assert!(stderr.contains(warning), "expected warnings:\n{stderr}");
+    assert!(stderr.contains("main.koja"), "root should warn:\n{stderr}");
+    assert!(
+        stderr.contains("tracelib.koja"),
+        "dep should warn:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("set `experimental = true` under `[project]` in koja.toml"),
+        "hint names the fix:\n{stderr}"
+    );
+
+    // Root opted in, dep did not: only the dep's file warns.
+    let fx = Fixture::new("experimental-root");
+    write_experimental_fixture(&fx, true, false);
+    let stderr = fx.koja_ok_stderr(&["check"]);
+    assert!(
+        !stderr.contains("main.koja"),
+        "root must be silent:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("tracelib.koja"),
+        "dep still warns:\n{stderr}"
+    );
+
+    // Dep opted in, root did not: only the root's file warns.
+    let fx = Fixture::new("experimental-dep");
+    write_experimental_fixture(&fx, false, true);
+    let stderr = fx.koja_ok_stderr(&["check"]);
+    assert!(stderr.contains("main.koja"), "root still warns:\n{stderr}");
+    assert!(
+        !stderr.contains("tracelib.koja"),
+        "dep must be silent:\n{stderr}"
+    );
+
+    // Both opted in: no experimental warnings at all.
+    let fx = Fixture::new("experimental-both");
+    write_experimental_fixture(&fx, true, true);
+    let stderr = fx.koja_ok_stderr(&["check"]);
+    assert!(
+        !stderr.contains("is experimental"),
+        "both opted in, nothing should warn:\n{stderr}"
     );
 }

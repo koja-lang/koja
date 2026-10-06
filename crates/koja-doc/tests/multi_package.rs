@@ -365,6 +365,106 @@ fn nested_types_keep_full_names_and_deprecation_metadata() {
 }
 
 #[test]
+fn experimental_metadata_reaches_extract_json_terminal_and_html() {
+    let mut project = DocProject::new("Trace");
+    ingest(
+        &mut project,
+        "Trace",
+        PackageKind::Project,
+        "
+        @doc \"A span handle.\"
+        @experimental \"\"\"
+        The span record shape is not final.
+        \"\"\"
+        struct Span
+          id: Int
+
+          @doc \"Ends the span.\"
+          @experimental
+          fn finish(self) -> Int
+            self.id
+          end
+        end
+
+        @doc \"A stable helper.\"
+        fn stable() -> Int
+          1
+        end
+        ",
+    );
+    finalize_project(&mut project);
+
+    let trace = project.find_package("Trace").expect("Trace present");
+    let span = trace
+        .structs
+        .iter()
+        .find(|item| item.name == "Span")
+        .expect("Span struct");
+    assert_eq!(
+        span.experimental
+            .as_ref()
+            .and_then(|tag| tag.message.as_deref()),
+        Some("The span record shape is not final.")
+    );
+    let finish = &span.functions[0];
+    assert_eq!(finish.name, "finish");
+    assert!(finish.experimental.is_some());
+    assert!(finish.experimental.as_ref().unwrap().message.is_none());
+    let stable = trace
+        .functions
+        .iter()
+        .find(|item| item.name == "stable")
+        .expect("stable fn");
+    assert!(stable.experimental.is_none());
+    let span_item = trace
+        .items
+        .iter()
+        .find(|item| item.name == "Span")
+        .expect("Span item");
+    assert!(span_item.experimental.is_some());
+
+    let json = search_index_json(&project);
+    assert!(json.contains(
+        "\"name\":\"Span\",\"kind\":\"struct\",\"url\":\"Trace/Span.html\",\
+         \"brief\":\"A span handle.\",\"deprecated\":null,\
+         \"experimental\":{\"message\":\"The span record shape is not final.\"}"
+    ));
+    assert!(json.contains("\"name\":\"Span.finish/1\""));
+    assert!(json.contains("\"experimental\":{\"message\":null}"));
+    assert!(json.contains("\"name\":\"stable/0\""));
+    assert!(json.contains("\"experimental\":null"));
+
+    let SearchOutcome::Hits(span_doc) = terminal::search(&project, "Trace.Span") else {
+        panic!("expected struct hit");
+    };
+    assert!(span_doc.starts_with(
+        "# Trace.Span (struct)\n\n> **Experimental**\n>\n> The span record shape is not final.\n"
+    ));
+    assert!(span_doc.contains(
+        "### `fn finish(self) -> Int`\n\n> **Experimental**\n>\n> May change in a later release.\n"
+    ));
+
+    let SearchOutcome::Hits(list) = terminal::search(&project, "fin") else {
+        panic!("expected list");
+    };
+    assert!(list.contains("- Trace.Span.finish/1 (fn, experimental): Ends the span.\n"));
+
+    let html = render_struct(span, trace, &project);
+    assert!(html.contains("class=\"experimental-badge\">experimental</span>"));
+    assert!(html.contains("class=\"experimental-notice\""));
+    assert!(html.contains("The span record shape is not final."));
+    assert!(html.contains("<p>May change in a later release.</p>"));
+    let finish_notice = html.find("<p>May change in a later release.</p>").unwrap();
+    let finish_signature = html.find("<span class=\"fn\">finish</span>").unwrap();
+    assert!(finish_notice < finish_signature);
+    assert!(!html.contains("deprecation-notice"));
+    assert!(html.contains("<span class=\"rail-kind\">experimental</span>"));
+
+    let package_html = render_package_index(trace, &project);
+    assert!(package_html.contains("class=\"experimental-badge\">experimental</span>"));
+}
+
+#[test]
 fn search_index_includes_items_and_methods() {
     let project = build_project();
     let json = search_index_json(&project);
