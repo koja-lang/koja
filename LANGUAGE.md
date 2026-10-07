@@ -1961,6 +1961,8 @@ In most cases you won't use `receive` directly. The `Process` protocol's default
 
 ### Process Context
 
+`Process.Context` and `Process.context` are [`@experimental`](#experimental). A use warns until the project sets `experimental = true` in `koja.toml`, and the API can change in a later release.
+
 Every process carries a `Process.Context`, a 32-byte request context that follows the work. The runtime copies it into each child at `spawn`, stamps it onto every `cast`, `call`, and `send_after` message, and installs the message's copy on the receiver when the message is dequeued. A reply installs nothing, so a `call` leaves the caller's context as it was. Lifecycle signals and exit signals carry no context.
 
 ```koja
@@ -1975,6 +1977,8 @@ A process nobody traced carries `Process.Context.ZERO`. `Trace` fills the contex
 The context changes at each business message dequeue and keeps the last installed value between messages. Handlers written on the `Process` protocol never see the gap. A hand-written `receive` loop that must return to its own context wraps the wait in `Trace.span`.
 
 ### Tracing
+
+`Trace` and its types are [`@experimental`](#experimental). A use warns until the project sets `experimental = true` in `koja.toml`, and the API can change in a later release.
 
 `Trace` opens spans as closures over `Process.context`. `Trace.root` starts a trace at a boundary and `Trace.span` opens a child of whatever context the calling process carries. Both install the span's context for the closure and put back what they found when it returns. Every `cast`, `call`, and `send_after` inside the closure carries the span's context to its receiver, so code below the boundary needs no parent argument.
 
@@ -2902,7 +2906,7 @@ Read-only process metrics. See [Runtime Observability](#runtime-observability) f
 
 ### Trace
 
-Closure-scoped spans over `Process.context`. See [Tracing](#tracing) for the semantics.
+Closure-scoped spans over `Process.context`. See [Tracing](#tracing) for the semantics. `Trace` and its types are [`@experimental`](#experimental) and can change in a later release.
 
 - `Trace.root<R>(name: String, work: fn (Trace.Span) -> R) -> R` and `Trace.root<R>(name, options: Trace.RootOptions, work) -> R`: runs `work` in a span at a trace boundary. Starts a new sampled trace without a parent, continues `options.parent` otherwise. Ignores the context the process carries.
 - `Trace.RootOptions{kind: Trace.SpanKind = Internal, parent: Option<Trace.Parent> = Option.None}`: how a root opens.
