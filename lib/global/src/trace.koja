@@ -1,0 +1,455 @@
+@doc """
+A span attribute value. Literals convert on their own wherever the
+compiler knows it wants a `Trace.Attribute`, so an attribute call reads
+as a plain literal.
+
+```koja
+span.attribute("http.route", "/entities")
+span.attribute("http.response.status_code", 200)
+```
+
+A variable does not convert. Wrap it with `Trace.Attribute.from`.
+"""
+@experimental
+struct Trace.Attribute: BoolLiteral, FloatLiteral, IntLiteral, StringLiteral
+  value: Bool | Float | Int | String
+
+  @doc """
+  Wraps a runtime value as an attribute.
+  """
+  fn from(value: Bool | Float | Int | String) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_bool(value: Bool) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_float(value: Float) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_int(value: Int) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_string(value: String) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+end
+
+@doc """
+Why `Trace.Parent.new` refused an id.
+"""
+@experimental
+enum Trace.Error
+  # `span_id` needs 8 bytes.
+  InvalidSpanId
+  # `trace_id` needs 16 bytes.
+  InvalidTraceId
+end
+
+@doc """
+A parent that arrived from outside the runtime, decoded off the wire by
+a codec package and handed to `Trace.root`. `new` is the constructor
+and validates the id lengths. The fields are the decoded words, and
+`trace_id` and `span_id` give them back as bytes.
+
+```koja
+parent = try Trace.Parent.new(trace_id, span_id, sampled)
+options = Trace.RootOptions{kind: Trace.SpanKind.Server, parent: Option.Some(parent)}
+Trace.root("GET /entities", options, work)
+```
+"""
+@experimental
+struct Trace.Parent
+  sampled: Bool
+  span: Int
+  trace_hi: Int
+  trace_lo: Int
+
+  @doc """
+  Builds a parent from a 16-byte trace id, an 8-byte span id, and the
+  sampled flag. Fails when either id has the wrong length.
+  """
+  fn new(trace_id: Binary, span_id: Binary, sampled: Bool)
+    -> Trace.Parent ! Trace.Error
+
+    (trace_hi, trace_lo) =
+      match trace_id
+        <<hi::64, lo::64>> -> (hi, lo)
+        _ -> fail Trace.Error.InvalidTraceId
+      end
+
+    span =
+      match span_id
+        <<id::64>> -> id
+        _ -> fail Trace.Error.InvalidSpanId
+      end
+
+    Trace.Parent{
+      sampled: sampled,
+      span: span,
+      trace_hi: trace_hi,
+      trace_lo: trace_lo,
+    }
+  end
+
+  @doc """
+  The 8-byte span id, big end first.
+  """
+  fn span_id(self) -> Binary
+    <<self.span::64>>
+  end
+
+  @doc """
+  The 16-byte trace id, big end first.
+  """
+  fn trace_id(self) -> Binary
+    <<self.trace_hi::64, self.trace_lo::64>>
+  end
+end
+
+@doc """
+What role a span plays in a request. `Server` handles an incoming
+request, `Client` makes an outgoing one, and `Internal` is work in
+between, such as a database query.
+"""
+@experimental
+enum Trace.SpanKind
+  Client
+  Internal
+  Server
+end
+
+@doc """
+How `Trace.root` opens a trace boundary. `kind` is the root span's
+kind. `parent` is the trace to continue, decoded off the wire by a
+codec package, and `Option.None` starts a new sampled trace. The
+defaults give an `Internal` root of a new trace, which fits a timer or
+a boot. An incoming request sets both.
+
+```koja
+Trace.root("sweep", span -> cleaner.sweep())
+
+Trace.root(
+  "GET /entities",
+  Trace.RootOptions{kind: Trace.SpanKind.Server, parent: parent},
+  span -> handle(request),
+)
+```
+"""
+@experimental
+struct Trace.RootOptions
+  kind: Trace.SpanKind = Trace.SpanKind.Internal
+  parent: Option<Trace.Parent> = Option.None
+end
+
+@doc """
+How a span ended. `Unset` is the default and means nothing went wrong
+that the code chose to report. `Error` carries a short message. `Ok` is
+an explicit success mark and is rarely needed.
+"""
+@experimental
+enum Trace.Status
+  Error(String)
+  Ok
+  Unset
+end
+
+@doc """
+A finished span, the record an exporter pops from `Trace.Export`.
+`context` holds the trace id and the span's own id. `parent_span_id`
+is `Option.None` for the root of a trace. Timestamps come from
+`Timestamp.now()`, so they are wall-clock microseconds.
+"""
+@experimental
+struct Trace.SpanRecord
+  attributes: Map<String, Trace.Attribute>
+  context: Process.Context
+  ended_at: Timestamp
+  kind: Trace.SpanKind
+  name: String
+  parent_span_id: Option<Binary>
+  started_at: Timestamp
+  status: Trace.Status
+end
+
+@doc """
+The open span inside a `Trace.span` or `Trace.root` closure. It is a
+handle to a record the runtime holds, not a value, so `attribute` and
+`status` write through to the record that gets exported when the
+closure returns. Under an unsampled context the handle is a no-op and
+records nothing.
+"""
+@experimental
+struct Trace.Span
+  handle: Int
+
+  # The handle `Trace.span` hands a closure when nothing records.
+  const NOOP = Trace.Span{handle: -1}
+
+  @doc """
+  Sets attribute `key` on the open span. A later call with the same
+  key replaces the value.
+  """
+  fn attribute(self, key: String, value: Trace.Attribute)
+    if self.handle < 0
+      return
+    end
+
+    record = TraceRuntime.span_take(self.handle)
+    record.attributes = record.attributes.put(key, value)
+    TraceRuntime.span_put(self.handle, record)
+  end
+
+  @doc """
+  Whether this handle records. False for the no-op handle an
+  unsampled context produces.
+  """
+  fn recording?(self) -> Bool
+    self.handle >= 0
+  end
+
+  @doc """
+  Sets how the span ended. The last call before the closure returns
+  wins.
+  """
+  fn status(self, status: Trace.Status)
+    if self.handle < 0
+      return
+    end
+
+    record = TraceRuntime.span_take(self.handle)
+    record.status = status
+    TraceRuntime.span_put(self.handle, record)
+  end
+end
+
+@doc """
+Closure-scoped spans on top of `Process.context`. `Trace.root` starts a
+trace at a boundary, `Trace.span` opens a child of whatever context the
+calling process carries, and both restore the context they found when
+the closure returns. Every `cast`, `call`, and `send_after` inside the
+closure carries the span's context to its receiver, so nothing below
+needs a parent argument. Finished spans queue for `Trace.Export`.
+
+The two differ in where the parent comes from. `span` parents to the
+context the process carries, which is the right call for work caused
+by a message. `root` parents to its argument and ignores the context
+the process carries, which is the right call for work caused by
+something outside the runtime: a socket, a timer, a boot. A codec
+package decodes an incoming trace into a `Trace.Parent` and `root`
+continues it. `Option.None` starts a new trace. Nothing outside
+`Trace` builds a `Process.Context`.
+
+```koja
+parent = Propagation.parse(request.headers.get("traceparent"))
+
+Trace.root(
+  "GET /entities",
+  Trace.RootOptions{kind: Trace.SpanKind.Server, parent: parent},
+  fn (span: Trace.Span) -> Response
+    response = router.dispatch(request)
+    span.attribute("http.response.status_code", response.status.code)
+    response
+  end,
+)
+
+rows = Trace.span("db.query", span -> db.query(sql))
+```
+"""
+@experimental
+struct Trace
+  @doc """
+  The calling process's context, the value to inject into an outgoing
+  `traceparent` header. The same as `Process.context()`.
+  """
+  fn current -> Process.Context
+    Process.context()
+  end
+
+  @doc """
+  Runs `work` inside an `Internal` span named `name` at the start of a
+  new sampled trace. The same as `root` with default `RootOptions`.
+  """
+  fn root<R>(name: String, work: fn (Trace.Span) -> R) -> R
+    root(name, Trace.RootOptions{}, work)
+  end
+
+  @doc """
+  Runs `work` inside a span named `name` at a trace boundary. Without
+  a parent in `options` it starts a new sampled trace. With one it
+  continues that trace, with the parent's span as the parent and the
+  parent's sampled flag, so an unsampled upstream stays unsampled here.
+  The context the process carried is ignored as a parent and put back
+  when `work` returns.
+  """
+  fn root<R>(
+    name: String,
+    options: Trace.RootOptions,
+    work: fn (Trace.Span) -> R,
+  ) -> R
+
+    saved = Process.context()
+
+    match options.parent
+      Option.None ->
+        fresh = Process.Context{
+          flags: 1,
+          span: TraceRuntime.span_id(),
+          trace_hi: TraceRuntime.span_id(),
+          trace_lo: TraceRuntime.span_id(),
+        }
+        run(name, options.kind, saved, fresh, Option.None, work)
+
+      Option.Some(p) ->
+        context = Process.Context{
+          flags: p.sampled ? 1 : 0,
+          span: TraceRuntime.span_id(),
+          trace_hi: p.trace_hi,
+          trace_lo: p.trace_lo,
+        }
+        run(name, options.kind, saved, context, parent_span_id(p.span), work)
+    end
+  end
+
+  @doc """
+  Runs `work` inside an `Internal` span named `name`, a child of the
+  calling process's context.
+  """
+  fn span<R>(name: String, work: fn (Trace.Span) -> R) -> R
+    span(name, Trace.SpanKind.Internal, work)
+  end
+
+  @doc """
+  Runs `work` inside a span named `name` of `kind`, a child of the
+  calling process's context. Under an unsampled context the closure
+  runs at once with a no-op handle and nothing is recorded.
+  """
+  fn span<R>(name: String, kind: Trace.SpanKind, work: fn (Trace.Span) -> R)
+    -> R
+
+    saved = Process.context()
+
+    if not saved.sampled?()
+      return work(Trace.Span.NOOP)
+    end
+
+    run(name, kind, saved, child_of(saved), parent_span_id(saved.span), work)
+  end
+
+  # A context in the same trace as `parent` with a fresh span id.
+  priv fn child_of(parent: Process.Context) -> Process.Context
+    Process.Context{
+      flags: parent.flags,
+      span: TraceRuntime.span_id(),
+      trace_hi: parent.trace_hi,
+      trace_lo: parent.trace_lo,
+    }
+  end
+
+  # The span id word `span` as bytes, or `Option.None` when it is zero and
+  # names no span.
+  priv fn parent_span_id(span: Int) -> Option<Binary>
+    span == 0 ? Option.None : Option.Some(<<span::64>>)
+  end
+
+  # Installs `context`, runs `work`, restores `saved`, and exports the
+  # span when `context` is sampled.
+  priv fn run<R>(
+    name: String,
+    kind: Trace.SpanKind,
+    saved: Process.Context,
+    context: Process.Context,
+    parent_span_id: Option<Binary>,
+    work: fn (Trace.Span) -> R,
+  ) -> R
+
+    if not context.sampled?()
+      TraceRuntime.install(context)
+      value = work(Trace.Span.NOOP)
+      TraceRuntime.install(saved)
+      return value
+    end
+
+    started_at = Timestamp.now()
+    attributes: Map<String, Trace.Attribute> = [:]
+    handle = TraceRuntime.span_open(
+      Trace.SpanRecord{
+        attributes: attributes,
+        context: context,
+        ended_at: started_at,
+        kind: kind,
+        name: name,
+        parent_span_id: parent_span_id,
+        started_at: started_at,
+        status: Trace.Status.Unset,
+      },
+    )
+    TraceRuntime.install(context)
+    value = work(Trace.Span{handle: handle})
+    TraceRuntime.install(saved)
+    record = TraceRuntime.span_close(handle)
+    record.ended_at = Timestamp.now()
+    TraceRuntime.export_push(record)
+    value
+  end
+end
+
+@doc """
+The queue of finished spans an exporter drains. The runtime holds at
+most 4096 records. When the queue is full a new record is dropped and
+counted, so a stalled exporter costs spans, not memory.
+"""
+@experimental
+struct Trace.Export
+  @doc """
+  How many finished spans the runtime has dropped because the queue
+  was full.
+  """
+  fn dropped -> Int
+    TraceRuntime.export_dropped()
+  end
+
+  @doc """
+  The oldest queued span, or `Option.None` when the queue is empty.
+  """
+  fn pop -> Option<Trace.SpanRecord>
+    TraceRuntime.export_pop()
+  end
+end
+
+# The runtime side of `Trace`. Handles index the calling process's stack
+# of open span records. `span_take` empties a slot and `span_put`
+# refills it. `span_close` pops the innermost record, which must be the
+# handle given.
+@experimental
+priv struct TraceRuntime
+  @intrinsic
+  fn export_dropped -> Int
+
+  @intrinsic
+  fn export_pop -> Option<Trace.SpanRecord>
+
+  @intrinsic
+  fn export_push(record: Trace.SpanRecord)
+
+  @intrinsic
+  fn install(context: Process.Context)
+
+  @intrinsic
+  fn span_close(handle: Int) -> Trace.SpanRecord
+
+  @intrinsic
+  fn span_id -> Int
+
+  @intrinsic
+  fn span_open(record: Trace.SpanRecord) -> Int
+
+  @intrinsic
+  fn span_put(handle: Int, record: Trace.SpanRecord)
+
+  @intrinsic
+  fn span_take(handle: Int) -> Trace.SpanRecord
+end

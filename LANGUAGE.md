@@ -17,7 +17,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
 - [Protocols](#protocols): Behavioral Contracts, Impl Blocks, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
-- [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`, Runtime Observability
+- [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`, Process Context, Tracing, Runtime Observability
 - [Testing](#testing): `test` Blocks, `assert`, `Test.Failure`, Setup and Skips, Panics, Running Tests
 - [Annotations](#annotations): `@deprecated`, `@doc`
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
@@ -1959,6 +1959,55 @@ end
 
 In most cases you won't use `receive` directly. The `Process` protocol's default `run` implementation handles it for you.
 
+### Process Context
+
+`Process.Context` and `Process.context` are [`@experimental`](#experimental). A use warns until the project sets `experimental = true` in `koja.toml`, and the API can change in a later release.
+
+Every process carries a `Process.Context`, a 32-byte request context that follows the work. The runtime copies it into each child at `spawn`, stamps it onto every `cast`, `call`, and `send_after` message, and installs the message's copy on the receiver when the message is dequeued. A reply installs nothing, so a `call` leaves the caller's context as it was. Lifecycle signals and exit signals carry no context.
+
+```koja
+context = Process.context()
+context.sampled?()   # Bool, true inside a sampled trace
+context.trace_id()   # Binary, 16 bytes, all zero outside a trace
+context.span_id()    # Binary, 8 bytes, all zero outside a span
+```
+
+A process nobody traced carries `Process.Context.ZERO`. `Trace` fills the context in and is the only way to start one. User code reads the context and passes it along, it does not build one or write it, and it does not read the struct fields directly. The fields are the runtime layout and can grow.
+
+The context changes at each business message dequeue and keeps the last installed value between messages. Handlers written on the `Process` protocol never see the gap. A hand-written `receive` loop that must return to its own context wraps the wait in `Trace.span`.
+
+### Tracing
+
+`Trace` and its types are [`@experimental`](#experimental). A use warns until the project sets `experimental = true` in `koja.toml`, and the API can change in a later release.
+
+`Trace` opens spans as closures over `Process.context`. `Trace.root` starts a trace at a boundary and `Trace.span` opens a child of whatever context the calling process carries. Both install the span's context for the closure and put back what they found when it returns. Every `cast`, `call`, and `send_after` inside the closure carries the span's context to its receiver, so code below the boundary needs no parent argument.
+
+```koja
+response = Trace.root(
+  "GET /entities",
+  Trace.RootOptions{kind: Trace.SpanKind.Server},
+  fn (span: Trace.Span) -> Response
+    response = router.dispatch(request)
+    span.attribute("http.response.status_code", response.status.code)
+    response
+  end,
+)
+
+rows = Trace.span("db.query", span -> db.query(sql))
+```
+
+The `Trace.Span` inside the closure is a handle to a record the runtime holds, not a value. `span.attribute(key, value)` and `span.status(status)` write through to that record. Under an unsampled context the handle records nothing and `recording?()` is `false`.
+
+The two differ in where the parent comes from. `span` parents to the context the process carries, for work caused by a message. `root` parents to the `parent` in its `Trace.RootOptions` and ignores the context the process carries, for work caused by something outside the runtime such as a socket, a timer, or a boot. The defaults, `Internal` and no parent, start a new sampled trace, and `Trace.root(name, work)` is the short form for them. A trace that arrived from another service continues through a `Trace.Parent`. A codec package decodes the ids off the wire and builds one with `Trace.Parent.new(trace_id, span_id, sampled)`, which fails with `Trace.Error` when an id has the wrong length. The root then keeps the parent's trace id and sampled flag and names the parent's span as its parent. The stdlib ships no wire codec, so `traceparent` and its relatives live in packages.
+
+```koja
+parent = try Trace.Parent.new(trace_id, span_id, sampled)
+options = Trace.RootOptions{kind: Trace.SpanKind.Server, parent: Option.Some(parent)}
+response = Trace.root("GET /entities", options, span -> router.dispatch(request))
+```
+
+When the closure returns, the finished `Trace.SpanRecord` joins a queue that holds at most 4096 records. An exporter package drains it with `Trace.Export.pop()` and reports `Trace.Export.dropped()`, the count of records a full queue refused. The stdlib ships no exporter.
+
 ### Runtime Observability
 
 The `Runtime` struct answers questions about the runtime as a whole. Two instance functions on `Pid` answer questions about one process:
@@ -2192,9 +2241,11 @@ The message is required and should tell the caller what to use instead. Bare
 `@deprecated` is accepted on functions (top-level, inline, and `impl`/`extend`
 members), structs, enums, constants, type aliases, and protocols, including
 `priv` declarations. Warnings fire at every resolved use site (calls, type
-positions, construction, patterns, constant reads), except inside the
-deprecated declaration itself and inside `impl`/`extend` blocks whose target
-is deprecated, so deprecating a type does not flag its own functions.
+positions, construction, patterns, constant reads). Reading a constant a
+deprecated type owns, such as `Old.ZERO`, warns for the type. Warnings do not
+fire inside the deprecated declaration itself, inside a declaration nested in
+it, or inside `impl`/`extend` blocks whose target is deprecated, so
+deprecating a type does not flag its own functions or constants.
 
 ### `@experimental`
 
@@ -2852,6 +2903,21 @@ Read-only process metrics. See [Runtime Observability](#runtime-observability) f
 - `Runtime.mailbox_depth() -> Int`: the calling process's queued message count.
 - `pid.state() -> Option<Process.State>`: one process's lifecycle state, `Option.None` when dead or unknown.
 - `pid.mailbox_depth() -> Option<Int>`: one process's queued message count, `Option.None` when dead or unknown.
+
+### Trace
+
+Closure-scoped spans over `Process.context`. See [Tracing](#tracing) for the semantics. `Trace` and its types are [`@experimental`](#experimental) and can change in a later release.
+
+- `Trace.root<R>(name: String, work: fn (Trace.Span) -> R) -> R` and `Trace.root<R>(name, options: Trace.RootOptions, work) -> R`: runs `work` in a span at a trace boundary. Starts a new sampled trace without a parent, continues `options.parent` otherwise. Ignores the context the process carries.
+- `Trace.RootOptions{kind: Trace.SpanKind = Internal, parent: Option<Trace.Parent> = Option.None}`: how a root opens.
+- `Trace.span<R>(name: String, work: fn (Trace.Span) -> R) -> R` and `Trace.span<R>(name, kind, work)`: runs `work` in a child span of the calling process's context. `Internal` when `kind` is omitted.
+- `Trace.current() -> Process.Context`: the calling process's context, the same as `Process.context()`.
+- `Trace.Parent{sampled: Bool, span: Int, trace_hi: Int, trace_lo: Int}`: a parent decoded off the wire. `Trace.Parent.new(trace_id: Binary, span_id: Binary, sampled: Bool) -> Trace.Parent ! Trace.Error` is the constructor, and `trace_id(self) -> Binary` and `span_id(self) -> Binary` give the ids back as bytes. `Trace.Error` is `InvalidSpanId` or `InvalidTraceId` when an id is not 8 or 16 bytes.
+- `Trace.Span`: the handle inside a closure. `attribute(self, key: String, value: Trace.Attribute)`, `status(self, status: Trace.Status)`, `recording?(self) -> Bool`.
+- `Trace.SpanRecord{attributes: Map<String, Trace.Attribute>, context: Process.Context, ended_at: Timestamp, kind: Trace.SpanKind, name: String, parent_span_id: Option<Binary>, started_at: Timestamp, status: Trace.Status}`: a finished span.
+- `Trace.Attribute{value: Bool | Float | Int | String}`: a span attribute. Literals convert where a `Trace.Attribute` is expected. `Trace.Attribute.from(value)` wraps a variable.
+- `Trace.SpanKind`: `Client`, `Internal`, `Server`. `Trace.Status`: `Error(String)`, `Ok`, `Unset`.
+- `Trace.Export.pop() -> Option<Trace.SpanRecord>`: the oldest finished span, for exporter packages. `Trace.Export.dropped() -> Int`: records a full queue has refused.
 
 ### Time
 

@@ -115,10 +115,12 @@ impl<M: Message> Mailbox<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::Context;
     use crate::wire::{Envelope, TAG_BUSINESS, TAG_IO_READY, TAG_LIFECYCLE, TAG_REPLY};
 
     fn envelope(tag: u8, reply_token: i64) -> Envelope {
-        let mut envelope = unsafe { Envelope::from_payload(tag, std::ptr::null(), 0, None) };
+        let mut envelope =
+            unsafe { Envelope::from_payload(tag, std::ptr::null(), 0, None, Context::ZERO) };
         envelope.reply_token = reply_token;
         envelope
     }

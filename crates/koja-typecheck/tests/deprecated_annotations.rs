@@ -431,6 +431,46 @@ fn deprecated_struct_members_do_not_warn() {
 }
 
 #[test]
+fn nested_const_of_deprecated_struct_does_not_warn() {
+    // Desugar hoists `const ZERO` to `Old.ZERO` without the owner's
+    // tag. Its body still counts as inside `Old`.
+    let source = "
+        @deprecated \"Use New instead.\"
+        struct Old
+          x: Int
+
+          const ZERO = Old{x: 0}
+        end
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert!(
+        warnings.is_empty(),
+        "a deprecated type's nested const must not warn: {warnings:?}",
+    );
+}
+
+#[test]
+fn read_of_nested_constant_warns_for_the_deprecated_owner() {
+    let source = "
+        @deprecated \"Use New instead.\"
+        struct Old
+          x: Int
+
+          const ZERO = Old{x: 0}
+        end
+
+        fn origin() -> Int
+          Old.ZERO.x
+        end
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert_eq!(
+        warnings,
+        vec!["`Old` is deprecated. Use New instead.".to_string()],
+    );
+}
+
+#[test]
 fn extend_on_deprecated_target_does_not_warn() {
     let source = "
         @deprecated \"Use New instead.\"

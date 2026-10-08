@@ -11,7 +11,8 @@ use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::util::{extract_int, nth_struct};
 use crate::runtime::{
-    declare_rt_demonitor_extern, declare_rt_monitor_extern, declare_rt_parent_extern,
+    declare_rt_context_get_extern, declare_rt_demonitor_extern, declare_rt_monitor_extern,
+    declare_rt_parent_extern,
 };
 
 /// `Process.demonitor(reference: Process.MonitorRef)`. Retract the
@@ -124,4 +125,35 @@ pub(super) fn emit_parent<'ctx>(
         .build_select(has_parent, some_value, none_value, "parent_option")
         .or_ice()?;
     ctx.builder.build_return(Some(&option)).or_ice().map(|_| ())
+}
+
+/// `Process.context() -> Process.Context`: copy the calling process's
+/// request context out of the runtime via `koja_rt_context_get`.
+/// `Process.Context` lays out as four `i64` words, the same 32 bytes the
+/// runtime holds, so the extern fills a stack slot of the struct type
+/// and the slot is loaded whole.
+pub(super) fn emit_context<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+) -> Result<(), LlvmError> {
+    let context_struct = match &function.return_type {
+        IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
+        other => panic!(
+            "LLVM emit: `Process.context` returns `{other:?}`, expected the \
+             `Process.Context` struct (IR seal invariant violation)",
+        ),
+    };
+    let slot = ctx
+        .builder
+        .build_alloca(context_struct, "context_slot")
+        .or_ice()?;
+    ctx.call_rt_unit(declare_rt_context_get_extern, &[slot.into()])?;
+    let context = ctx
+        .builder
+        .build_load(context_struct, slot, "context")
+        .or_ice()?;
+    ctx.builder
+        .build_return(Some(&context))
+        .or_ice()
+        .map(|_| ())
 }

@@ -1,0 +1,84 @@
+alias Process.Step
+alias Process.StopReason
+
+# Process.context travels with the work. `Trace.root` installs a
+# sampled context for its closure. A child copies its parent's context
+# at spawn, and a cast or call installs the sender's context for the
+# handler. A reply leaves the caller's own context alone, and the
+# closure's return restores what the process carried before.
+#
+# Span and trace ids are random, so the output compares contexts
+# instead of printing them.
+
+enum EchoMsg
+  Report
+  ReportSpawn
+end
+
+struct Echo
+  spawned_with: Process.Context
+end
+
+impl Process<(), EchoMsg, Process.Context> for Echo
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(Echo{spawned_with: Process.context()})
+  end
+
+  fn handle(self, msg: EchoMsg, from: Option<ReplyTo<Process.Context>>)
+    -> Step<Self>
+
+    match msg
+      EchoMsg.Report -> ReplyTo.reply(from, Process.context())
+      EchoMsg.ReportSpawn -> ReplyTo.reply(from, self.spawned_with)
+    end
+
+    Step.Continue(self)
+  end
+end
+
+fn describe(context: Process.Context) -> String
+  span = context.span == 0 ? "none" : "set"
+  trace = context.trace_hi == 0 and context.trace_lo == 0 ? "none" : "set"
+  "sampled=#{context.sampled?()} span=#{span} trace=#{trace}"
+end
+
+fn ask(echo: Ref<EchoMsg, Process.Context>, msg: EchoMsg) -> Process.Context
+  match echo.call(msg, 5000)
+    Result.Ok(context) -> context
+    Result.Err(error) -> Process.Context.ZERO
+  end
+end
+
+before = Process.context()
+"main: #{describe(before)}".print()
+
+(inside, spawned, under_call) =
+  Trace.root(
+    "request",
+    Trace.RootOptions{kind: Trace.SpanKind.Server},
+    fn (span: Trace.Span) -> (Process.Context, Process.Context, Ref<EchoMsg, Process.Context>)
+      inside = Process.context()
+      echo = spawn Echo.start(())
+      spawned = ask(echo, EchoMsg.ReportSpawn)
+      "inside root: #{describe(inside)}".print()
+      "spawned copies root: #{spawned == inside}".print()
+      "under call sees root: #{ask(echo, EchoMsg.Report) == inside}".print()
+      (inside, spawned, echo)
+    end,
+  )
+
+restored = Process.context()
+"main after root: #{describe(restored)}".print()
+"root restored main: #{restored == before}".print()
+"unsampled call sees main: #{ask(under_call, EchoMsg.Report) == before}".print()
+under_call.kill()
+
+match Trace.Export.pop()
+  Option.Some(record) ->
+    "record: #{record.name} sampled=#{record.context.sampled?()} same context=#{record.context == inside}".print()
+
+  Option.None ->
+    "record: none".print()
+end
+
+"main: done".print()

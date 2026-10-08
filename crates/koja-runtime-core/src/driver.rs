@@ -290,6 +290,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::Context;
     use crate::process_table::{Priority, Wake};
     use crate::protocol::{Interest, Message, Pid, Readiness, Tag};
     use std::cell::Cell;
@@ -298,6 +299,10 @@ mod tests {
     impl Message for MockMessage {
         fn tag(&self) -> Tag {
             Tag::Lifecycle
+        }
+
+        fn context(&self) -> Context {
+            Context::ZERO
         }
     }
 

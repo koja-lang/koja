@@ -27,6 +27,7 @@ pub(super) fn emit_process<'ctx>(
     method: ProcessMethod,
 ) -> Result<(), LlvmError> {
     match method {
+        ProcessMethod::Context => process_methods::emit_context(ctx, function),
         ProcessMethod::Demonitor => process_methods::emit_demonitor(ctx, function, llvm_function),
         ProcessMethod::Monitor => process_methods::emit_monitor(ctx, function, llvm_function),
         ProcessMethod::Parent => process_methods::emit_parent(ctx, function),

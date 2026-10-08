@@ -225,6 +225,14 @@ impl<'ctx> TypeLayouts<'ctx> {
         }
     }
 
+    /// Run `f` over every registered struct's symbol and field types,
+    /// inside one registry borrow. Used by the wire-contract check.
+    pub(crate) fn for_each_struct(&self, mut f: impl FnMut(&IRSymbol, &[IRType])) {
+        for (symbol, fields) in self.struct_fields.borrow().iter() {
+            f(symbol, fields);
+        }
+    }
+
     /// Closure-borrow over the `RefCell` so callers cannot hold a
     /// long-lived `Ref` across other emit operations.
     pub(crate) fn with_enum_layout<R>(
