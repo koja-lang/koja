@@ -28,6 +28,7 @@ mod hash;
 mod helpers;
 mod kernel;
 mod list;
+mod log;
 mod map;
 mod numeric;
 mod parse;
@@ -79,6 +80,7 @@ pub(crate) async fn dispatch<R: CallResolver>(
         IRIntrinsicId::Hash(impl_) => hash::dispatch(impl_, args),
         IRIntrinsicId::Kernel(KernelMethod::Panic) => kernel::panic(args),
         IRIntrinsicId::List(method) => list::dispatch(method, call),
+        IRIntrinsicId::LogRuntime(method) => log::dispatch(method, call),
         IRIntrinsicId::Map(method) => map::dispatch(method, call),
         IRIntrinsicId::NumericConvert(convert) => numeric::dispatch(convert, call),
         IRIntrinsicId::Parse(target) => parse::dispatch(target, call),

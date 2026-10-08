@@ -50,6 +50,11 @@ pub(crate) const RT_EXPORT_DROPPED_SYMBOL: &str = "koja_rt_export_dropped";
 pub(crate) const RT_EXPORT_POP_SYMBOL: &str = "koja_rt_export_pop";
 pub(crate) const RT_EXPORT_PUSH_SYMBOL: &str = "koja_rt_export_push";
 pub(crate) const RT_KILL_SYMBOL: &str = "koja_rt_kill";
+pub(crate) const RT_LOG_CONFIG_SYMBOL: &str = "koja_rt_log_config";
+pub(crate) const RT_LOG_CONFIGURE_SYMBOL: &str = "koja_rt_log_configure";
+pub(crate) const RT_LOG_ENTER_SYMBOL: &str = "koja_rt_log_enter";
+pub(crate) const RT_LOG_LEAVE_SYMBOL: &str = "koja_rt_log_leave";
+pub(crate) const RT_LOG_LEVEL_SYMBOL: &str = "koja_rt_log_level";
 pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "koja_rt_main_done";
 pub(crate) const RT_MONITOR_SYMBOL: &str = "koja_rt_monitor";
 pub(crate) const RT_PARENT_SYMBOL: &str = "koja_rt_parent";
@@ -387,6 +392,48 @@ pub(crate) fn declare_rt_export_push_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fu
         &[Ty::Ptr, Ty::I64, Ty::Ptr],
         Ty::Void,
     )
+}
+
+/// Declare (or look up) `koja_rt_log_config`. Signature:
+/// `i64 koja_rt_log_config(i8* out, i64 out_cap)`. Deep-copies the
+/// calling process's stored log configuration into `out` and returns
+/// 0, or returns -1 when none is stored.
+pub(crate) fn declare_rt_log_config_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    declare_with(ctx, RT_LOG_CONFIG_SYMBOL, &[Ty::Ptr, Ty::I64], Ty::I64)
+}
+
+/// Declare (or look up) `koja_rt_log_configure`. Signature:
+/// `void koja_rt_log_configure(i8* config, i64 len, void(i8*)* drop_glue,
+/// void(i8*)* copy_glue, i64 level)`. Stores a copy of the
+/// configuration and the floor word on the calling process.
+pub(crate) fn declare_rt_log_configure_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    declare_with(
+        ctx,
+        RT_LOG_CONFIGURE_SYMBOL,
+        &[Ty::Ptr, Ty::I64, Ty::Ptr, Ty::Ptr, Ty::I64],
+        Ty::Void,
+    )
+}
+
+/// Declare (or look up) `koja_rt_log_enter`. Signature:
+/// `i64 koja_rt_log_enter()`. Marks the calling process as running
+/// its log handlers and returns 1, or returns 0 when it already was.
+pub(crate) fn declare_rt_log_enter_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    declare_with(ctx, RT_LOG_ENTER_SYMBOL, &[], Ty::I64)
+}
+
+/// Declare (or look up) `koja_rt_log_leave`. Signature:
+/// `void koja_rt_log_leave()`. Clears the mark `koja_rt_log_enter` set.
+pub(crate) fn declare_rt_log_leave_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    declare_with(ctx, RT_LOG_LEAVE_SYMBOL, &[], Ty::Void)
+}
+
+/// Declare (or look up) `koja_rt_log_level`. Signature:
+/// `i64 koja_rt_log_level()`. The calling process's log floor word.
+pub(crate) fn declare_rt_log_level_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    declare_with(ctx, RT_LOG_LEVEL_SYMBOL, &[], Ty::I64)
 }
 
 /// Declare (or look up) `koja_rt_is_process_alive`. Signature:

@@ -185,6 +185,17 @@ pub fn envelope_drop_glue_symbol(ty: &IRType) -> IRSymbol {
     glue_base(ty).derived(".$envdrop$")
 }
 
+/// Symbol of the synthesized *by-pointer* payload deep-copy shim for
+/// `ty` (`<type>.$envcopy$`). The copy-out analog of
+/// [`envelope_drop_glue_symbol`]: the runtime copies a stored payload
+/// (the per-process log configuration at `spawn` and on
+/// `LogRuntime.config`) by memcpy and then calls this `void(ptr)`
+/// function over the new bytes, which severs every heap share the
+/// memcpy duplicated by routing into the by-value `deep_copy_T`.
+pub fn envelope_copy_glue_symbol(ty: &IRType) -> IRSymbol {
+    glue_base(ty).derived(".$envcopy$")
+}
+
 /// Symbol of the synthesized capture-release glue for a closure body
 /// (`<body>.$drop_env$`). Hung off the closure body's own symbol, so
 /// it stays in the body's package and is collision-free against any

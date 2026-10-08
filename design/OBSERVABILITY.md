@@ -1,8 +1,8 @@
 # Observability: Context in the Runtime
 
-**Status: in progress (2026-09-28). `Process.context` and the stdlib
-`Trace` module have shipped. Log, metrics, and the exporter port are
-open.** This document argues a position for how Koja programs produce traces, logs,
+**Status: in progress (2026-10-07). `Process.context`, the stdlib
+`Trace` module, and the stdlib `Log` module on the log slot have
+shipped. Metrics and the exporter port are open.** This document argues a position for how Koja programs produce traces, logs,
 and metrics. The runtime carries two typed fields on every process: a
 small request context that also rides on every message, and a log
 configuration that children inherit at `spawn`. The standard library
@@ -26,7 +26,7 @@ told this design what hurts. Their findings are recorded below.
   child, and `Log.info` reads the current process's slot. No user code
   threads a logger.
 - The standard library owns the vocabulary. `Trace`, `Log`, and
-  `Metrics` are stdlib modules that libraries call without knowing
+  `Metric` are stdlib modules that libraries call without knowing
   which exporter is installed, the same way `trail` and the HTTP
   client share `HTTP.Request` without knowing about each other.
 - Exporters are packages. An `OpenTelemetry` package drains runtime
@@ -396,13 +396,21 @@ Koja follows the handler model.
 
 ```koja
 protocol Log.Handler
-  fn handle_log(self, record: Log.Record) ! Log.Handler.Error
+  fn handle_log(self, record: Log.Record) ! Log.Error
+  fn to_fn(self) -> fn (Log.Record) -> Result<(), Log.Error>
 end
 
 protocol Log.Formatter<T>
   fn format_log(self, record: Log.Record) -> T
 end
 ```
+
+`Log.Error` is `Closed`, `Failed(String)`, or `Write(IO.Error)`, with
+`message()` for the text. It sits at `Log.Error` rather than
+`Log.Handler.Error` so a closure handler that never names the protocol
+still has a short name for its failure. `to_fn` has a default body
+that closes over the handler, so a struct implements `handle_log` and
+gets the closure shape for free.
 
 The method names carry the `_log` suffix so a conforming type does not
 park `handle` or `format` on its namespace. A process type that
@@ -428,12 +436,27 @@ A sink-writing protocol over `Write` from [IO.md](IO.md) can be added
 later without touching this one.
 
 - `Log.Record` carries level, message, attributes, and is stamped by
-  the runtime with pid, timestamp, and the trace and span ids from
-  `Process.context`. Nobody interpolates a trace id into a message
-  again.
+  `Log` with a timestamp and the `Process.Context` of the caller, so
+  the trace and span ids ride on every record. Nobody interpolates a
+  trace id into a message again. The pid is not on the record yet and
+  sits on the cut list.
+- Five levels, `Trace`, `Debug`, `Info`, `Warn`, `Error`, and the
+  enum is closed. Go's `slog` ships four names because its levels are
+  integers with gaps and a program can define its own `-8`. A Koja
+  program cannot add a variant, so the finest level has to be in the
+  set, or wire frames and rows land in `Debug` and `Debug` stops
+  meaning anything. The name collides with the `Trace` module, which
+  is the cost of using the word OTel, SLF4J, Rust, and .NET all use.
+  `Log.trace` is a log record and `Trace.span` is a span, and the
+  prefix keeps them apart. `Verbose` was the alternative and lost on
+  familiarity. `Fatal` and `Notice` are not coming. A fatal error is a
+  crash, and a notice is an `Info`.
 - Structured by default. A message plus a map literal of attributes,
-  as in `Log.info("checkout", ["pool": name])`. The attribute value
-  type is the same `String | Int | Float | Bool` union spans use.
+  as in `Log.info("checkout", ["pool": "primary"])`. The attribute
+  type is `Log.Attribute`, a separate struct with the same four scalar
+  values and literal conformances as `Trace.Attribute`. `Log` does not
+  depend on `Trace`, so either surface can stabilize alone and the two
+  can diverge. Log values are the likelier to grow.
 - Handlers run in the caller. A stdout write is one syscall and
   belongs in the request path. A handler that talks to a network owns
   its own process, posts to it with `cast`, and manages its own drop
@@ -442,7 +465,8 @@ later without touching this one.
 - The default handler writes text in development and JSON in
   production. The JSON shape includes `logging.googleapis.com/trace`
   when the trace id is set, so Cloud Logging correlates lines to
-  traces with no collector work.
+  traces with no collector work. `Log.Text` and `Log.Stdout` have
+  shipped. `Log.JSON` is first on the cut list.
 - No process metadata. Elixir's `Logger.metadata(request_id: id)`
   stores per-process state in the process dictionary, and Koja has no
   process dictionary and should not grow one for this. Request
@@ -450,9 +474,9 @@ later without touching this one.
   to a logger value, the Go `slog.With` pattern.
 
 ```koja
-log = Log.with(["entity": name, "tool": "create_entity"])
+log = Log.with(["entity": Log.Attribute.from(name), "tool": "create_entity"])
 log.info("near duplicate refused")
-log.warn("embedding failed", ["status": code])
+log.warn("embedding failed", ["status": Log.Attribute.from(code)])
 ```
 
 Value semantics make this cleaner than Elixir's version. The bound
@@ -460,6 +484,11 @@ attributes travel with the value you pass down, not with the process,
 so a `Pool` serving ten requests never leaks one request's metadata
 into another's line. That is a real bug class in Elixir when
 long-lived processes set metadata and forget to clear it.
+
+`Log.with` returns a `Log.Logger`, not a `Log`. The compiler rejects a
+static `info/2` beside an instance `info/3` on one struct, so the
+static entry points live on `Log` and the bound value is its own
+type. An attribute named at the call wins over a bound one.
 
 - Runtime crash reports flow through the same path with pid, trace
   id, and panic message.
@@ -492,6 +521,25 @@ per-process log configuration next to `Process.context`:
 - The slot is set once and read-only afterward for that process.
   Reconfiguration at runtime is not a goal, so a `SIGHUP` style toggle
   is off the table.
+- The slot holds a level word and a busy word in the core process
+  table beside `context`, and the `Log.Config` value on the backend
+  execution. `Log.configure` hands the value to the runtime as a deep
+  copied payload with a drop shim and a copy shim, the same shape as
+  a message envelope. A read copies the payload back out through the
+  copy shim, and `spawn` copies it into the child the same way. The
+  alternative, a take and put pair like the span record uses, avoids
+  the copy on read but leaves a child spawned inside a handler with no
+  configuration, and it still needs the copy shim for `spawn`. The
+  shim buys the simpler copy-out semantics, so that is what shipped.
+- An emit reads the level word first and returns when the record is
+  below the floor, so a disabled `trace` costs one word load. The
+  arguments are evaluated at the call site before that load, so a
+  `Trace` call in a hot loop pays for its interpolation and its
+  `Log.Attribute.from` calls whether or not the record is kept. That is
+  the level where the compile-time `[log] min_level` floor on the cut
+  list, or a lazy form, earns its place. The busy word is set while
+  handlers run, and a `Log` call made while it is set is dropped. That
+  is what stops a handler that logs from recursing.
 - The runtime default, before anyone configures anything, is text to
   stdout at `Info`. A five-line script never mentions `Log.configure`
   and still gets `Log.info` output. A compiled program on GKE opts
@@ -511,14 +559,20 @@ that gives tests an isolation no global can:
 
 ```koja
 test "warns on a bad embedding"
-  lines = Log.Capture.start()
-  Log.configure(Log.Config{level: Level.Debug, handlers: [lines.handler()]})
+  capture = Log.Capture.start()
+  Log.configure(Log.Config{handlers: [capture.handler()], level: Log.Level.Debug})
 
   embed_rows(db, embedder, rows)
 
-  assert lines.take().any?(l -> l.contains?("embedding failed"))
+  assert capture.take().any?(r -> r.message == "embedding failed")
 end
 ```
+
+`Log.Capture` is a collector process. `handler()` returns a closure
+that casts each record to it, and `take()` calls it for the records
+so far and clears them. A child's handler reaches the parent's
+collector because the closure in the copied configuration holds the
+collector's `Ref`.
 
 The test configures its own process and its children. The test next
 door, running in parallel, keeps the default. With a global this test
@@ -527,10 +581,10 @@ would need a mutex around the whole suite.
 **Handlers are closures.** Protocol dispatch is static, so
 `List<Log.Handler>` cannot hold handlers of two types without
 existential protocol types. `Log.Config.handlers` is a list of
-`fn (Log.Record) -> Result<(), Log.Handler.Error>` instead, the same
+`fn (Log.Record) -> Result<(), Log.Error>` instead, the same
 type-erased seam the vendored `lib/log` used for its formatter.
-`Log.Handler` stays as the protocol a struct implements, and
-`Log.configure` takes `handler.to_fn()` or performs the conversion.
+`Log.Handler` stays as the protocol a struct implements, and the
+config takes `handler.to_fn()`.
 Handler state stays out of the config and in the handler's own
 process, so the value copied on `spawn` is a level and a list of
 closures.
@@ -542,18 +596,21 @@ reads the environment.
 
 ```koja
 Log.configure(Log.Config{
-  level: settings.log_level,
   handlers: [Log.Stdout.new(Log.JSON.gcp()).to_fn()],
-  scopes: ["postgres.wire": Level.Debug],
+  level: settings.log_level,
+  scopes: ["postgres.wire": Log.Level.Debug],
 })
 ```
 
 `settings.log_level` comes from the application's `Config`, which
 reads `LOG_LEVEL` the same way it reads `PG_HOST`. One env var, one
-parsing site, a `Level` enum the compiler checks.
+parsing site through `Log.Level.parse`, a `Log.Level` enum the
+compiler checks.
 
-Scopes are declared by libraries as constants and documented as part
-of their API, the Zig model.
+Scopes have not shipped and sit on the cut list with `Log.JSON`. The
+shipped `Log.Config` has `handlers` and `level` only. Scopes are
+declared by libraries as constants and documented as part of their
+API, the Zig model.
 
 ```koja
 const WIRE = Log.scope("postgres.wire")
@@ -620,8 +677,8 @@ supplied by the call site, and no adapter is generated for that arity.
 the compiler supplies. `@ARGV` for scripts fits only if the family's
 definition widens from "known at compile time" to "supplied from
 outside the program and fixed for the life of the process," and that
-is a separate decision. `@SOURCE` is first on the 0.20 cut list and
-needs a cooling period before it is built.
+is a separate decision. `@SOURCE` is on the 0.20 cut list and needs
+a cooling period before it is built.
 
 ## Two fields, no process dictionary
 
@@ -668,13 +725,22 @@ the exporter contract is the only new piece.
 once as constants and recorded through the handle.
 
 ```koja
-const REQUEST_DURATION = Metrics.histogram(
+const REQUEST_DURATION = Metric.histogram(
   "http.server.request.duration",
   buckets: DEFAULT_MS,
 )
 
 REQUEST_DURATION.record(elapsed, ["http.route": route])
 ```
+
+The module is `Metric`, singular, beside `Trace` and `Log`. The three
+are domain nouns in the house style of `IO`, `Process`, and `JSON`,
+and the nested types read as properties of the domain, `Trace.Span`
+and `Log.Level` and `Metric.Histogram`. The actor nouns `Tracer`,
+`Logger`, and `Meter` were considered and dropped. A module named for
+an actor implies a handle you were given, and the position here is
+that nobody holds one. `Log.Logger` is the one actor, the optional
+value from `Log.with`, and that is where it belongs.
 
 Never string-named at the call site. A typo is a compile error, bucket
 configuration has a home, and the runtime pre-allocates the shard slot
@@ -744,12 +810,18 @@ The 0.20 order in [ROADMAP.md](ROADMAP.md) is by dependency.
    remem port is next.
 4. The log slot, `Log.configure`, closure handlers, `Log.Record`
    stamped from `Process.context`, and the crash reporter routed
-   through it. remem and `auth_manager` delete their vendored loggers.
+   through it. The stdlib half has shipped: the slot with a level
+   word, a busy word, and a copied `Log.Config`, `Log` with its
+   static and bound level functions, `Log.Text`, `Log.Stdout`, and
+   `Log.Capture`. The crash reporter is on the cut list. remem and
+   `auth_manager` deleting their vendored loggers is next.
 
-The cut list, in drop order: `@SOURCE`, the compile-time
-`[log] min_level` floor, span events on records, per-scheduler export
-buffers. Runtime metrics ride with the Runtime Observability work and
-application `Metrics` waits until `trail` and `pooler` show what they
+The cut list, in drop order: `Log.JSON`, `Log.Scope` and per-scope
+floors, crash reports through the slot, pid on the record, `@SOURCE`,
+the compile-time `[log] min_level` floor, span events on records,
+per-scheduler export buffers. Runtime metrics ride with the Runtime
+Observability work and
+application `Metric` waits until `trail` and `pooler` show what they
 want to record.
 
 ## Findings from the remem spikes
@@ -822,7 +894,7 @@ spikes answered them.
   Ok-wrapping of the success value that declarations get, closes the
   gap.
 - A `const` cannot hold a runtime handle today, so
-  `const X = Metrics.histogram(...)` at module level waits on a
+  `const X = Metric.histogram(...)` at module level waits on a
   constant initializer that registers with the runtime. The same
   limit affects `Log.scope`.
 

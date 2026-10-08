@@ -256,6 +256,13 @@ impl OwnedPayload {
         self.buf
     }
 
+    /// The drop glue for the nested heap, or `None` when the bytes own
+    /// none. A copy of the bytes that owns its own nested heap needs
+    /// the same glue.
+    pub fn drop_glue(&self) -> Option<unsafe extern "C" fn(*mut u8)> {
+        self.drop_glue
+    }
+
     /// Moved-out defuse, the counterpart of [`Envelope::free_transport`].
     /// The caller has copied the payload bytes into its own frame and
     /// now owns any nested heap they reference, so only the buffer is

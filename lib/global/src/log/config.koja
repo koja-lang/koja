@@ -1,0 +1,20 @@
+@doc """
+What `Log.configure` installs on the calling process. `level` is the
+floor, and a record below it is dropped before it is built.
+`handlers` receive each record in the order given.
+
+The configuration is typed and comes from the application's own
+settings. `Log` reads no environment variables.
+
+```koja
+Log.configure(Log.Config{
+  handlers: [Log.Stdout.new(Log.Text{}).to_fn()],
+  level: settings.log_level,
+})
+```
+"""
+@experimental
+struct Log.Config
+  handlers: List<fn (Log.Record) -> Result<(), Log.Error>>
+  level: Log.Level = Log.Level.Info
+end

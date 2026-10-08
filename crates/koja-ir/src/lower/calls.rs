@@ -475,8 +475,9 @@ pub(super) fn lower_method_call(
 /// a physically independent value. The `TraceRuntime` span intrinsics
 /// (`span_open` / `export_push` at index 0, `span_put` after the handle
 /// at index 1) hand a span record to the runtime's open span stack or
-/// export queue, which owns it from then on. See
-/// [`CallSite::transfer_arg`].
+/// export queue, which owns it from then on. `LogRuntime.configure`
+/// hands the log configuration (index 0) to the calling process's
+/// slot the same way. See [`CallSite::transfer_arg`].
 fn runtime_transfer_arg(receiver: &Identifier, method: &str) -> Option<usize> {
     if receiver.package() != "Global" {
         return None;
@@ -484,6 +485,7 @@ fn runtime_transfer_arg(receiver: &Identifier, method: &str) -> Option<usize> {
     match receiver.path() {
         [name] if name == "Ref" && matches!(method, "cast" | "call" | "send_after") => Some(0),
         [name] if name == "ReplyTo" && method == "send" => Some(0),
+        [name] if name == "LogRuntime" && method == "configure" => Some(0),
         [name] if name == "TraceRuntime" => match method {
             "export_push" | "span_open" => Some(0),
             "span_put" => Some(1),

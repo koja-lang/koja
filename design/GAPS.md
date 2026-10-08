@@ -613,8 +613,12 @@ from the cause.
 Consequence: a type cannot offer a static and an instance method
 under one name at one arity. The stdlib met it once and resolved it
 by design, since `File` became a path module with no instance methods
-and `IO.Descriptor` is the handle. User code that hits it gets a
-misleading error at a call site.
+and `IO.Descriptor` is the handle. It met it again on 2026-10-07 in
+`Log`, where a static `info(message, attributes)` and a bound
+`info(self, message, attributes)` share a name and arity once the
+defaulted parameter adapters are counted. The bound form moved to
+`Log.Logger`. User code that hits it gets a misleading error at a
+call site.
 
 **Fix path:** two parts. First, `synthesize_default_method` reports
 the collision, naming the adapter it tried to register and the
@@ -668,3 +672,91 @@ conformance to the protocol and unify the bound's argument list with
 the conformance's `protocol_args`. One conformance per type and
 protocol makes the answer unique. A slot still empty after that pass
 reports as it does today.
+
+## The right operand of `==` is resolved twice
+
+Found 2026-10-07 while writing `lib/global/test/log_test.koja`.
+`resolve_equality_op_expr` in
+`koja-typecheck/src/pipeline/resolve/ops.rs` resolves both operands,
+rewrites `lhs == rhs` to `lhs.equals?(rhs)`, and calls `resolve_expr`
+on the new call. `classify_receiver` in `resolve/calls/methods.rs`
+skips a receiver that is already resolved, so the left operand
+survives. The argument list has no such check, so the right operand
+runs through resolve a second time.
+
+A static call on a nested type does not survive the second pass. The
+first pass collapsed the receiver path `Outer.Inner` into a synthetic
+`Ident` named `Outer.Inner` with a `Global` resolution, through
+`rewrite_to_static_ident`. On the second pass `static_dotted_path` in
+`resolve/paths.rs` reads that ident as one segment with a dot in it,
+`lookup_type` finds nothing, and the receiver falls to the instance
+arm because its resolution is already stamped. A constant path fails
+the same way with a different message, since the rewritten ident is
+looked up as a plain name.
+
+```koja
+i = Outer.Inner.make(1)
+i == Outer.Inner.make(1)
+# error: cannot call static method `Outer.Inner.make` on a value.
+# Call it as `Outer.Inner.make(...)` instead
+i == Outer.Inner.ZERO
+# error: unknown identifier `Outer.Inner.ZERO` in this scope
+```
+
+A single-segment type passes, since the synthetic ident `Point` is a
+plain name again, so `p == Point.origin()` works and `p == Point.ZERO`
+does not. The left operand passes, so `Outer.Inner.make(1) == i`
+works. The hand-written `i.equals?(Outer.Inner.make(1))` works. A
+function argument, a typed binding, and a list literal on the right
+all work. `Option.Some(Outer.Inner.make(1))` and a tuple on the right
+fail, because the inner call is re-resolved through them.
+
+Consequence: a comparison against a static constructor or a constant
+on a nested type has to bind the value first. The stdlib tests do
+this for `Process.Context.ZERO`, `Trace.Attribute.from`, and
+`Log.Attribute.from`, and every nested stdlib type has the same
+problem. The error names the wrong cause and points at a call that is
+written correctly.
+
+**Fix path:** stop resolving the right operand twice. The rewrite
+can build the `equals?` call and resolve the method call with the
+argument already resolved, the way `classify_receiver` already
+accepts a resolved receiver. The other direction is to make resolve
+idempotent on its own rewrites, so `classify_receiver` returns
+`Static` for an `Ident` whose resolution is already a `Global` type
+and the ident lookup accepts a rewritten constant, but that spreads
+the `==` special case into every rewrite site.
+
+## `Map` iteration order differs between the backends
+
+Found 2026-10-07 while writing the `tests/lang/io/log.kojs` golden.
+`Map.next` documents its order as unspecified. The interpreter stores
+a `Map` as a list of pairs in insertion order
+(`koja-ir-eval/src/value.rs`). The native backend stores it as an
+open-addressed hash table and walks the slots
+(`koja-ir-llvm/src/intrinsics/map.rs`), so it iterates in hash order.
+The two orders agree only for a map with one entry.
+
+```koja
+m = ["job": 1, "rows": 2, "host": 3, "zone": 4]
+for (k, v) in m
+  IO.write("#{k}=#{v} ")
+end
+# interpreter: job=1 rows=2 host=3 zone=4
+# native:      rows=2 zone=4 job=1 host=3
+```
+
+Consequence: any output that walks a map differs by backend. The lang
+golden suite compares stdout on both backends, so a golden that
+prints a map must hold one key, and `tests/lang/io/log.kojs` does. A
+`Log.Text` line with two attributes prints them in a different order
+under `koja run` and under a built binary, so a log line is not
+stable text across the backends and neither is a `Map` rendered
+through `Debug`.
+
+**Fix path:** decide whether the order is part of the language. If it
+is, the native table gains an insertion-ordered entry list beside the
+slot array, the shape `IndexMap` uses, and `next` walks the list. The
+interpreter already has that order. If it is not, the `Debug` and
+`Log.Text` renderers sort their keys so rendered text is stable, and
+the golden rule stays. Either way the `Map` doc should say which.

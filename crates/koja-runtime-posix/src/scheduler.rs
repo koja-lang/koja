@@ -194,6 +194,10 @@ pub(crate) struct NativeExecution {
     /// execution state, which releases the records of a process that
     /// died inside a span.
     pub(crate) spans: Vec<Option<crate::trace::SpanRecord>>,
+    /// The log configuration held for the stdlib `Log`, a clone of the
+    /// spawner's at spawn and replaced by `Log.configure`. `None` until
+    /// some ancestor configured. Dropped with the execution state.
+    pub(crate) log: Option<crate::log::LogConfig>,
 }
 
 /// `NativeExecution` holds raw pointers that are heap-allocated and not
@@ -204,14 +208,22 @@ pub(crate) struct NativeExecution {
 unsafe impl Send for NativeExecution {}
 
 impl NativeExecution {
-    /// Builds the execution state for a freshly spawned process.
-    fn new(func: ProcessFn, init_state: OwnedPayload, stack: ProcessStack, sp: *mut u8) -> Self {
+    /// Builds the execution state for a freshly spawned process. `log`
+    /// is the configuration the child inherits from its spawner.
+    fn new(
+        func: ProcessFn,
+        init_state: OwnedPayload,
+        stack: ProcessStack,
+        sp: *mut u8,
+        log: Option<crate::log::LogConfig>,
+    ) -> Self {
         Self {
             func,
             init_state,
             sp,
             stack,
             spans: Vec::new(),
+            log,
         }
     }
 
@@ -1821,7 +1833,11 @@ pub unsafe extern "C" fn koja_rt_spawn(
     }
 
     let (stack, sp) = allocate_process_stack();
-    let execution = NativeExecution::new(fn_ptr, init_state, stack, sp);
+    // The child inherits the spawner's log configuration. The clone
+    // happens here, on the spawner's thread, where the spawner's
+    // execution state is exclusively ours to read.
+    let log = crate::log::inherited_config();
+    let execution = NativeExecution::new(fn_ptr, init_state, stack, sp, log);
 
     // The spawner becomes the parent. On the host thread (the entry
     // process's spawn) `CURRENT_PID` is -1, so PID 1 gets no parent.

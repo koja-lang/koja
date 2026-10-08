@@ -239,6 +239,32 @@ their drop glue. The export queue holds `EXPORT_CAPACITY` (4096) records.
 `push` past capacity drops the new record, runs its glue, and bumps the
 counter `koja_rt_export_dropped` reads.
 
+### Log slot
+
+The stdlib `Log` module reads its configuration from the calling process.
+Each process table slot holds a log floor word and a busy word, and the
+execution state holds an optional configuration payload. The payload is a
+stdlib struct the runtime never reads. It crosses the boundary as bytes
+plus a length plus two by-pointer shims, the drop glue and a deep-copy
+glue. The runtime clones the payload by memcpy and then calls the copy
+glue over the new bytes, which replaces every heap pointer the memcpy
+duplicated with a fresh block.
+
+| Function                | Arguments                                  | Returns            |
+| ----------------------- | ------------------------------------------ | ------------------ |
+| `koja_rt_log_level`     | none                                       | floor word         |
+| `koja_rt_log_configure` | `config, len, drop_glue, copy_glue, level` | none               |
+| `koja_rt_log_config`    | `out, out_cap`                             | 0 filled, -1 unset |
+| `koja_rt_log_enter`     | none                                       | 1 entered, 0 busy  |
+| `koja_rt_log_leave`     | none                                       | none               |
+
+`spawn` copies the floor word into the child and clones the payload
+through the copy glue. The busy word starts clear in the child. The floor
+word is the rank the stdlib `Log.Level` passes with each configure, and a
+fresh slot holds `DEFAULT_LOG_LEVEL` (1, the rank of `Info`). `config`
+fills `out` with an independent copy the caller owns, so `out_cap` must
+cover the whole value, and the runtime aborts when it does not.
+
 ## Numeric parse helper return codes
 
 `koja_int_parse` / `koja_float_parse` take a string payload pointer

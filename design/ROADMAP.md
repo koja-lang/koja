@@ -111,15 +111,19 @@ rather than block forever.
 3. The log slot: `Log.configure` writes the calling process's slot and
    `spawn` copies it, handlers are closures, `Log.Record` is stamped from
    `Process.context`, and the runtime crash report flows through the same
-   path. remem and `auth_manager` delete their vendored `lib/log` and
-   threaded `Logger` values.
+   path. The stdlib module shipped, experimental, with `Log.Text`,
+   `Log.Stdout`, and `Log.Capture`. The crash report is on the cut list.
+   remem and `auth_manager` deleting their vendored `lib/log` and
+   threaded `Logger` values is open.
 
 The rest of the I/O work is independent of these three and interleaves
 wherever one of them stalls.
 
-Cut list, in the order to drop items if the release runs long: `@SOURCE`,
-the compile-time `[log] min_level` floor, span events on log records,
-per-scheduler export buffers, then the language server items. None of them
+Cut list, in the order to drop items if the release runs long: `Log.JSON`,
+`Log.Scope` and per-scope floors, crash reports through the log slot, pid
+on the log record, `@SOURCE`, the compile-time `[log] min_level` floor,
+span events on log records, per-scheduler export buffers, then the
+language server items. None of them
 changes the runtime shape, so each can ship in a patch or in 0.21 without
 a second migration. If step 2 or 3 stalls, the escape hatch is to tag I/O
 plus `Process.context` as 0.20 and finish `Log` and the exporter in 0.21.

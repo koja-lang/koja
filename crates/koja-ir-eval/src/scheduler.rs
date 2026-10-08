@@ -59,6 +59,10 @@ pub(crate) struct EvalExecution {
     /// the record is moved out for an attribute write. Mirrors native
     /// `NativeExecution.spans`.
     spans: Vec<Option<Value>>,
+    /// The log configuration held for the stdlib `Log`, a clone of the
+    /// spawner's at spawn and replaced by `Log.configure`. `None` until
+    /// some ancestor configured. Mirrors native `NativeExecution.log`.
+    log: Option<Value>,
 }
 
 /// The cooperative process table: agnostic control blocks plus
@@ -515,6 +519,53 @@ pub(crate) fn export_dropped() -> i64 {
     EXPORTS.with(|exports| exports.dropped() as i64)
 }
 
+/// Runs `f` over the currently-resuming process's stored log
+/// configuration.
+fn with_log<R>(f: impl FnOnce(&mut Option<Value>) -> R) -> R {
+    let pid = current_pid();
+    // The driver claimed `pid` for this resume, which is what
+    // `with_execution` requires.
+    with_table(|table| unsafe { table.with_execution(pid, |execution| f(&mut execution.log)) })
+        .expect("a resuming process has an execution slot")
+}
+
+/// The currently-resuming process's log floor word. Mirrors native
+/// `koja_rt_log_level`.
+pub(crate) fn log_level() -> i64 {
+    let pid = current_pid();
+    with_table(|table| table.log_level(pid) as i64)
+}
+
+/// Stores `config` and the floor word `level` on the currently-resuming
+/// process. Mirrors native `koja_rt_log_configure`.
+pub(crate) fn log_configure(config: Value, level: i64) {
+    with_log(|log| *log = Some(config));
+    let pid = current_pid();
+    with_table(|table| table.set_log_level(pid, level as u64));
+}
+
+/// The currently-resuming process's stored log configuration, or `None`
+/// when no ancestor configured. A `Value` clone shares the heap by
+/// reference count, and eval values never mutate in place, so the
+/// share is as independent as a native deep copy. Mirrors native
+/// `koja_rt_log_config`.
+pub(crate) fn log_config() -> Option<Value> {
+    with_log(|log| log.clone())
+}
+
+/// Marks the currently-resuming process as running its log handlers.
+/// `false` when it already was. Mirrors native `koja_rt_log_enter`.
+pub(crate) fn log_enter() -> bool {
+    let pid = current_pid();
+    with_table(|table| table.log_enter(pid))
+}
+
+/// Clears the mark [`log_enter`] set. Mirrors native `koja_rt_log_leave`.
+pub(crate) fn log_leave() {
+    let pid = current_pid();
+    with_table(|table| table.log_leave(pid));
+}
+
 /// Sets the currently-resuming process's scheduling priority from a
 /// `Priority` variant index (0=Low, 1=Normal, 2=High). Mirrors
 /// native `koja_rt_set_priority`.
@@ -587,10 +638,14 @@ pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
     if with_table(|table| table.is_draining()) {
         return 0;
     }
+    // The child inherits the spawner's log configuration.
+    let child = EvalExecution {
+        log: log_config(),
+        ..EvalExecution::default()
+    };
     // A refused spawn means a kill landed on the (still running) spawner.
     // Pid 0 keeps the child from outliving the already-settled cascade.
-    let Ok(pid) = with_table(|table| table.spawn(EvalExecution::default(), Some(current_pid())))
-    else {
+    let Ok(pid) = with_table(|table| table.spawn(child, Some(current_pid()))) else {
         return 0;
     };
     push_wake(Wake {

@@ -33,8 +33,9 @@ pub use driver::{CooperativeDriver, CooperativeRuntime};
 pub use export_queue::ExportQueue;
 pub use mailbox::{Mailbox, WaitTarget};
 pub use process_table::{
-    CrashInfo, Delivery, ExitNotice, ExitReason, IoPark, IoWait, MailPark, Priority, ProcessState,
-    ProcessTable, Reclaim, ReplyDelivery, ScheduleCounters, SwitchOutcome, Wake, slot_index,
+    CrashInfo, DEFAULT_LOG_LEVEL, Delivery, ExitNotice, ExitReason, IoPark, IoWait, MailPark,
+    Priority, ProcessState, ProcessTable, Reclaim, ReplyDelivery, ScheduleCounters, SwitchOutcome,
+    Wake, slot_index,
 };
 pub use protocol::{
     Clock, Driver, Executor, Interest, Lifecycle, Message, MessageSource, Pid, Reactor, Readiness,

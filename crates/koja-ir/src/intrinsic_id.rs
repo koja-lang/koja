@@ -72,6 +72,9 @@ pub enum IRIntrinsicId {
     Hash(HashImpl),
     Kernel(KernelMethod),
     List(ListMethod),
+    /// `@intrinsic` statics on the package-private `LogRuntime` host
+    /// from `koja/lib/global/src/log.koja`. See [`LogRuntimeMethod`].
+    LogRuntime(LogRuntimeMethod),
     Map(MapMethod),
     /// Explicit conversions out of the hub types, the inverse of
     /// implicit hub widening. All return
@@ -195,6 +198,24 @@ intrinsic_methods! {
         Pop => "pop",
         ReplaceAt => "replace_at",
         Slice => "slice",
+    }
+
+    /// `@intrinsic` statics on the package-private `LogRuntime` host
+    /// in `koja/lib/global/src/log.koja`. The runtime plumbing under
+    /// `Log`: each process carries a log floor word, a busy word, and
+    /// an optional configuration payload that `spawn` copies into the
+    /// child. `Level` reads the floor word, `Configure` stores the
+    /// payload and the floor, `Config` deep-copies the payload out as
+    /// an `Option`, and `Enter` / `Leave` set and clear the busy word
+    /// so a handler that logs does not recurse. The configuration type
+    /// is opaque to the runtime and rides the [`crate::IRFunction`]
+    /// signature like a message payload does.
+    LogRuntimeMethod {
+        Config => "config",
+        Configure => "configure",
+        Enter => "enter",
+        Leave => "leave",
+        Level => "level",
     }
 
     /// Methods on `Map<K, V>`. Like [`ListMethod`], the key + value
@@ -447,6 +468,7 @@ impl IRIntrinsicId {
                 .map(|target| Self::NumericConvert(NumericConvert::IntNarrow(target))),
             "Kernel" => KernelMethod::from_source(method).map(Self::Kernel),
             "List" => ListMethod::from_source(method).map(Self::List),
+            "LogRuntime" => LogRuntimeMethod::from_source(method).map(Self::LogRuntime),
             "Map" => MapMethod::from_source(method).map(Self::Map),
             "Process" => ProcessMethod::from_source(method).map(Self::Process),
             "Ref" => RefMethod::from_source(method).map(Self::Ref),
@@ -636,6 +658,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Hash(impl_) => write!(f, "{}.hash", impl_.segment()),
             Self::Kernel(m) => write!(f, "Kernel.{}", m.segment()),
             Self::List(m) => write!(f, "List.{}", m.segment()),
+            Self::LogRuntime(m) => write!(f, "LogRuntime.{}", m.segment()),
             Self::Map(m) => write!(f, "Map.{}", m.segment()),
             Self::NumericConvert(convert) => f.write_str(&convert.path()),
             Self::Parse(target) => write!(f, "{}.parse", target.segment()),
@@ -705,6 +728,31 @@ mod tests {
             ("List", "pop", Id::List(ListMethod::Pop)),
             ("List", "replace_at", Id::List(ListMethod::ReplaceAt)),
             ("List", "slice", Id::List(ListMethod::Slice)),
+            (
+                "LogRuntime",
+                "config",
+                Id::LogRuntime(LogRuntimeMethod::Config),
+            ),
+            (
+                "LogRuntime",
+                "configure",
+                Id::LogRuntime(LogRuntimeMethod::Configure),
+            ),
+            (
+                "LogRuntime",
+                "enter",
+                Id::LogRuntime(LogRuntimeMethod::Enter),
+            ),
+            (
+                "LogRuntime",
+                "leave",
+                Id::LogRuntime(LogRuntimeMethod::Leave),
+            ),
+            (
+                "LogRuntime",
+                "level",
+                Id::LogRuntime(LogRuntimeMethod::Level),
+            ),
             ("Map", "empty?", Id::Map(MapMethod::EmptyQ)),
             ("Map", "get", Id::Map(MapMethod::Get)),
             ("Map", "has?", Id::Map(MapMethod::HasQ)),

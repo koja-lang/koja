@@ -124,3 +124,43 @@ fn user_main_runs_stdout_call_then_returns_void() {
         "expected `@main` trampoline not to write to stdout directly; got:\n{trampoline_body}",
     );
 }
+
+#[test]
+fn log_configure_hands_the_runtime_both_payload_shims() {
+    // `Log.Config` owns a list of closures, so the runtime needs a drop
+    // shim to release a stored configuration and a copy shim to clone
+    // it into a child at `spawn` and back out on `LogRuntime.config`.
+    // The copy shim is the by-pointer analog of `$envdrop$`: load the
+    // value, route it through `$deep_copy$`, store it back in place.
+    let source = "
+        handler = fn (record: Log.Record) -> Result<(), Log.Error> Result.Ok(()) end
+        Log.configure(Log.Config{handlers: [handler]})
+        ";
+
+    let script = lower_as_script(source);
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    let configure_body = extract_function_body(&ir_text, "Global.LogRuntime.configure/2");
+    assert_contains(
+        configure_body,
+        "call void @koja_rt_log_configure(ptr %log_config, i64 32, \
+         ptr @\"Global.Log.Config.$envdrop$\", ptr @\"Global.Log.Config.$envcopy$\"",
+    );
+
+    let copy_shim = extract_function_body(&ir_text, "Global.Log.Config.$envcopy$");
+    assert_contains(copy_shim, "load %Global.Log.Config, ptr %0");
+    assert_contains(
+        copy_shim,
+        "call %Global.Log.Config @\"Global.Log.Config.$deep_copy$\"(%Global.Log.Config %elem)",
+    );
+    assert_contains(
+        copy_shim,
+        "store %Global.Log.Config %elem.deep_copy, ptr %0",
+    );
+
+    let config_body = extract_function_body(&ir_text, "Global.LogRuntime.config/0");
+    assert_contains(config_body, "call i64 @koja_rt_log_config(ptr");
+    assert_contains(config_body, "fill_some");
+    assert_contains(config_body, "fill_none");
+}

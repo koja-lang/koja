@@ -1,0 +1,75 @@
+@doc """
+Why a level name did not parse. Carries the text that was given.
+"""
+@experimental
+enum Log.Level.ParseError
+  Unknown(String)
+end
+
+@doc """
+How serious a record is, from `Trace` up to `Error`. The log floor of
+a process is one of these. A record at or above the floor reaches the
+handlers and a record below it is dropped before it is built.
+
+`Trace` is for the records that show every step, such as a wire frame
+or a row. `Debug` is for the records that show what the program is
+doing. The split keeps `Debug` readable when the finest records are on.
+"""
+@experimental
+enum Log.Level
+  Trace
+  Debug
+  Info
+  Warn
+  Error
+
+  @doc """
+  True when this level is as serious as `floor` or more so.
+  """
+  fn at_least?(self, floor: Log.Level) -> Bool
+    rank(self) >= rank(floor)
+  end
+
+  @doc """
+  Reads a level name such as `info` or `WARN`. Surrounding whitespace
+  and letter case do not matter.
+  """
+  fn parse(text: String) -> Log.Level ! Log.Level.ParseError
+    match text.trim().downcase()
+      "trace" -> Log.Level.Trace
+      "debug" -> Log.Level.Debug
+      "info" -> Log.Level.Info
+      "warn" -> Log.Level.Warn
+      "error" -> Log.Level.Error
+      _ -> fail Log.Level.ParseError.Unknown(text)
+    end
+  end
+
+  @doc """
+  The upper case name, as it appears in a text log line.
+  """
+  fn to_string(self) -> String
+    match self
+      Log.Level.Trace -> "TRACE"
+      Log.Level.Debug -> "DEBUG"
+      Log.Level.Info -> "INFO"
+      Log.Level.Warn -> "WARN"
+      Log.Level.Error -> "ERROR"
+    end
+  end
+end
+
+# The word the runtime stores as a process's floor. `Info` is 2, the
+# value a fresh slot holds before `Log.configure` runs, and the runtime
+# mirrors it as `DEFAULT_LOG_LEVEL`. Package-private so `Log` can
+# compare a record against the floor word it reads.
+@experimental
+priv fn rank(level: Log.Level) -> Int
+  match level
+    Log.Level.Trace -> 0
+    Log.Level.Debug -> 1
+    Log.Level.Info -> 2
+    Log.Level.Warn -> 3
+    Log.Level.Error -> 4
+  end
+end

@@ -1,0 +1,16 @@
+@doc """
+A handler that writes one formatted line per record to stdout. The
+default configuration is `Log.Stdout.new(Log.Text{})` at `Info`.
+"""
+@experimental
+struct Log.Stdout<F: Log.Formatter<String>>: Log.Handler
+  formatter: F
+
+  fn new(formatter: F) -> Log.Stdout<F>
+    Log.Stdout{formatter: formatter}
+  end
+
+  fn handle_log(self, record: Log.Record) ! Log.Error
+    IO.puts(self.formatter.format_log(record))
+  end
+end

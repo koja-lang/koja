@@ -17,7 +17,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
 - [Protocols](#protocols): Behavioral Contracts, Impl Blocks, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
-- [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`, Process Context, Tracing, Runtime Observability
+- [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`, Process Context, Tracing, Logging, Runtime Observability
 - [Testing](#testing): `test` Blocks, `assert`, `Test.Failure`, Setup and Skips, Panics, Running Tests
 - [Annotations](#annotations): `@deprecated`, `@doc`
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
@@ -2008,6 +2008,49 @@ response = Trace.root("GET /entities", options, span -> router.dispatch(request)
 
 When the closure returns, the finished `Trace.SpanRecord` joins a queue that holds at most 4096 records. An exporter package drains it with `Trace.Export.pop()` and reports `Trace.Export.dropped()`, the count of records a full queue refused. The stdlib ships no exporter.
 
+### Logging
+
+`Log` and its types are [`@experimental`](#experimental). A use warns until the project sets `experimental = true` in `koja.toml`, and the API can change in a later release.
+
+`Log` writes structured records. A call names a level, a message, and a map of attributes. The runtime adds the calling process's `Process.Context` and a timestamp, so a record under a span carries the trace and span ids without a parameter.
+
+```koja
+Log.info("request handled", ["status": 200, "path": Log.Attribute.from(request.path)])
+Log.warn("retrying", ["attempt": Log.Attribute.from(attempt)])
+```
+
+A `Log.Config` names the handlers that take each record and the level floor. `Log.configure` installs it in the calling process. Every process the caller spawns from then on starts with a copy, so one call at the entry point configures the whole tree below it. A process spawned before the call keeps what it had. A process nobody configured writes `Info` and above to stdout through `Log.Text`.
+
+```koja
+Log.configure(
+  Log.Config{
+    handlers: [Log.Stdout.new(Log.Text{}).to_fn()],
+    level: Log.Level.Debug,
+  },
+)
+```
+
+A record below the floor is dropped before it is built, so a `Log.debug` under the default floor costs one comparison after its arguments are evaluated. `Log.with(attributes)` returns a `Log.Logger` that merges its attributes into every record it writes. An attribute named at the call wins over the bound one.
+
+```koja
+log = Log.with(["request_id": Log.Attribute.from(request.id)])
+log.info("lookup", ["table": "users"])
+```
+
+A handler is a type that implements `Log.Handler` or a plain `fn (Log.Record) -> Result<(), Log.Error>`. `to_fn` turns the first into the second. The `Log.Handler` protocol has one method, `handle_log`, which fails with a `Log.Error` when the record did not land. `Log` drops a handler that fails for the rest of that emit and writes one `Warn` record named `log handler failed` through the handlers that remain. A handler that logs does not recurse, since each process emits one record at a time and drops a record it would emit while another is on its way out.
+
+`Log.Formatter<T>` renders a record to a `T`. `Log.Text` is the stdlib formatter, which writes the timestamp in UTC, the level, the message, and the attributes as `key=value` pairs. `Log.Stdout` is the stdlib handler, which writes a formatter's `String` to stdout. A test replaces them with `Log.Capture`, a process that holds every record until `take` returns them.
+
+```koja
+capture = Log.Capture.start()
+Log.configure(Log.Config{handlers: [capture.handler()], level: Log.Level.Debug})
+
+work()
+
+records = capture.take()
+assert records.length() == 1
+```
+
 ### Runtime Observability
 
 The `Runtime` struct answers questions about the runtime as a whole. Two instance functions on `Pid` answer questions about one process:
@@ -2918,6 +2961,24 @@ Closure-scoped spans over `Process.context`. See [Tracing](#tracing) for the sem
 - `Trace.Attribute{value: Bool | Float | Int | String}`: a span attribute. Literals convert where a `Trace.Attribute` is expected. `Trace.Attribute.from(value)` wraps a variable.
 - `Trace.SpanKind`: `Client`, `Internal`, `Server`. `Trace.Status`: `Error(String)`, `Ok`, `Unset`.
 - `Trace.Export.pop() -> Option<Trace.SpanRecord>`: the oldest finished span, for exporter packages. `Trace.Export.dropped() -> Int`: records a full queue has refused.
+
+### Log
+
+Structured records with a per-process configuration. See [Logging](#logging) for the semantics. `Log` and its types are [`@experimental`](#experimental) and can change in a later release.
+
+- `Log.debug(message: String, attributes: Map<String, Log.Attribute> = [:])`, `Log.info`, `Log.warn`, `Log.error`, `Log.trace`: writes one record at that level through the calling process's handlers. Returns before the record is built when the level is below the floor.
+- `Log.configure(config: Log.Config)`: installs the configuration in the calling process. Processes spawned after the call start with a copy.
+- `Log.with(attributes: Map<String, Log.Attribute>) -> Log.Logger`: a logger that merges `attributes` into every record. `Log.Logger` has the five level functions and `with(self, attributes)` for a narrower logger. An attribute named at the call wins.
+- `Log.Config{handlers: List<fn (Log.Record) -> Result<(), Log.Error>>, level: Log.Level = Info}`: the handlers that take each record and the level floor.
+- `Log.Level`: `Trace`, `Debug`, `Info`, `Warn`, `Error`. `at_least?(self, floor) -> Bool`, `parse(text: String) -> Log.Level ! Log.Level.ParseError`, `to_string(self) -> String`. `parse` reads a name in any letter case and fails with `Unknown(text)` for anything else.
+- `Log.Record{attributes: Map<String, Log.Attribute>, context: Process.Context, level: Log.Level, message: String, timestamp: Timestamp}`: one emitted record. `context` is the calling process's context at the time of the call.
+- `Log.Attribute{value: Bool | Float | Int | String}`: a record attribute. Literals convert where a `Log.Attribute` is expected. `Log.Attribute.from(value)` wraps a variable, and `to_string(self)` renders the value.
+- `Log.Handler`: a protocol with `handle_log(self, record: Log.Record) ! Log.Error` and a default `to_fn(self) -> fn (Log.Record) -> Result<(), Log.Error>` that closes over the handler for a `Log.Config`.
+- `Log.Error`: `Closed`, `Failed(String)`, `Write(IO.Error)`. `message(self) -> String` names the cause. `Log` drops a failing handler for the rest of that emit and writes one `Warn` record through the handlers that remain.
+- `Log.Formatter<T>`: a protocol with `format_log(self, record: Log.Record) -> T`.
+- `Log.Text`: a `Log.Formatter<String>` that writes `2026-09-21T14:13:20.123456Z INFO swept 12 rows job=cleaner`. The timestamp is UTC in RFC 3339 form and the attributes follow as `key=value` pairs.
+- `Log.Stdout<F: Log.Formatter<String>>`: a `Log.Handler` built with `Log.Stdout.new(formatter)` that writes each rendered record to stdout. The default configuration is `Log.Stdout.new(Log.Text{})` at `Info`.
+- `Log.Capture`: a collector process for tests. `Log.Capture.start() -> Log.Capture` spawns it, `handler(self)` returns the fn to put in a `Log.Config`, and `take(self) -> List<Log.Record>` returns every record so far and clears the collector.
 
 ### Time
 
