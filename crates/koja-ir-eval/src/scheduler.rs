@@ -901,22 +901,13 @@ impl Clock for EvalClock {
 
 /// OS lifecycle signals. Reuses the process-wide latching handlers shared
 /// with the native scheduler ([`koja_runtime::signals`]). The driver
-/// drains these into `Lifecycle` messages for the entry process.
+/// drains these into `Lifecycle` messages for the entry process, the
+/// same way the native loop does.
 ///
-/// Handlers are always installed (so a SIGTERM latches rather than killing
-/// the host), but the latched flags are only **drained** when the program
-/// actually has a `Lifecycle`-arm `receive` (`drain_lifecycle`). The flags
-/// are process-global, so an eval run that ignores them must not consume
-/// them out from under a concurrent run that wants them.
-pub(crate) struct EvalSignals {
-    drain_lifecycle: bool,
-}
-
-impl EvalSignals {
-    pub(crate) fn new(drain_lifecycle: bool) -> Self {
-        Self { drain_lifecycle }
-    }
-}
+/// The flags are process-global. Two eval runs in one host process
+/// (parallel tests in one binary) share them, so a test that raises a
+/// signal must not run beside another eval run.
+pub(crate) struct EvalSignals;
 
 impl SignalSource for EvalSignals {
     fn install(&self) {
@@ -924,9 +915,6 @@ impl SignalSource for EvalSignals {
     }
 
     fn drain(&self) -> Vec<Lifecycle> {
-        if !self.drain_lifecycle {
-            return Vec::new();
-        }
         koja_runtime::signals::drain()
             .into_iter()
             .filter_map(Lifecycle::from_index)

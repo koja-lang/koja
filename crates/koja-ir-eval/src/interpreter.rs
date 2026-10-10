@@ -15,9 +15,9 @@ use std::time::Instant;
 use koja_ir::mangling::closure_eq_env_symbol;
 use koja_ir::{
     BranchTarget, ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId,
-    IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId, IRLocalId, IRPackage,
-    IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
-    IRVariantTag, ReceiveAfter, ReceiveArm, ReceiveTag, ValueId,
+    IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId, IRLocalId, IRProgram,
+    IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload, IRVariantTag,
+    ReceiveAfter, ReceiveArm, ReceiveTag, ValueId,
 };
 use koja_runtime_core::{
     CrashInfo, Driver, ExitNotice, ExitReason, Lifecycle, Priority, Readiness, Tag, Wake,
@@ -130,8 +130,8 @@ impl Interpreter {
 /// entry process into a fresh core, hands the loop to the driver, and
 /// returns the body's result once the driver tears down. The process
 /// future has `Output = ()`, so the result travels through `exit_cell`.
-/// OS signals drain into PID 1's mailbox only when some `receive` has
-/// a `Lifecycle` arm (see [`EvalSignals`]).
+/// OS signals drain into PID 1's mailbox as `Lifecycle` messages (see
+/// [`EvalSignals`]).
 fn run_as_entry_process<'a, R: CallResolver>(
     resolver: &'a R,
     foreign: ForeignTable,
@@ -154,13 +154,12 @@ fn run_as_entry_process<'a, R: CallResolver>(
     let executor = EvalExecutor::new(Rc::clone(&runtime.core), resolver);
     executor.install_future(main, entry_future);
 
-    let signals = EvalSignals::new(blocks_use_lifecycle(resolver.all_blocks()));
     EvalDriver::new(
         runtime,
         executor,
         EvalReactor,
         EvalClock,
-        signals,
+        EvalSignals,
         scheduler::grace_period(),
     )
     .run();
@@ -218,9 +217,6 @@ impl Frame {
 /// registry-equivalent handle for materializing variant and field
 /// names.
 pub(crate) trait CallResolver {
-    /// Every block the run can execute, across all function bodies
-    /// plus the script body when there is one.
-    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock>;
     fn built_constant_order(&self) -> &[IRSymbol];
     fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue>;
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
@@ -229,10 +225,6 @@ pub(crate) trait CallResolver {
 }
 
 impl CallResolver for IRProgram {
-    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock> {
-        function_blocks(&self.packages)
-    }
-
     fn built_constant_order(&self) -> &[IRSymbol] {
         &self.built_constant_order
     }
@@ -255,10 +247,6 @@ impl CallResolver for IRProgram {
 }
 
 impl CallResolver for IRScript {
-    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock> {
-        function_blocks(&self.packages).chain(self.blocks.iter())
-    }
-
     fn built_constant_order(&self) -> &[IRSymbol] {
         &self.built_constant_order
     }
@@ -278,14 +266,6 @@ impl CallResolver for IRScript {
     fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
         IRScript::struct_decl(self, mangled)
     }
-}
-
-/// Every block of every function body across `packages`.
-fn function_blocks(packages: &[IRPackage]) -> impl Iterator<Item = &IRBasicBlock> {
-    packages
-        .iter()
-        .flat_map(|package| package.functions.values())
-        .flat_map(|function| &function.blocks)
 }
 
 /// Run every `Built` constant init in `built_constant_order` and
@@ -378,18 +358,6 @@ async fn run_script_body(script: &IRScript) -> Result<Value, RuntimeError> {
 }
 
 /// Whether any of `blocks` has a `receive` with a `Lifecycle` arm.
-fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> bool {
-    blocks
-        .flat_map(|block| &block.instructions)
-        .any(|instruction| {
-            matches!(
-                instruction,
-                IRInstruction::Receive { arms, .. }
-                    if arms.iter().any(|arm| arm.tag == ReceiveTag::Lifecycle)
-            )
-        })
-}
-
 /// Resolve a process wrapper's body, the [`FunctionKind::Regular`]
 /// function its single IR `Call` names. Shared by the entry boot and the
 /// `spawn` path. A `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
