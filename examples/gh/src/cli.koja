@@ -13,18 +13,13 @@ struct Cli
   an error message for a bad invocation or a failed API call.
   """
   fn dispatch(args: List<String>) -> String ! String
-    if args.empty?()
-      return usage()
-    end
-
-    command = args.get(0).unwrap()
-
-    match command
-      "help" -> usage()
-      "repo" -> try run_repo(args)
-      "repos" -> try run_repos(args)
-      "user" -> try run_user(args)
-      _ -> fail "unknown command: #{command}\n\n#{usage()}"
+    match args.first()
+      Option.None -> usage()
+      Option.Some("help") -> usage()
+      Option.Some("repo") -> try run_repo(args)
+      Option.Some("repos") -> try run_repos(args)
+      Option.Some("user") -> try run_user(args)
+      Option.Some(command) -> fail "unknown command: #{command}\n\n#{usage()}"
     end
   end
 

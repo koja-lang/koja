@@ -126,12 +126,9 @@ struct LinkStore
     )
 
     match outcome
-      Result.Err(e) ->
-        (conn, Result.Err(e.message()))
-
+      Result.Err(e) -> (conn, Result.Err(e.message()))
       Result.Ok(qr) ->
-        target: Option<String> = qr.rows.get(0).map(row -> text_at(row, 0))
-        (conn, Result.Ok(target))
+        (conn, Result.Ok(qr.rows.get(0).map(row -> text_at(row, 0))))
     end
   end
 

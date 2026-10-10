@@ -5,33 +5,45 @@ alias ReplyTo.Delivery
 
 @doc """
 Configuration for a pool. `create` is the resource factory: the pool
-calls it `size` times at startup and once per discarded resource. The
-closure carries the concrete resource type, so the pool itself never
-needs to know how a resource is built.
+calls it `size` times at startup and once per slot it needs to refill.
+The closure carries the concrete resource type, so the pool itself
+never needs to know how a resource is built.
+
+`valid` runs on every checked-in resource. When it returns false the
+pool drops the resource and refills the slot instead of lending it
+again. `None` accepts everything. A database pool passes the driver's
+own health predicate here, for example `c -> c.idle?()`.
+
+When the factory fails while refilling a slot, the pool retries on a
+timer. The delay starts at `backoff_min_ms`, doubles on each failure,
+and caps at `backoff_max_ms`. A success resets it.
 """
 struct Config<T>
+  backoff_max_ms: Int = 30000
+  backoff_min_ms: Int = 1000
   create: fn () -> Result<T, String>
   size: Int = 10
+  valid: Option<fn (T) -> Bool> = Option.None
 end
 
 @doc """
 The pool's message contract. Borrowers check a resource out, use it,
 and either check the (possibly updated) value back in or discard a
-broken one so the pool can build a replacement.
+broken one. `Rebuild` is the pool's own retry timer.
 """
 enum Msg<T>
   Checkin(T)
   Checkout
   Discard
+  Rebuild
 end
 
 @doc """
-The pool's reply contract. `Resource` answers a checkout. `Done` and
-`Failed` answer a discard.
+The pool's reply contract. `Resource` answers a checkout. `Done`
+answers a discard.
 """
 enum Reply<T>
   Done
-  Failed(String)
   Resource(T)
 end
 
@@ -49,9 +61,14 @@ end
 @doc """
 A handle to a running pool. Lends resource values to callers one at a
 time: `checkout` borrows a resource, `checkin` returns the (possibly
-updated) value, and `discard` reports a broken resource so the pool
-builds a replacement. When every resource is lent out, checkout callers
-queue in FIFO order and are answered as resources come back.
+updated) value, and `discard` reports a broken resource. When every
+resource is lent out, checkout callers queue in FIFO order and are
+answered as resources come back.
+
+The pool holds `size` slots. A slot empties when a resource is
+discarded or fails `Config.valid` at checkin. The pool refills it
+with the factory right away, or on a backoff timer when the factory
+fails, so a database outage never shrinks the pool for good.
 """
 struct Pool<T>
   ref: Ref<Msg<T>, Reply<T>>
@@ -73,14 +90,15 @@ struct Pool<T>
       Result.Ok(Reply.Resource(resource)) -> resource
       Result.Ok(_) -> fail Error.Failed("unexpected checkout reply")
       Result.Err(CallError.Timeout) -> fail Error.Timeout
-      Result.Err(_) -> fail Error.PoolDown
+      Result.Err(CallError.ProcessDown) -> fail Error.PoolDown
     end
   end
 
   @doc """
   Returns a borrowed resource to the pool. The checked-in value is the
   one lent to the next borrower, so updates made while borrowed (a
-  rebound connection, a refreshed session) are preserved.
+  rebound connection, a refreshed session) are preserved. A value that
+  fails `Config.valid` is dropped and its slot refilled instead.
   """
   fn checkin(self, resource: T)
     self.ref.cast(Msg.Checkin(resource))
@@ -88,16 +106,15 @@ struct Pool<T>
 
   @doc """
   Reports a borrowed resource as broken instead of returning it. The
-  pool builds a replacement with its factory. If the factory fails, the
-  pool shrinks by one and the error is returned.
+  pool refills the slot with its factory, now or on the retry timer.
+  Returns once the pool has taken the report.
   """
   fn discard(self, timeout_ms: Int = 5000) ! Error
     match self.ref.call(Msg.Discard, timeout_ms)
       Result.Ok(Reply.Done) -> ()
-      Result.Ok(Reply.Failed(reason)) -> fail Error.Failed(reason)
       Result.Ok(_) -> fail Error.Failed("unexpected discard reply")
       Result.Err(CallError.Timeout) -> fail Error.Timeout
-      Result.Err(_) -> fail Error.PoolDown
+      Result.Err(CallError.ProcessDown) -> fail Error.PoolDown
     end
   end
 
@@ -112,9 +129,18 @@ end
 
 # The pool process behind a `Pool` handle. Never part of the public
 # surface. `Pool.start` spawns it and the `Ref` is the only line in.
+#
+# `missing` counts empty slots. `rebuilding?` is true while a Rebuild
+# timer is pending, so at most one timer is in flight.
 priv struct Server<T>: Process<Config<T>, Msg<T>, Reply<T>>
   available: List<T>
+  backoff_max_ms: Int
+  backoff_min_ms: Int
   create: fn () -> Result<T, String>
+  delay_ms: Int
+  missing: Int
+  rebuilding?: Bool
+  valid: Option<fn (T) -> Bool>
   waiting: List<ReplyTo<Reply<T>>>
 
   fn start(config: Config<T>) -> Self ! StopReason
@@ -126,15 +152,52 @@ priv struct Server<T>: Process<Config<T>, Msg<T>, Reply<T>>
       available = available.append(resource)
     end
 
-    Server{available: available, create: config.create, waiting: waiting}
+    Server{
+      available: available,
+      backoff_max_ms: config.backoff_max_ms,
+      backoff_min_ms: config.backoff_min_ms,
+      create: config.create,
+      delay_ms: config.backoff_min_ms,
+      missing: 0,
+      rebuilding?: false,
+      valid: config.valid,
+      waiting: waiting,
+    }
   end
 
   fn handle(self, msg: Msg<T>, from: Option<ReplyTo<Reply<T>>>) -> Step<Self>
     match msg
-      Msg.Checkin(resource) -> Step.Continue(self.lend_or_stash(resource))
+      Msg.Checkin(resource) -> Step.Continue(self.checkin(resource))
       Msg.Checkout -> Step.Continue(self.checkout(from))
-      Msg.Discard -> Step.Continue(self.replace_discarded(from))
+      Msg.Discard -> Step.Continue(self.discard(from))
+      Msg.Rebuild -> Step.Continue(self.rebuild())
     end
+  end
+
+  # Routes a valid resource to a waiter or the shelf. An invalid one
+  # empties its slot, and the pool refills it.
+  priv fn checkin(self, resource: T) -> Self
+    if self.valid?(resource)
+      return self.lend_or_stash(resource)
+    end
+
+    self.missing = self.missing + 1
+    self.refill()
+  end
+
+  priv fn valid?(self, resource: T) -> Bool
+    match self.valid
+      Option.None -> true
+      Option.Some(check) -> check(resource)
+    end
+  end
+
+  # Empties the discarded slot, refills it, and acknowledges.
+  priv fn discard(self, from: Option<ReplyTo<Reply<T>>>) -> Self
+    done: Reply<T> = Reply.Done
+    _ = ReplyTo.reply(from, done)
+    self.missing = self.missing + 1
+    self.refill()
   end
 
   # Answers a checkout from the shelf, or queues the caller. A cast
@@ -195,19 +258,48 @@ priv struct Server<T>: Process<Config<T>, Msg<T>, Reply<T>>
     end
   end
 
-  # Builds a replacement for a discarded resource and routes it like a
-  # checkin. A failed factory shrinks the pool and reports `Failed`.
-  priv fn replace_discarded(self, from: Option<ReplyTo<Reply<T>>>) -> Self
-    match self.create()
-      Result.Ok(resource) ->
-        done: Reply<T> = Reply.Done
-        _ = ReplyTo.reply(from, done)
-        self.lend_or_stash(resource)
+  # The Rebuild timer fired. Clear the flag and try the empty slots.
+  priv fn rebuild(self) -> Self
+    self.rebuilding? = false
+    self.refill()
+  end
 
-      Result.Err(reason) ->
-        failed: Reply<T> = Reply.Failed(reason)
-        _ = ReplyTo.reply(from, failed)
-        self
+  # Builds a resource for every empty slot until the factory fails.
+  # Each success resets the backoff. The first failure arms the timer
+  # and leaves the remaining slots for the next tick.
+  priv fn refill(self) -> Self
+    server = self
+
+    while server.missing > 0
+      match server.create()
+        Result.Ok(resource) ->
+          server.missing = server.missing - 1
+          server.delay_ms = server.backoff_min_ms
+          server = server.lend_or_stash(resource)
+
+        Result.Err(_) ->
+          return server.schedule_rebuild()
+      end
     end
+
+    server
+  end
+
+  # Arms the Rebuild timer at the current delay, then doubles the
+  # delay for the next failure. One timer at a time.
+  priv fn schedule_rebuild(self) -> Self
+    if self.rebuilding?
+      return self
+    end
+
+    me: Ref<Msg<T>, Reply<T>> = Ref.self_ref()
+    me.send_after(Msg.Rebuild, self.delay_ms)
+
+    doubled = self.delay_ms * 2
+    self.delay_ms = doubled > self.backoff_max_ms
+      ? self.backoff_max_ms
+      : doubled
+    self.rebuilding? = true
+    self
   end
 end

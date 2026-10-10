@@ -51,12 +51,15 @@ struct App: Process<List<String>, TCPEvent, String>
       .with_password(settings.db_password)
       .with_statement_cache_size(settings.db_statement_cache)
 
-    create =
-      fn () -> Result<Connection, String>
-        Connection.connect(db_config).map_err(e -> e.message())
-      end
-
-    pool = Pool.start(PoolConfig{create: create, size: POOL_SIZE})
+    pool = Pool.start(
+      PoolConfig{
+        create: fn () -> Result<Connection, String>
+          Connection.connect(db_config).map_err(e -> e.message())
+        end,
+        size: POOL_SIZE,
+        valid: Option.Some(fn (conn: Connection) -> Bool conn.idle?() end),
+      },
+    )
 
     # The pool builds its connections eagerly but reports factory
     # failure as PoolDown on first use. Probe once so a bad database
@@ -179,7 +182,7 @@ struct Worker: Process<Worker, (), ()>
             (error, keep)
 
           Result.Ok(conn) ->
-            (response, conn) = Router.route(req, conn)
+            (conn, response) = Router.route(req, conn)
             self.pool.checkin(conn)
             (response, keep)
         end
@@ -187,9 +190,7 @@ struct Worker: Process<Worker, (), ()>
   end
 
   priv fn close(self)
-    match self.client.close()
-      _ -> ()
-    end
+    _ = self.client.close()
   end
 end
 
@@ -205,7 +206,7 @@ priv fn read_request(client: TCPSocket, buffered: String)
       Option.Some(framed)
 
     Option.None ->
-      match client.read(READ_CHUNK)
+      match client.read_string(READ_CHUNK)
         Result.Ok(chunk) when not chunk.empty?() ->
           read_request(client, buffered <> chunk)
         _ -> Option.None
@@ -243,25 +244,11 @@ priv fn split_request(buffer: String) -> Option<(String, String)>
 end
 
 priv fn content_length(header_text: String) -> Int
-  lines = header_text.split("\r\n")
-  found = lines.filter(line -> line.downcase().starts_with?("content-length:"))
-
-  match found.get(0)
-    Option.None ->
-      0
-
-    Option.Some(line) ->
-      match line.split(":").get(1)
-        Option.None ->
-          0
-
-        Option.Some(value) ->
-          match value.trim().to_int()
-            Result.Ok(n) -> n
-            Result.Err(_) -> 0
-          end
-      end
-  end
+  header_text.split("\r\n")
+    .find(line -> line.downcase().starts_with?("content-length:"))
+    .then(line -> line.split(":").get(1))
+    .then(value -> value.trim().to_int().ok())
+    .or(0)
 end
 
 # HTTP/1.1 defaults to keep-alive and HTTP/1.0 to close, but an

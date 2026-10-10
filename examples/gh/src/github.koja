@@ -108,7 +108,7 @@ struct GitHub
       rescue e -> fail e.message()
 
     match response.status.code
-      code when code >= 200 and code < 300 -> try decode(response.body)
+      _ when response.status.ok?() -> try decode(response.body)
       403 ->
         fail "rate limited or forbidden -- set GITHUB_TOKEN to authenticate"
       404 -> fail "not found: #{path}"

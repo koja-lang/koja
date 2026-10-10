@@ -15,9 +15,9 @@ first.print()
 second.print()
 
 p2 = ("foo", 100)
-(first, second) = p2
-first.print()
-second.print()
+(label, count) = p2
+label.print()
+count.print()
 
 x = Option.Some(42)
 x.unwrap().print()

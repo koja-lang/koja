@@ -1,7 +1,7 @@
 # Shortener
 
 A URL shortener written in Koja — a complete end-to-end CRUD service:
-HTTP serving on `Net.TCPListener` + `HTTP.Parser`, JSON in and out via
+HTTP serving on `Net.TCPServer` + `HTTP.Parser`, JSON in and out via
 `JSON`, and PostgreSQL through the [Postgres](https://github.com/hpopp/postgres-koja)
 package, a pure-Koja driver speaking the v3 wire protocol (no C
 driver, no FFI), with connections managed by the
@@ -10,7 +10,7 @@ driver, no FFI), with connections managed by the
 It doubles as a tour of the things that make Koja great:
 
 - **Process entry** — the program starts from `App`
-  (`impl Process<List<String>, TCPEvent, String>` in `src/app.koja`),
+  (`struct App: Process<List<String>, TCPEvent, String>` in `src/app.koja`),
   named by `entry = "App"` in `koja.toml`.
 - **Event-driven accept** — a spawned `Net.TCPServer` watches the
   listener with the runtime's IO reactor and delivers each accepted
@@ -29,8 +29,11 @@ It doubles as a tour of the things that make Koja great:
 - **Process-based pooling** — `Pooler.Pool` holds 10 eagerly built
   connections behind a single process that lends them out one at a
   time, queueing checkout callers in FIFO order when all are lent.
+  A connection that comes back closed or mid-transaction fails the
+  pool's `valid` check (`conn.idle?()`), so the pool drops it and
+  rebuilds the slot, on a backoff timer if Postgres is down.
 - **Git and path dependencies** — the driver is declared in
-  `koja.toml` (`postgres = { github = "koja-lang/postgres", tag = "v0.2.0" }`)
+  `koja.toml` (`postgres = { github = "hpopp/postgres-koja", tag = "v0.5.0" }`)
   and pinned to an exact commit by the committed `koja.lock`, while
   the pool comes from a local path (`pooler = { path = "../pooler" }`).
 
