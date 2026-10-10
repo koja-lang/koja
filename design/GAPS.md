@@ -357,8 +357,8 @@ literal whose value fits the slot's width and stamps
 So a literal's type is decided by its consumer for the width types and
 by the literal for `IntLiteral` carriers. Every new consumer has to
 remember the second step. The `assert` operand bindings are the latest
-site to do so (`resolve_hinted_assignment` checks for
-`Compatible::Coerced` after resolving with the hint).
+site to do so (`resolve_comparison_operands` checks each operand for
+`Compatible::Coerced` against the other operand's type).
 
 **Fix path:** make the expected type the single owner of literal
 typing. `resolve_scalar_literal` treats the builtin width types the way
@@ -367,7 +367,7 @@ it treats `IntLiteral` carriers: an expected `UInt32` yields resolution
 `NumericLiteralWidth` stamp lowering already reads. `Compatible::Coerced`
 then only serves consumers that resolve a literal before they know the
 slot type, and each of those can thread an expected type and drop the
-arm. `resolve_hinted_assignment` loses its coercion check once this
+arm. `resolve_comparison_operands` loses its coercion check once this
 lands.
 
 The further step, a provisional `{integer}` type that unifies with the

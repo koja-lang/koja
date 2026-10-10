@@ -850,8 +850,10 @@ more commits at its boundary, so a bisect can name the phase.
    moved to `test` and `assert`, each package run on both backends with
    its test count unchanged. Migrating the stdlib exposed one compiler
    gap: `assert` bound its operands before the resolver saw the `==`, so
-   the right operand lost the left's type. The desugaring now resolves
-   the left operand first and hands its type to the right. Then the
+   the right operand lost the left's type. 0.19 resolved the left
+   operand first and handed its type to the right. The two operands
+   resolve together through the sibling hint `==` uses since #158, so
+   either side can take its type from the other. Then the
    `@test` deprecation warning, `LANGUAGE.md`, and `CHANGELOG.md`.
    `grammar.ebnf` already carried both constructs. The examples and the
    sibling repos follow after 0.19 ships.
