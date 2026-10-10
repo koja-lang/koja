@@ -8,12 +8,18 @@
 //!   and renders them through `.format()`. Any other condition keeps
 //!   only its source text with `Option.None` operands. The message is
 //!   built inside the `if`, so it is evaluated only on failure.
+//! - **Operand typing**: the two bindings resolve together the way
+//!   `==` types its operands, so a unit variant or a literal on either
+//!   side takes its type from the other side.
+//! - **One report**: an operand that fails to resolve reports once.
+//!   The temporaries and the `if` that read them stay quiet.
 //! - **Position**: an `assert` embedded in a larger expression is an
 //!   error, like `fail`.
 
 use std::path::PathBuf;
 
 use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, FieldInit, Statement, name_texts};
+use koja_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
 use koja_ast::util::dedent;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
@@ -255,6 +261,62 @@ fn other_conditions_keep_only_the_source_text() {
     // The message is built inside the `if`, so it only evaluates on
     // failure.
     assert_eq!(option_variant(field(fields, "message")), "Some");
+}
+
+#[test]
+fn left_operand_takes_the_right_operands_type() {
+    typecheck_file(&dedent(
+        "
+        fn check(p: Option<Int>) ! Test.Failure
+          assert Option.None == p
+        end
+        ",
+    ));
+}
+
+#[test]
+fn left_literal_takes_the_right_operands_width() {
+    let checked = typecheck_file(&dedent(
+        "
+        fn check(n: UInt32) ! Test.Failure
+          assert 0 == n
+        end
+        ",
+    ));
+    let body = function_body(&checked, "check");
+    let Statement::Assignment { value, .. } = &body[0] else {
+        panic!("expected the left operand binding, got {:?}", body[0]);
+    };
+    assert_eq!(
+        value.literal_coercion,
+        Some(LiteralCoercion::NumericLiteralWidth(
+            NumericLiteralWidth::UInt32
+        )),
+        "the left literal takes the right operand's width"
+    );
+}
+
+#[test]
+fn a_failed_operand_reports_once() {
+    for condition in ["nope == 1", "nope < 1"] {
+        let failure = typecheck_file_fail(&dedent(&format!(
+            "
+            fn check() ! Test.Failure
+              assert {condition}
+            end
+            "
+        )));
+        let messages: Vec<&str> = failure
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(
+            messages,
+            ["unknown identifier `nope` in this scope"],
+            "`assert {condition}` reports the operand once"
+        );
+    }
 }
 
 #[test]

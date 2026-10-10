@@ -44,7 +44,9 @@
 //! [`LValue`]: koja_ast::ast::LValue
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{CompoundOp, Diagnostic, Expr, LValue, Pattern, TypeExpr, path_text};
+use koja_ast::ast::{
+    CompoundOp, Diagnostic, Expr, LValue, Pattern, Statement, TypeExpr, path_text,
+};
 use koja_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{
     compound_op_label, pattern_kind_label, pattern_span, type_expr_span as annotation_span,
@@ -58,6 +60,7 @@ use crate::registry::GlobalKind;
 use super::coercion::{Compatible, check_compatible, check_compatible_stamping};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::ops::resolve_operands_with_sibling_hint;
 use super::patterns::tuple_element_types;
 use super::types::{display_resolution, is_arithmetic_type};
 
@@ -114,33 +117,81 @@ pub(super) fn resolve_assignment(
     );
 }
 
-/// Resolve `name = value` with `hint` as the expected type of `value`,
-/// the way `==` types its right operand against its left. The hint
-/// drives inference for unit variants and generic constructors, and
-/// an integer or float literal that fits the hinted width takes that
-/// width. Any other value keeps its own type, so a mismatch surfaces
-/// where the local is used, not as an annotation error on a
-/// synthesized name.
-pub(super) fn resolve_hinted_assignment(
+/// Resolve the two operand bindings of a desugared `assert`
+/// comparison the way `==` types its operands. The values resolve
+/// together, so a unit variant or generic constructor on either side
+/// takes its type from the other, and an integer or float literal
+/// that fits the other side's width takes that width. Any other value
+/// keeps its own type, so a mismatch surfaces at the comparison, not
+/// as an annotation error on a synthesized name.
+pub(super) fn resolve_comparison_operands(
+    left: &mut Statement,
+    right: &mut Statement,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let (left_target, left_value, left_span) = assignment_parts(left);
+    let (right_target, right_value, right_span) = assignment_parts(right);
+    resolve_operands_with_sibling_hint(left_value, right_value, resolver, diagnostics);
+    let left_ty = left_value.resolution.clone();
+    let right_ty = right_value.resolution.clone();
+    declare_operand(
+        left_target,
+        left_value,
+        &right_ty,
+        left_span,
+        resolver,
+        diagnostics,
+    );
+    declare_operand(
+        right_target,
+        right_value,
+        &left_ty,
+        right_span,
+        resolver,
+        diagnostics,
+    );
+}
+
+fn assignment_parts(statement: &mut Statement) -> (&mut LValue, &mut Expr, Span) {
+    let Statement::Assignment {
+        target,
+        value,
+        span,
+        ..
+    } = statement
+    else {
+        unreachable!("assert comparison desugars its operands to assignments");
+    };
+    (target, value, *span)
+}
+
+/// Declare one operand temporary. A value that failed to resolve has
+/// already reported, so the name still enters scope as an unresolved
+/// local and the reads the desugar emits stay quiet. A literal that
+/// coerces to the other operand's type is declared with that type, so
+/// the comparison and the rendering both see the width.
+fn declare_operand(
     lvalue: &mut LValue,
-    hint: Option<&ResolvedType>,
     value: &mut Expr,
+    other: &ResolvedType,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    resolve_expr_with_expected(value, hint, resolver, diagnostics);
-    let coerced = hint.filter(|hint| {
-        value.resolution.is_resolved()
-            && matches!(
-                check_compatible(value, &value.resolution, hint, resolver.registry),
-                Compatible::Coerced(_)
-            )
-    });
+    if !value.resolution.is_resolved() {
+        let name = lvalue.segments[0].text.clone();
+        lvalue.local_id = Some(resolver.scope.declare(&name, ResolvedType::unresolved()));
+        return;
+    }
+    let coerced = matches!(
+        check_compatible(value, &value.resolution, other, resolver.registry),
+        Compatible::Coerced(_)
+    );
     declare_assignment_target(
         lvalue,
         None,
-        coerced.cloned(),
+        coerced.then(|| other.clone()),
         value,
         span,
         resolver,
