@@ -85,7 +85,9 @@ use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
 };
-use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod, TraceRuntimeMethod};
+use crate::intrinsic_id::{
+    IRIntrinsicId, LogRuntimeMethod, RefMethod, ReplyToMethod, TraceRuntimeMethod,
+};
 use crate::local::IRLocalId;
 use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
 use crate::package::{IRPackage, insert_package_function};
@@ -334,6 +336,18 @@ fn discover_deep_copy_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BT
         }
     }
 
+    // The runtime copies a stored log configuration at `spawn` and on
+    // `LogRuntime.config`, through glue no Koja `DeepCopy` names. Seed
+    // the payload type so the glue exists even when every `configure`
+    // call passes a fresh temp.
+    for function in packages.iter().flat_map(|pkg| pkg.functions.values()) {
+        if let Some(payload) = runtime_copied_payload(function)
+            && needs_glue(payload, packages)
+        {
+            work.push(payload.clone());
+        }
+    }
+
     close_over_constituents(work, packages)
 }
 
@@ -363,10 +377,11 @@ fn close_over_constituents(mut work: Vec<IRType>, packages: &[IRPackage]) -> BTr
 /// The payload type a runtime-owning intrinsic copies out of the
 /// caller's frame: `M` or `R` at `params[1].ty` of `Ref.cast` /
 /// `Ref.call` / `Ref.send_after` / `ReplyTo.send` (`params[0]` is the
-/// `self` `Ref` / `ReplyTo`), and the span record the `TraceRuntime`
+/// `self` `Ref` / `ReplyTo`), the span record the `TraceRuntime`
 /// stack and export queue hold (`params[0]` of `span_open` /
-/// `export_push`, `params[1]` of `span_put` after the handle). `None`
-/// for any other function.
+/// `export_push`, `params[1]` of `span_put` after the handle), and
+/// the log configuration the per-process slot holds (`params[0]` of
+/// `LogRuntime.configure`). `None` for any other function.
 fn send_intrinsic_payload(function: &IRFunction) -> Option<&IRType> {
     let payload_index = match function.kind {
         FunctionKind::Intrinsic(IRIntrinsicId::Ref(
@@ -376,10 +391,25 @@ fn send_intrinsic_payload(function: &IRFunction) -> Option<&IRType> {
         | FunctionKind::Intrinsic(IRIntrinsicId::TraceRuntime(TraceRuntimeMethod::SpanPut)) => 1,
         FunctionKind::Intrinsic(IRIntrinsicId::TraceRuntime(
             TraceRuntimeMethod::ExportPush | TraceRuntimeMethod::SpanOpen,
-        )) => 0,
+        ))
+        | FunctionKind::Intrinsic(IRIntrinsicId::LogRuntime(LogRuntimeMethod::Configure)) => 0,
         _ => return None,
     };
     function.params.get(payload_index).map(|p| &p.ty)
+}
+
+/// The payload type the runtime deep-copies on its own, outside any
+/// [`IRInstruction::DeepCopy`] in Koja code: the log configuration
+/// `LogRuntime.configure` stores, which `spawn` clones into the child
+/// and `LogRuntime.config` copies back out. `None` for any other
+/// function.
+fn runtime_copied_payload(function: &IRFunction) -> Option<&IRType> {
+    match function.kind {
+        FunctionKind::Intrinsic(IRIntrinsicId::LogRuntime(LogRuntimeMethod::Configure)) => {
+            function.params.first().map(|p| &p.ty)
+        }
+        _ => None,
+    }
 }
 
 /// The operand type of a `Clone` / `DropLocal` / `DropValue`, or

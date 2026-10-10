@@ -11,6 +11,7 @@ mod ffi;
 mod format;
 mod fs;
 mod intrinsics;
+mod log;
 mod memory;
 mod panic;
 pub mod parse_text;

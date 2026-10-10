@@ -8,7 +8,9 @@ use inkwell::AddressSpace;
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{ArrayValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::IRType;
-use koja_ir::mangling::{drop_glue_symbol, envelope_drop_glue_symbol};
+use koja_ir::mangling::{
+    deep_copy_glue_symbol, drop_glue_symbol, envelope_copy_glue_symbol, envelope_drop_glue_symbol,
+};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::is_heap_leaf;
@@ -132,7 +134,43 @@ pub(crate) fn payload_drop_glue<'ctx>(
     let symbol = envelope_drop_glue_symbol(payload);
     let shim = match ctx.module.get_function(symbol.mangled()) {
         Some(existing) => existing,
-        None => build_payload_drop_shim(ctx, payload, symbol.mangled())?,
+        None => build_payload_shim(ctx, ElementOp::Release, payload, symbol.mangled())?,
+    };
+    Ok(shim.as_global_value().as_pointer_value().into())
+}
+
+/// Build (or look up) the by-pointer payload deep-copy shim for
+/// `payload` and return its address as the `void(i8*)*` value the
+/// `koja_rt_log_configure` `copy_glue` argument expects. Returns a
+/// null pointer when the payload owns no nested Koja heap, in which
+/// case the runtime's memcpy of the bytes is already a full copy.
+///
+/// The runtime copies a stored payload by memcpy and then calls the
+/// shim over the new bytes. The shim routes into `deep_copy_T` via
+/// [`apply_in_slot`], which replaces every heap pointer the memcpy
+/// duplicated with a fresh block, so the copy shares nothing with the
+/// original. Content-addressed by [`envelope_copy_glue_symbol`].
+pub(crate) fn payload_copy_glue<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    payload: &IRType,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    if !payload_owns_heap(ctx, payload) {
+        return Ok(ptr_ty.const_null().into());
+    }
+    let composite = !is_heap_leaf(payload) && !matches!(payload, IRType::Function { .. });
+    assert!(
+        !composite
+            || ctx
+                .declared_function(&deep_copy_glue_symbol(payload))
+                .is_some(),
+        "LLVM emit: payload `{payload:?}` owns heap but has no deep-copy glue. The elaborate \
+         pass seeds `deep_copy_T` for every runtime-copied payload (IR seal invariant violation)",
+    );
+    let symbol = envelope_copy_glue_symbol(payload);
+    let shim = match ctx.module.get_function(symbol.mangled()) {
+        Some(existing) => existing,
+        None => build_payload_shim(ctx, ElementOp::DeepCopy, payload, symbol.mangled())?,
     };
     Ok(shim.as_global_value().as_pointer_value().into())
 }
@@ -145,12 +183,14 @@ fn payload_owns_heap(ctx: &EmitContext<'_>, payload: &IRType) -> bool {
     is_heap_leaf(payload) || ctx.declared_function(&drop_glue_symbol(payload)).is_some()
 }
 
-/// Synthesize the `void(i8*)` envelope-drop shim body, which loads
-/// the payload through its pointer and releases it via
-/// [`apply_in_slot`]. Saves and restores the builder position so it
-/// can be minted in the middle of a send emitter's body.
-fn build_payload_drop_shim<'ctx>(
+/// Synthesize a `void(i8*)` payload shim body, which applies `op` to
+/// the payload in place through its pointer via [`apply_in_slot`]:
+/// `Release` for the envelope-drop shim and `DeepCopy` for the
+/// copy-out shim. Saves and restores the builder position so it can
+/// be minted in the middle of a send emitter's body.
+fn build_payload_shim<'ctx>(
     ctx: &EmitContext<'ctx>,
+    op: ElementOp,
     payload: &IRType,
     symbol: &str,
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
@@ -162,9 +202,9 @@ fn build_payload_drop_shim<'ctx>(
     ctx.builder.position_at_end(entry);
     let payload_ptr = shim
         .get_nth_param(0)
-        .unwrap_or_else(|| panic!("envelope drop shim `{symbol}` missing payload param"))
+        .unwrap_or_else(|| panic!("payload shim `{symbol}` missing payload param"))
         .into_pointer_value();
-    apply_in_slot(ctx, ElementOp::Release, payload, payload_ptr)?;
+    apply_in_slot(ctx, op, payload, payload_ptr)?;
     ctx.builder.build_return(None).or_ice()?;
     if let Some(saved) = saved {
         ctx.builder.position_at_end(saved);

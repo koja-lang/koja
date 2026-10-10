@@ -1,0 +1,64 @@
+# `Log` reads its configuration from the calling process. `Log.configure`
+# installs a floor and a list of handlers, the level functions run the
+# handlers in the caller, and a record below the floor is dropped before
+# it is built. `Log.with` binds attributes that every record from the
+# bound logger carries, with the call's attributes winning on a key.
+#
+# `Log.Text` stamps the wall clock, so the handler here uses a formatter
+# that omits the time, and `Log.Text` is checked on a fixed timestamp.
+# `Map` iteration order is not fixed, so each attribute map holds one
+# key.
+
+struct Plain: Log.Formatter<String>
+  fn format_log(self, record: Log.Record) -> String
+    line = "#{record.level.to_string()} #{record.message}"
+
+    for (key, value) in record.attributes
+      line = line <> " #{key}=#{value.to_string()}"
+    end
+
+    line
+  end
+end
+
+Log.configure(
+  Log.Config{
+    handlers: [Log.Stdout.new(Plain{}).to_fn()],
+    level: Log.Level.Debug,
+  },
+)
+
+Log.trace("trace line below the floor")
+Log.debug("debug line")
+Log.info("info line", ["port": 8080])
+Log.warn("warn line", ["retry": true])
+Log.error("error line", ["ratio": 0.5])
+
+log = Log.with(["job": "sweep"])
+log.info("bound line")
+log.info("call wins", ["job": "weekly"])
+
+Log.configure(
+  Log.Config{handlers: [Log.Stdout.new(Plain{}).to_fn()], level: Log.Level.Warn},
+)
+
+Log.info("dropped below the floor")
+Log.warn("kept at the floor")
+
+Log.configure(
+  Log.Config{
+    handlers: [Log.Stdout.new(Plain{}).to_fn()],
+    level: Log.Level.Trace,
+  },
+)
+
+Log.trace("trace line", ["frame": 3])
+
+record = Log.Record{
+  attributes: ["job": "cleaner"],
+  context: Process.Context.ZERO,
+  level: Log.Level.Info,
+  message: "swept 12 rows",
+  timestamp: Timestamp.new(1_790_000_000_123_456, Duration.Unit.Microseconds),
+}
+IO.puts(Log.Text{}.format_log(record))

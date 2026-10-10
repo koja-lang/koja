@@ -373,9 +373,12 @@ fn spawn_dedupes_wrapper_across_call_sites() {
         end
         ",
     );
+    // The stdlib mints its own wrappers (`Log.Capture.start` spawns a
+    // collector), so count only the fixture package.
     let wrapper_count = program
         .packages
         .iter()
+        .filter(|pkg| pkg.package == PACKAGE)
         .flat_map(|pkg| pkg.functions.values())
         .filter(|f| matches!(f.kind, FunctionKind::SpawnWrapper { .. }))
         .count();

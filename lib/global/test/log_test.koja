@@ -1,0 +1,260 @@
+alias Test.require
+
+# Each test runs in its own process, so a configuration one test
+# installs never reaches the next. The tests here lean on that, and the
+# first one checks it from the other side by reading the default slot.
+
+priv enum LogProbeMsg
+  # Emit a `Debug` record with the text, then reply with the floor word
+  # the handler process carries. Under the default floor the record is
+  # dropped, so a probe that kept the default stays silent.
+  Emit(String)
+end
+
+priv struct LogProbe: Process<(), LogProbeMsg, Int>
+  fn start(config: ()) -> Self ! Process.StopReason
+    LogProbe{}
+  end
+
+  fn handle(self, msg: LogProbeMsg, from: Option<ReplyTo<Int>>)
+    -> Process.Step<Self>
+
+    match msg
+      LogProbeMsg.Emit(text) ->
+        Log.debug(text, ["from": "child"])
+        ReplyTo.reply(from, LogRuntime.level())
+        Process.Step.Continue(self)
+    end
+  end
+end
+
+# The attribute at `key` rendered as text, or `""` when absent.
+priv fn value_of(attributes: Map<String, Log.Attribute>, key: String) -> String
+  match attributes.get(key)
+    Option.Some(attribute) -> attribute.to_string()
+    Option.None -> ""
+  end
+end
+
+# The record at `index`, which the test expects to be there.
+priv fn record_at(records: List<Log.Record>, index: Int)
+  -> Result<Log.Record, String>
+
+  records.get(index).or_err("expected a record at #{index}")
+end
+
+test "a test process starts at the default Info floor with no configuration"
+  configured =
+    match LogRuntime.config()
+      Option.Some(_) -> true
+      Option.None -> false
+    end
+
+  assert LogRuntime.level() == 2
+  assert not configured
+end
+
+test "configure installs the floor on the calling process"
+  capture = Log.Capture.start()
+  Log.configure(
+    Log.Config{handlers: [capture.handler()], level: Log.Level.Debug},
+  )
+
+  assert LogRuntime.level() == 1
+end
+
+test "a record below the floor is dropped and one at the floor is kept"
+  capture = Log.Capture.start()
+  Log.configure(
+    Log.Config{handlers: [capture.handler()], level: Log.Level.Info},
+  )
+
+  Log.debug("dropped")
+  Log.info("kept", ["port": 8080])
+
+  records = capture.take()
+  record = try require(record_at(records, 0))
+  assert records.length() == 1
+  assert record.level == Log.Level.Info
+  assert record.message == "kept"
+  assert value_of(record.attributes, "port") == "8080"
+end
+
+test "with binds attributes and the call wins on a shared key"
+  capture = Log.Capture.start()
+  Log.configure(Log.Config{handlers: [capture.handler()]})
+
+  log = Log.with(["job": "sweep", "rows": 1])
+  log.info("bound", ["rows": 2, "extra": true])
+  log.with(["job": "weekly"]).warn("rebound")
+
+  records = capture.take()
+  first = try require(record_at(records, 0))
+  second = try require(record_at(records, 1))
+  assert records.length() == 2
+  assert first.attributes.length() == 3
+  assert value_of(first.attributes, "job") == "sweep"
+  assert value_of(first.attributes, "rows") == "2"
+  assert value_of(first.attributes, "extra") == "true"
+  assert second.level == Log.Level.Warn
+  assert value_of(second.attributes, "job") == "weekly"
+  assert value_of(second.attributes, "rows") == "1"
+end
+
+test "a record carries the context the emitting process held"
+  capture = Log.Capture.start()
+  Log.configure(Log.Config{handlers: [capture.handler()]})
+
+  inside =
+    Trace.root("request", fn (span: Trace.Span) -> Process.Context
+        Log.info("in span")
+        Process.context()
+      end)
+  Log.info("after span")
+
+  records = capture.take()
+  first = try require(record_at(records, 0))
+  second = try require(record_at(records, 1))
+  assert inside.sampled?()
+  assert first.context == inside
+  assert second.context == Process.context()
+  assert not second.context.sampled?()
+end
+
+test "spawn copies the configuration into the child"
+  capture = Log.Capture.start()
+  Log.configure(
+    Log.Config{handlers: [capture.handler()], level: Log.Level.Debug},
+  )
+
+  probe = spawn LogProbe.start(())
+  floor = probe.call(LogProbeMsg.Emit("from the child"), 5000)
+  probe.kill()
+
+  records = capture.take()
+  record = try require(record_at(records, 0))
+  assert try require(floor) == 1
+  assert records.length() == 1
+  assert record.level == Log.Level.Debug
+  assert record.message == "from the child"
+  assert value_of(record.attributes, "from") == "child"
+end
+
+test "a child spawned before configure keeps the default"
+  probe = spawn LogProbe.start(())
+  capture = Log.Capture.start()
+  Log.configure(
+    Log.Config{handlers: [capture.handler()], level: Log.Level.Debug},
+  )
+
+  floor = probe.call(LogProbeMsg.Emit("dropped under the default floor"), 5000)
+  probe.kill()
+
+  assert try require(floor) == 2
+  assert capture.take().length() == 0
+end
+
+test "a failing handler is skipped and the others see one warning"
+  capture = Log.Capture.start()
+
+  failing =
+    fn (record: Log.Record) -> Result<(), Log.Error>
+      Result.Err(Log.Error.Failed("sink is down"))
+    end
+
+  Log.configure(Log.Config{handlers: [failing, capture.handler()]})
+
+  Log.info("hello")
+
+  records = capture.take()
+  first = try require(record_at(records, 0))
+  second = try require(record_at(records, 1))
+  assert records.length() == 2
+  assert first.message == "hello"
+  assert second.level == Log.Level.Warn
+  assert second.message == "log handler failed"
+  assert value_of(second.attributes, "error") == "sink is down"
+end
+
+test "a handler that logs does not recurse"
+  capture = Log.Capture.start()
+
+  chatty =
+    fn (record: Log.Record) -> Result<(), Log.Error>
+      Log.error("from inside a handler")
+      Result.Ok(())
+    end
+
+  Log.configure(Log.Config{handlers: [chatty, capture.handler()]})
+
+  Log.info("outer")
+  Log.info("outer again")
+
+  records = capture.take()
+  first = try require(record_at(records, 0))
+  second = try require(record_at(records, 1))
+  assert records.length() == 2
+  assert first.message == "outer"
+  assert second.message == "outer again"
+end
+
+test "Level parses names, renders upper case, and orders by severity"
+  assert try require(Log.Level.parse(" Warn ")) == Log.Level.Warn
+  assert try require(Log.Level.parse("debug")) == Log.Level.Debug
+  assert try require(Log.Level.parse("TRACE")) == Log.Level.Trace
+  assert Log.Level.parse("loud") ==
+    Result.Err(Log.Level.ParseError.Unknown("loud"))
+  assert Log.Level.Error.to_string() == "ERROR"
+  assert Log.Level.Trace.to_string() == "TRACE"
+  assert Log.Level.Warn.at_least?(Log.Level.Info)
+  assert Log.Level.Info.at_least?(Log.Level.Info)
+  assert not Log.Level.Debug.at_least?(Log.Level.Info)
+  assert not Log.Level.Trace.at_least?(Log.Level.Debug)
+end
+
+test "trace is dropped under a Debug floor and kept under Trace"
+  capture = Log.Capture.start()
+  Log.configure(
+    Log.Config{handlers: [capture.handler()], level: Log.Level.Debug},
+  )
+
+  Log.trace("under the floor")
+  assert capture.take().length() == 0
+
+  Log.configure(
+    Log.Config{handlers: [capture.handler()], level: Log.Level.Trace},
+  )
+
+  Log.trace("frame in", ["bytes": 12])
+  Log.with(["conn": 7]).trace("frame out")
+
+  records = capture.take()
+  first = try require(record_at(records, 0))
+  second = try require(record_at(records, 1))
+  assert records.length() == 2
+  assert first.level == Log.Level.Trace
+  assert first.message == "frame in"
+  assert value_of(first.attributes, "bytes") == "12"
+  assert second.level == Log.Level.Trace
+  assert value_of(second.attributes, "conn") == "7"
+end
+
+test "Text renders the UTC time, the level, the message, and the attributes"
+  record = Log.Record{
+    attributes: ["job": "cleaner"],
+    context: Process.Context.ZERO,
+    level: Log.Level.Info,
+    message: "swept 12 rows",
+    timestamp: Timestamp.new(1_790_000_000_123_456, Duration.Unit.Microseconds),
+  }
+
+  assert Log.Text{}.format_log(record) ==
+    "2026-09-21T14:13:20.123456Z INFO swept 12 rows job=cleaner"
+end
+
+test "Attribute renders each scalar as text"
+  assert Log.Attribute.from(true).to_string() == "true"
+  assert Log.Attribute.from(0.5).to_string() == "0.5"
+  assert Log.Attribute.from(42).to_string() == "42"
+  assert Log.Attribute.from("plain").to_string() == "plain"
+end

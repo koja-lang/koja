@@ -1,0 +1,26 @@
+@doc """
+Why a handler did not take a record. Variants name causes. `Closed`
+means the handler's sink or process is gone, `Write` carries the
+`IO.Error` from a descriptor write, and `Failed` carries a cause in
+the handler's own words.
+
+`Log` drops a handler that fails for the rest of that emit and sends
+one `Warn` record naming the cause through the handlers that remain.
+"""
+@experimental
+enum Log.Error
+  Closed
+  Failed(String)
+  Write(IO.Error)
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      Log.Error.Closed -> "log handler is closed"
+      Log.Error.Failed(cause) -> cause
+      Log.Error.Write(error) -> error.message()
+    end
+  end
+end

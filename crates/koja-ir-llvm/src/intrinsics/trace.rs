@@ -184,10 +184,32 @@ fn emit_export_pop<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
+    let pop_fn = declare_rt_export_pop_extern(ctx);
+    emit_fill_option(
+        ctx,
+        function,
+        llvm_function,
+        "TraceRuntime.export_pop",
+        pop_fn,
+    )
+}
+
+/// Shared body of an intrinsic that returns `Option<record>` from a
+/// runtime filler with the signature `i64 fill(i8* out, i64 out_cap)`:
+/// let `fill_fn` fill a stack slot of the record type. A `0` status
+/// loads the slot into `Option.Some`, `-1` yields `Option.None`.
+/// `intrinsic` names the caller in the sealed-IR panics.
+pub(super) fn emit_fill_option<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    intrinsic: &str,
+    fill_fn: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
     let IRType::Enum(option_symbol) = &function.return_type else {
         panic!(
-            "LLVM emit: `TraceRuntime.export_pop` returns `{:?}`, expected an \
-             `Option` enum (IR seal invariant violation)",
+            "LLVM emit: `{intrinsic}` returns `{:?}`, expected an `Option` enum (IR seal \
+             invariant violation)",
             function.return_type,
         );
     };
@@ -197,37 +219,36 @@ fn emit_export_pop<'ctx>(
         IRVariantPayload::Tuple(types) => match types.as_slice() {
             [record_type] => record_type.clone(),
             other => panic!(
-                "LLVM emit: `TraceRuntime.export_pop` Some payload is `{other:?}`, \
-                 expected a single record (IR seal invariant violation)",
+                "LLVM emit: `{intrinsic}` Some payload is `{other:?}`, expected a single \
+                 record (IR seal invariant violation)",
             ),
         },
         other => panic!(
-            "LLVM emit: `TraceRuntime.export_pop` Some payload is `{other:?}`, \
-             expected a tuple (IR seal invariant violation)",
+            "LLVM emit: `{intrinsic}` Some payload is `{other:?}`, expected a tuple (IR seal \
+             invariant violation)",
         ),
     };
     let record_llvm = ir_basic_type(ctx, &record_type)?;
-    let (slot, cap) = record_out_slot(ctx, record_llvm, "popped_record")?;
+    let (slot, cap) = record_out_slot(ctx, record_llvm, "filled_record")?;
 
-    let pop_fn = declare_rt_export_pop_extern(ctx);
     let status = ctx
-        .call_basic(pop_fn, &[slot.into(), cap.into()], "pop_status")?
+        .call_basic(fill_fn, &[slot.into(), cap.into()], "fill_status")?
         .into_int_value();
-    let popped = ctx
+    let filled = ctx
         .builder
         .build_int_compare(
             IntPredicate::EQ,
             status,
             ctx.context.i64_type().const_zero(),
-            "popped",
+            "filled",
         )
         .or_ice()?;
 
-    let some_bb = ctx.context.append_basic_block(llvm_function, "pop_some");
-    let none_bb = ctx.context.append_basic_block(llvm_function, "pop_none");
-    let merge_bb = ctx.context.append_basic_block(llvm_function, "pop_merge");
+    let some_bb = ctx.context.append_basic_block(llvm_function, "fill_some");
+    let none_bb = ctx.context.append_basic_block(llvm_function, "fill_none");
+    let merge_bb = ctx.context.append_basic_block(llvm_function, "fill_merge");
     ctx.builder
-        .build_conditional_branch(popped, some_bb, none_bb)
+        .build_conditional_branch(filled, some_bb, none_bb)
         .or_ice()?;
 
     ctx.builder.position_at_end(some_bb);
@@ -240,7 +261,7 @@ fn emit_export_pop<'ctx>(
     let some_block = ctx
         .builder
         .get_insert_block()
-        .expect("emit_export_pop lost the some insertion block before the merge phi");
+        .expect("emit_fill_option lost the some insertion block before the merge phi");
 
     ctx.builder.position_at_end(none_bb);
     let none_value = build_enum_value(ctx, option_symbol, none_tag, &[])?;
@@ -248,11 +269,11 @@ fn emit_export_pop<'ctx>(
     let none_block = ctx
         .builder
         .get_insert_block()
-        .expect("emit_export_pop lost the none insertion block before the merge phi");
+        .expect("emit_fill_option lost the none insertion block before the merge phi");
 
     ctx.builder.position_at_end(merge_bb);
     let outer = ctx.enum_outer_type(option_symbol.mangled());
-    let phi = ctx.builder.build_phi(outer, "pop_option").or_ice()?;
+    let phi = ctx.builder.build_phi(outer, "fill_option").or_ice()?;
     phi.add_incoming(&[(&some_value, some_block), (&none_value, none_block)]);
     ctx.builder
         .build_return(Some(&phi.as_basic_value()))
@@ -272,7 +293,7 @@ fn emit_export_dropped(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
 
 /// Spill a record value to a stack slot for a runtime call that copies
 /// it out. Returns the slot and the record's ABI size as an `i64`.
-fn spill_record<'ctx>(
+pub(super) fn spill_record<'ctx>(
     ctx: &EmitContext<'ctx>,
     record: BasicValueEnum<'ctx>,
     name: &str,
@@ -285,7 +306,7 @@ fn spill_record<'ctx>(
 
 /// A stack slot of the record type for a runtime call that fills it.
 /// Returns the slot and its capacity as an `i64`.
-fn record_out_slot<'ctx>(
+pub(super) fn record_out_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
     record_llvm: inkwell::types::BasicTypeEnum<'ctx>,
     name: &str,

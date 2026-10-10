@@ -1,0 +1,55 @@
+@doc """
+A destination for log records. `handle_log` is the one required
+method and runs in the process that emitted the record. A stdout
+write is one syscall and belongs on that path. A handler that talks
+to a network owns its own process, posts to it with `cast`, and
+manages its own drop mode.
+
+`Log.Config.handlers` holds closures, not protocol values, since a
+list cannot mix handlers of two types. `to_fn` wraps a handler as
+that closure.
+
+```koja
+Log.configure(Log.Config{handlers: [Log.Stdout.new(Log.Text{}).to_fn()]})
+```
+
+The method name carries the `_log` suffix so a process type that
+implements `Log.Handler` keeps `handle` for its messages.
+"""
+@experimental
+protocol Log.Handler
+  @doc """
+  Takes one record. Fails with the cause when the record did not
+  reach the sink.
+  """
+  fn handle_log(self, record: Log.Record) ! Log.Error
+
+  @doc """
+  This handler as the closure `Log.Config.handlers` holds.
+  """
+  fn to_fn(self) -> fn (Log.Record) -> Result<(), Log.Error>
+    handler = self
+
+    fn (record: Log.Record) -> Result<(), Log.Error>
+      handler.handle_log(record)
+    end
+  end
+end
+
+@doc """
+Turns a record into one value of `T` for a handler to write. A text
+handler takes a `Log.Formatter<String>` and a byte sink takes a
+`Log.Formatter<Binary>`, so one socket handler carries any wire
+format. The formatter allocates one `T` per record and the handler
+owns framing such as the trailing newline.
+
+The method name carries the `_log` suffix so a conforming struct
+keeps the derived `Debug.format`.
+"""
+@experimental
+protocol Log.Formatter<T>
+  @doc """
+  Renders one record.
+  """
+  fn format_log(self, record: Log.Record) -> T
+end

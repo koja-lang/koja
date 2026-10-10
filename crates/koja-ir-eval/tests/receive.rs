@@ -5,11 +5,13 @@
 //! Signal flags are process-global, so the lifecycle test installs
 //! handlers by running a trivial entry first, latches SIGTERM with
 //! `raise`, then runs the receive fixture, fully deterministic with no
-//! threads. The other fixtures never drain the signal queue
-//! (business-only arms don't poll it), so parallel test threads
-//! can't steal each other's signals.
+//! threads. Every eval run drains the signal queue, so a run on a
+//! parallel test thread would steal the latched SIGTERM. `SIGNALS`
+//! serializes the tests in this binary.
 
 mod common;
+
+use std::sync::{Mutex, MutexGuard};
 
 use common::{PACKAGE, typecheck};
 use koja_ast::identifier::Identifier;
@@ -23,6 +25,17 @@ unsafe extern "C" {
 }
 
 const SIGTERM: i32 = 15;
+
+/// Held for the whole of each test so no two eval runs in this binary
+/// drain the process-global signal flags at the same time.
+static SIGNALS: Mutex<()> = Mutex::new(());
+
+/// Take `SIGNALS`, recovering the lock if a failed test poisoned it.
+fn serial() -> MutexGuard<'static, ()> {
+    SIGNALS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Lower `source` (an entry named `App`) and run it with no args.
 fn run_entry(source: &str) -> Result<Value, RuntimeError> {
@@ -62,6 +75,7 @@ fn entry_with_run(run_body: &str) -> String {
 
 #[test]
 fn after_timeout_runs_the_after_body() {
+    let _serial = serial();
     let source = entry_with_run(
         "
         receive
@@ -77,6 +91,7 @@ fn after_timeout_runs_the_after_body() {
 
 #[test]
 fn sigterm_delivers_lifecycle_shutdown() {
+    let _serial = serial();
     // First run installs the latching signal handlers (run_program
     // installs them before user code), so the raise below latches
     // a flag instead of killing the test process.

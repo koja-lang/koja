@@ -1,0 +1,9 @@
+DEBUG debug line
+INFO info line port=8080
+WARN warn line retry=true
+ERROR error line ratio=0.5
+INFO bound line job=sweep
+INFO call wins job=weekly
+WARN kept at the floor
+TRACE trace line frame=3
+2026-09-21T14:13:20.123456Z INFO swept 12 rows job=cleaner

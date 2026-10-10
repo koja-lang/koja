@@ -150,6 +150,13 @@ impl<M> Default for HotState<M> {
     }
 }
 
+/// The log floor word a slot holds before `Log.configure` runs: the
+/// rank of `Log.Level.Info` in `lib/global/src/log/level.koja`, where
+/// `Trace` is 0 and `Error` is 4. The stdlib owns the rank mapping and
+/// passes the rank with each configure. The runtime never interprets
+/// the word beyond copying it at `spawn` and handing it back on read.
+pub const DEFAULT_LOG_LEVEL: u64 = 2;
+
 /// One slot: the lifecycle word, the mutex-guarded hot state, the
 /// claim-holder-owned execution cell, and lock-free per-process scalars.
 struct Slot<X, M> {
@@ -162,6 +169,15 @@ struct Slot<X, M> {
     execution: ExecutionCell<X>,
     hot: Mutex<HotState<M>>,
     lifecycle: LifecycleWord,
+    /// Set while the owning process runs its log handlers, so a handler
+    /// that logs is dropped instead of recursing. Starts clear on every
+    /// spawn and only the owning process touches it.
+    log_busy: AtomicU64,
+    /// The process's log floor as the rank word the stdlib `Log.Level`
+    /// stores (see [`DEFAULT_LOG_LEVEL`]). The spawner writes the
+    /// child's copy before the `occupy` release-store, and the owning
+    /// process rewrites it on `Log.configure`. Relaxed, like `context`.
+    log_level: AtomicU64,
     /// The spawning process (0 = none). Written before the slot's
     /// `occupy` release-store, read lock-free by the kill-cascade scan
     /// and `parent`.
@@ -180,6 +196,8 @@ impl<X, M> Slot<X, M> {
             execution: ExecutionCell(UnsafeCell::new(None)),
             hot: Mutex::new(HotState::default()),
             lifecycle: LifecycleWord::new(),
+            log_busy: AtomicU64::new(0),
+            log_level: AtomicU64::new(DEFAULT_LOG_LEVEL),
             parent: AtomicI64::new(0),
             priority: AtomicU8::new(Priority::default() as u8),
             reductions: AtomicU32::new(0),
@@ -880,13 +898,18 @@ impl<X, M: Message> ProcessTable<X, M> {
             let pid = encode(index, generation);
 
             slot.parent.store(parent.unwrap_or(0), Ordering::Relaxed);
-            // The child inherits the spawner's request context. The
-            // spawner is alive (checked above) and is the one calling, so
-            // its slot words are stable for the read.
-            let inherited = parent
-                .and_then(|parent| self.slot(parent))
-                .map_or(Context::ZERO, |(parent_slot, _)| parent_slot.context());
+            // The child inherits the spawner's request context and log
+            // floor. The spawner is alive (checked above) and is the one
+            // calling, so its slot words are stable for the read.
+            let parent_slot = parent.and_then(|parent| self.slot(parent));
+            let inherited =
+                parent_slot.map_or(Context::ZERO, |(parent_slot, _)| parent_slot.context());
             slot.set_context(inherited);
+            let log_level = parent_slot.map_or(DEFAULT_LOG_LEVEL, |(parent_slot, _)| {
+                parent_slot.log_level.load(Ordering::Relaxed)
+            });
+            slot.log_level.store(log_level, Ordering::Relaxed);
+            slot.log_busy.store(0, Ordering::Relaxed);
             if let Some(parent) = parent {
                 registry.children.entry(parent).or_default().insert(pid);
             }
@@ -1195,6 +1218,49 @@ impl<X, M: Message> ProcessTable<X, M> {
         {
             slot.set_context(context);
         }
+    }
+
+    /// The log floor word `pid` carries. [`DEFAULT_LOG_LEVEL`] for a
+    /// stale PID.
+    pub fn log_level(&self, pid: Pid) -> u64 {
+        match self.live_slot(pid) {
+            Some(slot) => slot.log_level.load(Ordering::Relaxed),
+            None => DEFAULT_LOG_LEVEL,
+        }
+    }
+
+    /// Stores `level` as `pid`'s log floor word. Called by the owning
+    /// process only, from `Log.configure`. A no-op for a stale PID.
+    pub fn set_log_level(&self, pid: Pid, level: u64) {
+        if let Some(slot) = self.live_slot(pid) {
+            slot.log_level.store(level, Ordering::Relaxed);
+        }
+    }
+
+    /// Marks `pid` as running its log handlers. Returns `false` when it
+    /// already was, which is how a handler that logs is refused instead
+    /// of recursing. `false` for a stale PID. Called by the owning
+    /// process only.
+    pub fn log_enter(&self, pid: Pid) -> bool {
+        match self.live_slot(pid) {
+            Some(slot) => slot.log_busy.swap(1, Ordering::Relaxed) == 0,
+            None => false,
+        }
+    }
+
+    /// Clears the mark [`log_enter`](Self::log_enter) set. A no-op for
+    /// a stale PID.
+    pub fn log_leave(&self, pid: Pid) {
+        if let Some(slot) = self.live_slot(pid) {
+            slot.log_busy.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// The slot for `pid` when its generation still matches, so the
+    /// process is the one the PID named.
+    fn live_slot(&self, pid: Pid) -> Option<&Slot<X, M>> {
+        let (slot, generation) = self.slot(pid)?;
+        (slot.lifecycle.load().generation == generation).then_some(slot)
     }
 
     /// The process that spawned `pid`. `None` for the entry process
@@ -2731,6 +2797,59 @@ mod tests {
         // happens once, at spawn.
         table.set_context(root, Context::ZERO);
         assert_eq!(table.context(child), context);
+    }
+
+    #[test]
+    fn log_level_starts_at_default_and_round_trips() {
+        let table = TestTable::new();
+        let root = fake_spawn(&table);
+        assert_eq!(table.log_level(root), DEFAULT_LOG_LEVEL);
+
+        table.set_log_level(root, 3);
+        assert_eq!(table.log_level(root), 3);
+        assert_eq!(
+            table.log_level(root + 1),
+            DEFAULT_LOG_LEVEL,
+            "stale pid reads the default"
+        );
+    }
+
+    #[test]
+    fn spawn_copies_parent_log_level_into_child() {
+        let table = TestTable::new();
+        let root = fake_spawn(&table);
+        table.set_log_level(root, 0);
+
+        let child = fake_spawn_child(&table, root);
+        assert_eq!(table.log_level(child), 0);
+
+        // A later write on the parent does not reach the child: the copy
+        // happens once, at spawn.
+        table.set_log_level(root, 2);
+        assert_eq!(table.log_level(child), 0);
+    }
+
+    #[test]
+    fn log_enter_refuses_reentry_until_leave() {
+        let table = TestTable::new();
+        let root = fake_spawn(&table);
+
+        assert!(table.log_enter(root));
+        assert!(!table.log_enter(root), "busy while handlers run");
+        table.log_leave(root);
+        assert!(table.log_enter(root));
+        assert!(!table.log_enter(root + 1), "stale pid never enters");
+    }
+
+    #[test]
+    fn spawn_starts_child_with_log_busy_clear() {
+        let table = TestTable::new();
+        let root = fake_spawn(&table);
+        assert!(table.log_enter(root));
+
+        // A child spawned from inside a handler is not busy itself.
+        let child = fake_spawn_child(&table, root);
+        assert!(table.log_enter(child));
     }
 
     /// Drains staged kills as a driver would: kill each, which stages

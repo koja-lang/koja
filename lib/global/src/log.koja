@@ -1,0 +1,225 @@
+@doc """
+Structured logging on a per-process slot. `Log.info` and the other
+level functions read the calling process's configuration, which
+`Log.configure` writes and `spawn` copies into each child. Before
+anything is configured a process writes `Log.Text` lines to stdout at
+`Info`, so a script never mentions `Log.configure` and still logs.
+
+```koja
+Log.configure(Log.Config{
+  handlers: [Log.Stdout.new(Log.Text{}).to_fn()],
+  level: Log.Level.Debug,
+})
+
+Log.info("server listening", ["port": 8080])
+```
+
+One rule to teach is `configure` before `spawn`. A process spawned
+earlier carries the default, so the call sits at the top of `start`.
+
+Attributes that every record from one place should carry bind to a
+`Log.Logger` from `Log.with`. The bound attributes travel with the
+value, not the process, so a pool serving ten requests never leaks one
+request's fields into another's line.
+
+```koja
+log = Log.with(["entity": name, "tool": "create_entity"])
+log.info("near duplicate refused")
+log.warn("embedding failed", ["status": code])
+```
+
+Handlers run in the emitting process. A handler that fails is dropped
+for the rest of that emit and one `Warn` record naming the cause goes
+through the handlers that remain. A record emitted while handlers run
+is dropped, so a handler that logs does not recurse.
+"""
+@experimental
+struct Log
+  @doc """
+  Installs `config` on the calling process. Processes spawned after
+  this call inherit it.
+  """
+  fn configure(config: Log.Config)
+    LogRuntime.configure(config, rank(config.level))
+  end
+
+  fn debug(message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Debug, message, attributes)
+  end
+
+  fn error(message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Error, message, attributes)
+  end
+
+  fn info(message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Info, message, attributes)
+  end
+
+  fn trace(message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Trace, message, attributes)
+  end
+
+  fn warn(message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Warn, message, attributes)
+  end
+
+  @doc """
+  A logger whose records all carry `attributes`.
+  """
+  fn with(attributes: Map<String, Log.Attribute>) -> Log.Logger
+    Log.Logger{attributes: attributes}
+  end
+end
+
+@doc """
+A set of bound attributes to log with. `Log.with` builds one. Each
+level function merges the attributes passed at the call over the
+bound ones and emits through the calling process's configuration,
+the same as the static functions on `Log`.
+"""
+@experimental
+struct Log.Logger
+  attributes: Map<String, Log.Attribute>
+
+  fn debug(self, message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Debug, message, merge(self.attributes, attributes))
+  end
+
+  fn error(self, message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Error, message, merge(self.attributes, attributes))
+  end
+
+  fn info(self, message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Info, message, merge(self.attributes, attributes))
+  end
+
+  fn trace(self, message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Trace, message, merge(self.attributes, attributes))
+  end
+
+  fn warn(self, message: String, attributes: Map<String, Log.Attribute> = [:])
+    emit(Log.Level.Warn, message, merge(self.attributes, attributes))
+  end
+
+  @doc """
+  A logger that also carries `attributes`. A key already bound is
+  replaced.
+  """
+  fn with(self, attributes: Map<String, Log.Attribute>) -> Log.Logger
+    Log.Logger{attributes: merge(self.attributes, attributes)}
+  end
+end
+
+# The one emit path. The floor check is a word load, so a disabled
+# `trace` costs nothing more. An enabled record copies the
+# configuration out of the slot and runs each handler here.
+@experimental
+priv fn emit(
+  level: Log.Level,
+  message: String,
+  attributes: Map<String, Log.Attribute>,
+)
+
+  if rank(level) < LogRuntime.level()
+    return
+  end
+
+  if not LogRuntime.enter()
+    return
+  end
+
+  record = Log.Record{
+    attributes: attributes,
+    context: Process.context(),
+    level: level,
+    message: message,
+    timestamp: Timestamp.now(),
+  }
+
+  handlers =
+    match LogRuntime.config()
+      Option.Some(config) -> config.handlers
+      Option.None -> [Log.Stdout.new(Log.Text{}).to_fn()]
+    end
+
+  dispatch(handlers, record)
+  LogRuntime.leave()
+end
+
+# Runs `record` through `handlers`. A handler that fails is left out
+# of the `Warn` records that follow, one per failure, which go to the
+# handlers that succeeded.
+@experimental
+priv fn dispatch(
+  handlers: List<fn (Log.Record) -> Result<(), Log.Error>>,
+  record: Log.Record,
+)
+
+  remaining: List<fn (Log.Record) -> Result<(), Log.Error>> = []
+  failures: List<Log.Error> = []
+
+  for handler in handlers
+    match handler(record)
+      Result.Ok(_) -> remaining = remaining.append(handler)
+      Result.Err(error) -> failures = failures.append(error)
+    end
+  end
+
+  if failures.empty?() or rank(Log.Level.Warn) < LogRuntime.level()
+    return
+  end
+
+  for error in failures
+    warning = Log.Record{
+      attributes: ["error": Log.Attribute.from(error.message())],
+      context: record.context,
+      level: Log.Level.Warn,
+      message: "log handler failed",
+      timestamp: Timestamp.now(),
+    }
+
+    for handler in remaining
+      handler(warning)
+    end
+  end
+end
+
+# `over` wins where both maps hold a key.
+@experimental
+priv fn merge(
+  base: Map<String, Log.Attribute>,
+  over: Map<String, Log.Attribute>,
+) -> Map<String, Log.Attribute>
+
+  merged = base
+
+  for (key, value) in over
+    merged = merged.put(key, value)
+  end
+
+  merged
+end
+
+# The runtime side of `Log`. Each process carries a floor word, a busy
+# word, and an optional configuration payload. `spawn` copies the floor
+# and the payload into the child and the busy word starts clear.
+# `configure` stores the payload and the floor, `config` copies the
+# payload out, and `enter` and `leave` guard the emit path against a
+# handler that logs.
+@experimental
+priv struct LogRuntime
+  @intrinsic
+  fn config -> Option<Log.Config>
+
+  @intrinsic
+  fn configure(config: Log.Config, level: Int)
+
+  @intrinsic
+  fn enter -> Bool
+
+  @intrinsic
+  fn leave
+
+  @intrinsic
+  fn level -> Int
+end

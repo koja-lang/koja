@@ -1,0 +1,102 @@
+@doc """
+A test aid that collects records in a process of its own. `start`
+spawns the collector, `handler` is the closure to put in a
+`Log.Config`, and `take` returns the records collected so far and
+empties the collector.
+
+The collector is a child of the process that called `start`, so a
+test's collector dies with the test. A handler emitted from a child
+process reaches the same collector, since the child inherited the
+configuration at `spawn`.
+
+```koja
+test "warns on a bad embedding"
+  capture = Log.Capture.start()
+  Log.configure(Log.Config{handlers: [capture.handler()], level: Log.Level.Debug})
+
+  embed_rows(db, embedder, rows)
+
+  assert capture.take().any?(r -> r.message == "embedding failed")
+end
+```
+"""
+@experimental
+struct Log.Capture
+  collector: Ref<Log.Capture.Message, List<Log.Record>>
+
+  @doc """
+  Spawns a collector and returns the capture bound to it.
+  """
+  fn start -> Log.Capture
+    collector = spawn Log.Capture.Collector.start(())
+    Log.Capture{collector: collector}
+  end
+
+  @doc """
+  A handler closure that casts each record to the collector. Fails
+  with `Log.Error.Closed` once the collector is gone.
+  """
+  fn handler(self) -> fn (Log.Record) -> Result<(), Log.Error>
+    collector = self.collector
+
+    fn (record: Log.Record) -> Result<(), Log.Error>
+      if not collector.alive?()
+        return Result.Err(Log.Error.Closed)
+      end
+
+      collector.cast(Log.Capture.Message.Record(record))
+      Result.Ok(())
+    end
+  end
+
+  @doc """
+  The records collected since `start` or the last `take`, oldest
+  first. Returns an empty list when the collector is gone.
+  """
+  fn take(self) -> List<Log.Record>
+    match self.collector.call(Log.Capture.Message.Take, 5000)
+      Result.Ok(records) -> records
+      Result.Err(_) -> []
+    end
+  end
+end
+
+@doc """
+What a `Log.Capture` sends its collector. `Record` adds one record
+and `Take` asks for the list collected so far.
+"""
+@experimental
+enum Log.Capture.Message
+  Record(Log.Record)
+  Take
+end
+
+# The process behind a `Log.Capture`.
+@experimental
+priv struct Log.Capture.Collector:
+  Process<(), Log.Capture.Message, List<Log.Record>>
+
+  records: List<Log.Record> = []
+
+  fn start(config: ()) -> Self ! Process.StopReason
+    Log.Capture.Collector{}
+  end
+
+  fn handle(
+    self,
+    msg: Log.Capture.Message,
+    from: Option<ReplyTo<List<Log.Record>>>,
+  ) -> Process.Step<Self>
+
+    match msg
+      Log.Capture.Message.Record(record) ->
+        self.records = self.records.append(record)
+        Process.Step.Continue(self)
+
+      Log.Capture.Message.Take ->
+        ReplyTo.reply(from, self.records)
+        self.records = []
+        Process.Step.Continue(self)
+    end
+  end
+end

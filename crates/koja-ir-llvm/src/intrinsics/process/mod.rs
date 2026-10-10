@@ -18,7 +18,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::intrinsics::util::{extract_int, nth_int, nth_struct};
 
-pub(crate) use envelope::payload_drop_glue;
+pub(crate) use envelope::{payload_copy_glue, payload_drop_glue};
 
 pub(super) fn emit_process<'ctx>(
     ctx: &EmitContext<'ctx>,

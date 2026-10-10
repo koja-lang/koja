@@ -1,0 +1,54 @@
+@doc """
+A structured field on a log record. Literals convert on their own
+wherever the compiler knows it wants a `Log.Attribute`, so an
+attribute map reads as a plain map literal.
+
+```koja
+Log.info("pool ready", ["pool": "primary", "size": 10])
+```
+
+A variable does not convert. Wrap it with `Log.Attribute.from`.
+
+```koja
+Log.info("entity saved", ["entity": Log.Attribute.from(name)])
+```
+"""
+@experimental
+struct Log.Attribute: BoolLiteral, FloatLiteral, IntLiteral, StringLiteral
+  value: Bool | Float | Int | String
+
+  @doc """
+  Wraps a runtime value as an attribute.
+  """
+  fn from(value: Bool | Float | Int | String) -> Log.Attribute
+    Log.Attribute{value: value}
+  end
+
+  fn from_bool(value: Bool) -> Log.Attribute
+    Log.Attribute{value: value}
+  end
+
+  fn from_float(value: Float) -> Log.Attribute
+    Log.Attribute{value: value}
+  end
+
+  fn from_int(value: Int) -> Log.Attribute
+    Log.Attribute{value: value}
+  end
+
+  fn from_string(value: String) -> Log.Attribute
+    Log.Attribute{value: value}
+  end
+
+  @doc """
+  The value as it appears after `key=` in a text log line.
+  """
+  fn to_string(self) -> String
+    match self.value
+      b: Bool -> b ? "true" : "false"
+      f: Float -> "#{f}"
+      i: Int -> "#{i}"
+      s: String -> s
+    end
+  end
+end

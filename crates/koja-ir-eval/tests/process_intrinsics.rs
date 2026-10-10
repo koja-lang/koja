@@ -102,6 +102,73 @@ fn cast_then_call_round_trips_through_spawned_process() {
     );
 }
 
+/// A worker that logs at `Debug` on each message and echoes the message
+/// back so the caller knows the record went out. Under the default
+/// floor the record is dropped, so only a child that inherited a
+/// `Debug` floor and the parent's handler reaches the parent's capture.
+const LOGGER: &str = "
+    struct Logger
+    end
+
+    impl Process<(), Int, Int> for Logger
+      fn start(config: ()) -> Result<Logger, Process.StopReason>
+        Result.Ok(Logger{})
+      end
+
+      fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Process.Step<Logger>
+        Log.debug(\"from the child\", [\"n\": Log.Attribute.from(msg)])
+        ReplyTo.reply(from, msg)
+        Process.Step.Continue(self)
+      end
+    end
+    ";
+
+#[test]
+fn spawn_clones_the_log_configuration_into_the_child() {
+    let source = format!(
+        "{LOGGER}
+
+        struct App
+        end
+
+        impl Process<(), (), ()> for App
+          fn start(config: ()) -> Result<App, Process.StopReason>
+            Result.Ok(App{{}})
+          end
+
+          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<App>
+            Process.Step.Continue(self)
+          end
+
+          fn run(self) -> Process.StopReason
+            early = spawn Logger.start(())
+            capture = Log.Capture.start()
+            Log.configure(Log.Config{{handlers: [capture.handler()], level: Log.Level.Debug}})
+            late = spawn Logger.start(())
+
+            replied = early.call(1, 1000) == Result.Ok(1)
+              and late.call(2, 1000) == Result.Ok(2)
+            records = capture.take()
+            only_late = records.length() == 1
+              and records.any?(r -> r.message == \"from the child\")
+
+            if replied and only_late
+              Process.StopReason.Normal
+            else
+              Process.StopReason.Shutdown
+            end
+          end
+        end
+        "
+    );
+    assert_eq!(
+        run_app(&source),
+        Value::Int(0),
+        "a child spawned after configure carries the Debug floor and its record reaches \
+         the parent's capture, while one spawned before keeps the default",
+    );
+}
+
 #[test]
 fn call_to_silent_process_times_out() {
     let source = format!(

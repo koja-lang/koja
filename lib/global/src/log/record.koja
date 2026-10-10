@@ -1,0 +1,16 @@
+@doc """
+One log record, built by `Log` and handed to each handler.
+`attributes` holds the fields bound on a `Log.Logger` merged with the
+fields passed at the call. `context` is the `Process.Context` the
+emitting process carried, so a formatter reads the trace and span ids
+from `record.context.trace_id()` and `record.context.span_id()`
+instead of a message that interpolates them.
+"""
+@experimental
+struct Log.Record
+  attributes: Map<String, Log.Attribute>
+  context: Process.Context
+  level: Log.Level
+  message: String
+  timestamp: Timestamp
+end

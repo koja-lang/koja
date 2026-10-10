@@ -39,6 +39,7 @@ mod hashtable;
 pub(crate) mod heap_payload;
 mod kernel;
 mod list;
+mod log;
 mod map;
 mod numeric;
 mod option;
@@ -94,6 +95,9 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
             kernel::emit_panic(ctx, function, llvm_function)
         }
         IRIntrinsicId::List(method) => list::emit_list(ctx, function, llvm_function, method),
+        IRIntrinsicId::LogRuntime(method) => {
+            log::emit_log_runtime(ctx, function, llvm_function, method)
+        }
         IRIntrinsicId::Map(method) => map::emit_map(ctx, function, llvm_function, method),
         IRIntrinsicId::NumericConvert(convert) => {
             numeric::emit_numeric_convert(ctx, function, llvm_function, convert)

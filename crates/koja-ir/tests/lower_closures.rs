@@ -456,10 +456,12 @@ fn captureless_closure_has_no_eq_env_glue() {
 
     let script = lower(source);
 
+    // Only the script's own closures count. The stdlib mints its own
+    // `$eq_env$` glue for capturing closures such as `Log.Capture.handler`.
     assert!(
         !script_function_names(&script)
             .iter()
-            .any(|name| name.ends_with(".$eq_env$")),
+            .any(|name| name.starts_with("TestApp.") && name.ends_with(".$eq_env$")),
         "captureless bodies compare by site id alone and need no glue",
     );
     let equals = all_instructions(&script.blocks)
