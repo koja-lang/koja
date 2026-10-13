@@ -34,7 +34,7 @@ use crate::pipeline::lift_signatures::resolve_target_bounds;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{BoundOverlay, FunctionSignature, GlobalRegistry};
 
-use super::assert::{is_assert_statement, rewrite_assert_statement};
+use super::assert::{AssertRewrite, is_assert_statement, rewrite_assert_statement};
 use super::ctx::{Resolver, ResolverEnv};
 use super::error_channel::{
     channel_for_signature, hand_wrapped_result, is_fail_statement, ok_wrap_return,
@@ -45,7 +45,8 @@ use super::field_defaults::{resolve_enum_defaults, resolve_struct_defaults};
 use super::for_loop::rewrite_for_statement;
 use super::return_type::{check_explicit_return, check_return_type};
 use super::statements::{
-    resolve_assignment, resolve_compound_assignment, resolve_destructure, resolve_hinted_assignment,
+    resolve_assignment, resolve_comparison_operands, resolve_compound_assignment,
+    resolve_destructure,
 };
 
 pub(crate) fn resolve_file(
@@ -542,18 +543,23 @@ pub(super) fn resolve_body_with_expected(
 
         // Statement-position `assert` desugars to plain statements
         // that the loop then resolves on the next iterations. A
-        // comparison's operand bindings resolve here instead, so the
-        // right operand sees the left's type the way it does in `==`.
+        // comparison's operand bindings resolve here instead, so
+        // each operand sees the other's type the way it does in `==`.
         if is_assert_statement(&body[index]) {
             let statement = body.remove(index);
-            let rewrite = rewrite_assert_statement(statement, resolver, diagnostics);
-            body.splice(index..index, rewrite.statements);
-            if let Some(left_name) = rewrite.comparison_left {
-                resolve_statement(&mut body[index], resolver, diagnostics);
-                index += 1;
-                let hint = resolver.scope.lookup(&left_name).map(|(_, ty)| ty.clone());
-                resolve_hinted_operand(&mut body[index], hint.as_ref(), resolver, diagnostics);
-                index += 1;
+            match rewrite_assert_statement(statement, resolver, diagnostics) {
+                AssertRewrite::Comparison {
+                    mut left,
+                    mut right,
+                    check,
+                } => {
+                    resolve_comparison_operands(&mut left, &mut right, resolver, diagnostics);
+                    body.splice(index..index, [*left, *right, *check]);
+                    index += 2;
+                }
+                AssertRewrite::Plain(statements) => {
+                    body.splice(index..index, statements);
+                }
             }
             continue;
         }
@@ -566,24 +572,4 @@ pub(super) fn resolve_body_with_expected(
         }
         index += 1;
     }
-}
-
-/// Resolve the right operand binding of a desugared `assert`
-/// comparison with the left operand's type as the expected type.
-fn resolve_hinted_operand(
-    statement: &mut Statement,
-    hint: Option<&ResolvedType>,
-    resolver: &mut Resolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let Statement::Assignment {
-        target,
-        value,
-        span,
-        ..
-    } = statement
-    else {
-        unreachable!("assert comparison desugars its operands to assignments");
-    };
-    resolve_hinted_assignment(target, hint, value, *span, resolver, diagnostics);
 }

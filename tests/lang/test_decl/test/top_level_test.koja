@@ -22,3 +22,12 @@ test "the right operand takes the left operand's type"
   ratio: Float32 = 1.5
   assert ratio == 1.5
 end
+
+test "the left operand takes the right operand's type"
+  assert Option.None == Stack.new().peek()
+  assert 0 == Checksum.crc32(<<>>)
+  small: Int8 = -3
+  assert -3 == small
+  ratio: Float32 = 1.5
+  assert 1.5 == ratio
+end

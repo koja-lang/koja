@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `assert` types a comparison in either direction, so `assert Option.None == p` and `assert 0 == n` on a `UInt32` typecheck the way `assert p == Option.None` and `assert n == 0` do. Before, only the right operand took its type from the left. An operand that fails to typecheck now reports once. Before, the failure was followed by four more errors that named the internal `$assert_left_0` temporary.
+- An operator stays quiet when an operand already failed to typecheck. Before, `not nope` and `nope + 1` reported the unknown identifier and then a second error about an `<unresolved>` operand.
+
 ## [0.20.0] - 2026-10-10
 
 ### Added

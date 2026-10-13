@@ -1475,11 +1475,12 @@ fn lang_test_decl() {
         "two tests may share a description (test/top_level_test.koja:9) ... ok",
         "a trailing expression needs no unit (test/top_level_test.koja:13) ... ok",
         "the right operand takes the left operand's type (test/top_level_test.koja:17) ... ok",
+        "the left operand takes the right operand's type (test/top_level_test.koja:26) ... ok",
         "failure: assertion failed\n   ╭─ test/stack_test.koja:18:12\n",
         "18 │     assert Stack.new().push(1).size() == 2\n",
         "left:  1\n",
         "right: 2\n",
-        "13 successful tests. 1 failures.",
+        "14 successful tests. 1 failures.",
     ];
 
     for backend in BACKENDS {

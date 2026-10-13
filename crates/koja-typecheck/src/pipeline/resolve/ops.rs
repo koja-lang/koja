@@ -4,9 +4,10 @@
 //! [`GlobalRegistry::primitive`] so primitive identity stays
 //! single-sourced. On a type mismatch the helper emits a diagnostic
 //! and returns [`ResolvedType::unresolved`]. Resolve never aborts
-//! mid-walk, so a follow-on type rule sees `<unresolved>` operands
-//! and stays quiet ([`super::types::is_primitive`] short-circuits on
-//! those).
+//! mid-walk, so a follow-on type rule sees `<unresolved>` operands.
+//! [`binary_type`] and [`unary_type`] return early on one, since the
+//! operand already reported and a mismatch against `<unresolved>`
+//! would only repeat it.
 //!
 //! Numeric arms (arithmetic and comparison) accept any two operands
 //! [`super::types::types_equivalent`] considers compatible, which is
@@ -97,7 +98,9 @@ pub(super) fn resolve_equality_op_expr(
 /// fails a trial resolve of the left, so the right resolves first and
 /// the left resolves again with the right's type as the hint. When
 /// both sides are unresolvable the retry re-emits the trial's errors.
-fn resolve_operands_with_sibling_hint(
+/// The `assert` desugar shares this so its operand bindings type the
+/// way the comparison they came from does.
+pub(super) fn resolve_operands_with_sibling_hint(
     mut left: &mut Expr,
     right: &mut Expr,
     resolver: &mut Resolver<'_>,
@@ -196,6 +199,11 @@ pub(super) fn binary_type(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    if !left.resolution.is_resolved() || !right.resolution.is_resolved() {
+        // The operand already reported. A mismatch against
+        // `<unresolved>` would only repeat it.
+        return ResolvedType::unresolved();
+    }
     match op {
         BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
             if let Some(ty) = numeric_arithmetic_result(left, right, registry) {
@@ -306,6 +314,11 @@ pub(super) fn unary_type(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let ty = &operand.resolution;
+    if !ty.is_resolved() {
+        // The operand already reported. A mismatch against
+        // `<unresolved>` would only repeat it.
+        return ResolvedType::unresolved();
+    }
     match op {
         UnaryOp::Neg => {
             if let Some(name) = signed_numeric_name(ty, registry) {

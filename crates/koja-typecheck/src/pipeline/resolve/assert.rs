@@ -23,11 +23,12 @@
 //! declare `! Test.Failure`, which application code cannot name
 //! because the loader links the `Test` package only with tests.
 //!
-//! Binding the operands apart would type `b` with no context, so
-//! `assert n == 0` on a `UInt32` and `assert x == Option.None` would
-//! fail where the same `if` passes. The walker closes that gap. It
-//! resolves the left binding first and hands its type to the right
-//! binding as the expected type, the way `==` types its operands.
+//! Binding the operands apart would type each one with no context,
+//! so `assert n == 0` on a `UInt32` and `assert Option.None == x`
+//! would fail where the same `if` passes. The walker closes that gap.
+//! It resolves the two operand values together through the sibling
+//! hint `==` uses, so either side can take its type from the other,
+//! and then declares the temporaries.
 
 use koja_ast::ast::{
     AssertSource, BinOp, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal,
@@ -55,22 +56,20 @@ pub(super) fn is_assert_statement(stmt: &Statement) -> bool {
 }
 
 /// The statements one `assert` desugars to.
-pub(super) struct AssertRewrite {
-    pub(super) statements: Vec<Statement>,
-    /// The left temporary's name when the condition was a comparison.
-    /// Then `statements[0]` binds it and `statements[1]` binds the
-    /// right operand, which the walker resolves with the left's type
-    /// as the expected type.
-    pub(super) comparison_left: Option<String>,
-}
-
-impl AssertRewrite {
-    fn plain(statements: Vec<Statement>) -> Self {
-        Self {
-            statements,
-            comparison_left: None,
-        }
-    }
+pub(super) enum AssertRewrite {
+    /// A comparison condition. `left` and `right` bind the operand
+    /// temporaries and `check` is the `if`. The walker resolves the
+    /// two bindings together so each operand can take its type from
+    /// the other, then splices all three into the body. Boxed so the
+    /// enum stays the size of `Plain`.
+    Comparison {
+        left: Box<Statement>,
+        right: Box<Statement>,
+        check: Box<Statement>,
+    },
+    /// Any other condition, or a channel error. The walker splices
+    /// these in and resolves them like hand-written code.
+    Plain(Vec<Statement>),
 }
 
 /// Rewrite one statement-position `assert` into the statements above.
@@ -84,7 +83,7 @@ pub(super) fn rewrite_assert_statement(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> AssertRewrite {
     let Statement::Expr(expression) = statement else {
-        return AssertRewrite::plain(vec![statement]);
+        return AssertRewrite::Plain(vec![statement]);
     };
     let span = expression.span;
     let ExprKind::Assert {
@@ -93,25 +92,25 @@ pub(super) fn rewrite_assert_statement(
         source,
     } = expression.kind
     else {
-        return AssertRewrite::plain(vec![Statement::Expr(expression)]);
+        return AssertRewrite::Plain(vec![Statement::Expr(expression)]);
     };
 
     if !channel_is_test_failure(resolver) {
         diagnostics.push(channel_diagnostic(resolver, span));
-        return AssertRewrite::plain(vec![Statement::Expr(*condition)]);
+        return AssertRewrite::Plain(vec![Statement::Expr(*condition)]);
     }
 
     let condition_span = condition.span;
     let slot = resolver.next_assert_slot();
-    let mut statements = Vec::with_capacity(3);
-    let mut comparison_left = None;
+    let mut bindings = None;
     let (condition, left, right) = match comparison_operands(condition) {
         Ok((op, left, right)) => {
             let left_name = format!("$assert_left_{slot}");
             let right_name = format!("$assert_right_{slot}");
-            statements.push(assign_local(&left_name, left, span));
-            statements.push(assign_local(&right_name, right, span));
-            comparison_left = Some(left_name.clone());
+            bindings = Some((
+                assign_local(&left_name, left, span),
+                assign_local(&right_name, right, span),
+            ));
             let rebuilt = Expr::new(
                 ExprKind::Binary {
                     op,
@@ -164,17 +163,21 @@ pub(super) fn rewrite_assert_statement(
         },
         condition_span,
     );
-    statements.push(Statement::Expr(Expr::new(
+    let check = Statement::Expr(Expr::new(
         ExprKind::If {
             condition: Box::new(negated),
             then_body: vec![fail],
             else_body: None,
         },
         span,
-    )));
-    AssertRewrite {
-        statements,
-        comparison_left,
+    ));
+    match bindings {
+        Some((left, right)) => AssertRewrite::Comparison {
+            left: Box::new(left),
+            right: Box::new(right),
+            check: Box::new(check),
+        },
+        None => AssertRewrite::Plain(vec![check]),
     }
 }
 
