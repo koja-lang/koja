@@ -12,6 +12,7 @@ mod common;
 
 use common::{
     assert_script_fails_with, function_body, global_leaf, last_expr, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 fn interpolation_exprs(string_expr: &Expr) -> Vec<&Expr> {
@@ -189,5 +190,18 @@ fn string_interpolation_without_format_method_diagnoses() {
     assert_script_fails_with(
         source,
         &["no function `format` on function type `fn (Int) -> Int`"],
+    );
+}
+
+#[test]
+fn string_interpolation_on_a_failed_expression_reports_once() {
+    let failure = typecheck_fail("\"n = #{nope}\"\n");
+    assert_eq!(failure.diagnostics.len(), 1);
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("unknown identifier `nope`"),
+        "unexpected diagnostic: {}",
+        failure.diagnostics[0].message,
     );
 }

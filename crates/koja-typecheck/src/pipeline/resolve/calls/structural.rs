@@ -13,11 +13,10 @@ use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::expr::resolve_expr_with_expected;
 use super::super::types::{
     display_resolution, peel_alias, type_supports_equality, types_equivalent,
 };
-use super::resolve_args;
+use super::{resolve_arg_value, resolve_args};
 use crate::registry::{GlobalRegistry, ResolvedProtocolBound};
 
 /// Which structural shape a method receiver has. Decides the
@@ -174,12 +173,7 @@ fn resolve_structural_eq(
         ));
         return bool_ty;
     };
-    resolve_expr_with_expected(
-        &mut arg.value,
-        Some(&receiver.resolution),
-        resolver,
-        diagnostics,
-    );
+    resolve_arg_value(arg, Some(&receiver.resolution), resolver, diagnostics);
     if !types_equivalent(
         &arg.value.resolution,
         &receiver.resolution,

@@ -1,0 +1,27 @@
+struct Outer
+  struct Inner
+    n: Int
+
+    const ZERO = Outer.Inner{n: 0}
+
+    fn make(n: Int) -> Self
+      Outer.Inner{n: n}
+    end
+  end
+end
+
+struct Point
+  x: Int
+  y: Int
+
+  const ORIGIN = Point{x: 0, y: 0}
+end
+
+i = Outer.Inner.make(1)
+p = Point{x: 0, y: 0}
+
+(i == Outer.Inner.make(1)).print()
+(i != Outer.Inner.ZERO).print()
+(p == Point.ORIGIN).print()
+(Option.Some(i) == Option.Some(Outer.Inner.make(1))).print()
+((i, 1) == (Outer.Inner.ZERO, 1)).print()

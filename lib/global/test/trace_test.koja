@@ -231,11 +231,10 @@ test "a cast from inside a span carries the span's context"
         Process.context()
       end)
 
-  zero = Process.Context.ZERO
   attempts = 1000
   recalled = probe.call(TraceProbeMsg.Recall, 5000)
 
-  while attempts > 0 and recalled == Result.Ok(zero)
+  while attempts > 0 and recalled == Result.Ok(Process.Context.ZERO)
     attempts -= 1
     recalled = probe.call(TraceProbeMsg.Recall, 5000)
   end
