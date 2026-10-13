@@ -156,7 +156,8 @@ pub(super) fn classify_receiver(
 
     // The `==` rewrite hands over a receiver it already resolved,
     // possibly with a hint from the other operand that a bare
-    // re-resolve would lose.
+    // re-resolve would lose. `resolve_arg_value` in the parent
+    // module keeps the same contract for the arguments.
     if !receiver.resolution.is_resolved() {
         resolve_expr(receiver, resolver, diagnostics);
     }

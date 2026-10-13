@@ -1071,8 +1071,25 @@ fn resolve_args(
         diagnose_named_arg(arg, diagnostics);
         let param = expected.and_then(|params| params.get(index));
         let expected_ty = param.map(|p| &p.ty);
-        resolve_expr_with_expected(&mut arg.value, expected_ty, resolver, diagnostics);
+        resolve_arg_value(arg, expected_ty, resolver, diagnostics);
     }
+}
+
+/// Resolve one call argument toward its expected type. An argument
+/// that already carries a resolution is kept as is. The `==` rewrite
+/// hands over operands it resolved with a sibling hint that a bare
+/// re-resolve would lose. Same contract as the receiver skip in
+/// `classify_receiver`.
+pub(super) fn resolve_arg_value(
+    arg: &mut Arg,
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if arg.value.resolution.is_resolved() {
+        return;
+    }
+    resolve_expr_with_expected(&mut arg.value, expected, resolver, diagnostics);
 }
 
 /// First-pass argument resolution for generic callees. Fully resolved
@@ -1093,7 +1110,7 @@ fn resolve_non_closure_args(
             .and_then(|params| params.get(index))
             .map(|param| &param.ty)
             .filter(|ty| ty.is_resolved());
-        resolve_expr_with_expected(&mut arg.value, expected_type, resolver, diagnostics);
+        resolve_arg_value(arg, expected_type, resolver, diagnostics);
     }
 }
 
@@ -1114,7 +1131,7 @@ fn resolve_closure_args(
             continue;
         }
         let expected_ty = expected.get(index).map(|p| &p.ty);
-        resolve_expr_with_expected(&mut arg.value, expected_ty, resolver, diagnostics);
+        resolve_arg_value(arg, expected_ty, resolver, diagnostics);
     }
 }
 

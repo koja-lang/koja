@@ -15,9 +15,6 @@ const SAMPLED_B = Process.Context{
   trace_hi: 22,
   trace_lo: 23,
 }
-# A local name for the zero context. A qualified constant path such as
-# `Process.Context.ZERO` does not resolve as the right operand of `==`.
-const ZERO = Process.Context{flags: 0, span: 0, trace_hi: 0, trace_lo: 0}
 
 priv enum ProbeMsg
   # Reply with the context the handler runs under.
@@ -76,7 +73,7 @@ priv fn recall_when_remembered(probe: Ref<ProbeMsg, Process.Context>)
   attempts = 1000
   found = probe.call(ProbeMsg.Recall, 5000)
 
-  while attempts > 0 and found == Result.Ok(ZERO)
+  while attempts > 0 and found == Result.Ok(Process.Context.ZERO)
     attempts -= 1
     found = probe.call(ProbeMsg.Recall, 5000)
   end
@@ -86,7 +83,7 @@ end
 
 test "a test process starts with the zero context"
   context = Process.context()
-  assert context == ZERO
+  assert context == Process.Context.ZERO
   assert not context.sampled?()
 end
 
@@ -105,14 +102,14 @@ test "trace_id and span_id return the ids as big-endian bytes"
 
   assert Base.encode16(context.span_id()) == "0102030405060708"
   assert Base.encode16(context.trace_id()) == "ffffffffffffffff0a0b0c0d0e0f1011"
-  assert Base.encode16(ZERO.trace_id()) == "00000000000000000000000000000000"
+  assert Base.encode16(Process.Context.ZERO.trace_id()) == "00000000000000000000000000000000"
 end
 
 test "install round trips through context"
   TraceRuntime.install(SAMPLED_A)
   assert Process.context() == SAMPLED_A
   TraceRuntime.install(Process.Context.ZERO)
-  assert Process.context() == ZERO
+  assert Process.context() == Process.Context.ZERO
 end
 
 test "spawn copies the parent's context into the child"

@@ -37,14 +37,17 @@ use crate::registry::{GlobalKind, GlobalRegistry};
 
 const EQ_METHOD: &str = "equals?";
 
-/// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
-/// Int/Float widths, String) stay on the [`binary_type`] fast path.
-/// IR lowering keeps their equality operations primitive.
-/// User struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
-/// `not …` for `!=`) and re-resolve through the normal method-call
-/// path. `derive_equality` supplies an `Equality` impl for every user
-/// type without a hand-written one, and [`diagnose_equality_unsupported`]
-/// rejects instantiations a hand-written conditional impl leaves out.
+/// Resolve `lhs == rhs` / `lhs != rhs`. Both operands resolve once,
+/// and an operand that fails ends the comparison there. Primitive
+/// operands (Bool, Int/Float widths, String) stay on the
+/// [`binary_type`] fast path. IR lowering keeps their equality
+/// operations primitive. User struct / enum operands rewrite to
+/// `lhs.equals?(rhs)` (wrapped in `not …` for `!=`) and go through
+/// the normal method-call path, which keeps the operands it is given
+/// instead of walking them again. `derive_equality` supplies an
+/// `Equality` impl for every user type without a hand-written one,
+/// and [`diagnose_equality_unsupported`] rejects instantiations a
+/// hand-written conditional impl leaves out.
 pub(super) fn resolve_equality_op_expr(
     expr: &mut Expr,
     resolver: &mut Resolver<'_>,
@@ -55,6 +58,12 @@ pub(super) fn resolve_equality_op_expr(
     };
     let op = *op;
     resolve_operands_with_sibling_hint(left, right, resolver, diagnostics);
+    if !left.resolution.is_resolved() || !right.resolution.is_resolved() {
+        // Each operand reported its own failure. Without a type on both
+        // sides there is no `equals?` to look up, and a second walk would
+        // report the failure again.
+        return ResolvedType::unresolved();
+    }
 
     let span = expr.span;
     let registry = resolver.registry;

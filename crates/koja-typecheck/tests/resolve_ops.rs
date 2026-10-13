@@ -7,6 +7,8 @@
 
 mod common;
 
+use koja_ast::util::dedent;
+
 use common::{
     assert_script_fails_with, bool_type, float_type, global_leaf, int_type, trailing_resolution,
     typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
@@ -363,4 +365,59 @@ fn equality_with_generic_calls_on_both_sides_still_cannot_infer() {
         "CPtr.null() == CPtr.null()\n",
         &["cannot infer type parameter `T` of `CPtr`"],
     );
+}
+
+/// A nested struct with a static constructor and a constant. These
+/// are the two right-operand shapes that do not survive a second
+/// resolve once the first one has rewritten them.
+fn nested_struct_script(trailing: &str) -> String {
+    let decls = dedent(
+        "
+        struct Outer
+          struct Inner
+            n: Int
+
+            const ZERO = Outer.Inner{n: 0}
+
+            fn make(n: Int) -> Self
+              Outer.Inner{n: n}
+            end
+          end
+        end
+
+        i = Outer.Inner.make(1)
+        ",
+    );
+    format!("{decls}{trailing}\n")
+}
+
+#[test]
+fn equality_keeps_a_static_path_on_the_right() {
+    // The rewrite to `lhs.equals?(rhs)` hands the method-call path
+    // operands it already resolved. A second walk would read the
+    // collapsed static receiver as a value and the constant path as
+    // one unknown name.
+    for trailing in [
+        "i == Outer.Inner.make(1)",
+        "i != Outer.Inner.ZERO",
+        "Option.Some(i) == Option.Some(Outer.Inner.make(1))",
+        "(i, 1) == (Outer.Inner.ZERO, 1)",
+    ] {
+        assert_trailing_is(&nested_struct_script(trailing), "Bool");
+    }
+}
+
+#[test]
+fn equality_on_a_failed_operand_reports_once() {
+    for trailing in ["i == nope", "nope == i"] {
+        let failure = typecheck_fail(&nested_struct_script(trailing));
+        assert_eq!(failure.diagnostics.len(), 1, "source = {trailing:?}");
+        assert!(
+            failure.diagnostics[0]
+                .message
+                .contains("unknown identifier `nope`"),
+            "unexpected diagnostic for {trailing:?}: {}",
+            failure.diagnostics[0].message,
+        );
+    }
 }
