@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `assert` types a comparison in either direction, so `assert Option.None == p` and `assert 0 == n` on a `UInt32` typecheck the way `assert p == Option.None` and `assert n == 0` do. Before, only the right operand took its type from the left. An operand that fails to typecheck now reports once. Before, the failure was followed by four more errors that named the internal `$assert_left_0` temporary.
 - An operator stays quiet when an operand already failed to typecheck. Before, `not nope` and `nope + 1` reported the unknown identifier and then a second error about an `<unresolved>` operand.
 - `==` and `!=` accept a static method call or a qualified constant as the right operand, so `p == Point.ORIGIN` and `i == Outer.Inner.make(1)` typecheck, as does `Option.Some(i) == Option.Some(Outer.Inner.make(1))`. Before, the right operand was resolved twice and the second pass read the path as an unknown identifier or as a static call on a value. An operand of `==` that fails to typecheck now reports once.
+- A string interpolation whose expression fails to typecheck reports once. Before, `"#{nope}"` reported the unknown identifier twice, because the resolver wrapped the failed expression in `.format()` and walked it again.
 
 ## [0.20.0] - 2026-10-10
 
