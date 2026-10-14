@@ -222,7 +222,7 @@ fn infer_enum_type_args(
         ResolvedVariantData::Unit => PhantomContext::UnitVariant(&variant.name),
         _ => PhantomContext::Payload(&variant.name),
     };
-    finalize_inference(&[callee], &subst, &context, span, ctx, diagnostics);
+    finalize_inference(&[callee], &mut subst, &context, span, ctx, diagnostics);
     subst
 }
 

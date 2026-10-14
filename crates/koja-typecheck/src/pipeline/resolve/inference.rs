@@ -14,11 +14,11 @@
 //! shape-specific pair extraction.
 
 use koja_ast::ast::Diagnostic;
-use koja_ast::identifier::ResolvedType;
+use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::ctx::{BoundContext, Callee};
-use super::types::verify_bounds;
+use super::types::{peel_alias, verify_bounds};
 use crate::pipeline::unify::{Conflict, Substitution, unify_into};
 use crate::registry::GlobalRegistry;
 
@@ -94,20 +94,22 @@ pub(super) fn fill_from_expected(
     }
 }
 
-/// Surface phantom-param + bound-check diagnostics for every callee
-/// scope in `callees`. Each callee whose owner is in `subst` walks
-/// its slots. Every `None` slot emits the per-context "cannot infer"
-/// message, and every filled slot is bound-checked against the callee's
-/// declared bounds via [`verify_bounds`]. Out-of-scope callees skip
-/// silently, since the substitution does not own them.
+/// Complete `subst` from protocol bounds, then surface phantom-param
+/// and bound-check diagnostics for every callee scope in `callees`.
+/// Each callee whose owner is in `subst` walks its slots. Every
+/// `None` slot emits the per-context "cannot infer" message, and
+/// every filled slot is bound-checked against the callee's declared
+/// bounds via [`verify_bounds`]. Out-of-scope callees skip silently,
+/// since the substitution does not own them.
 pub(super) fn finalize_inference(
     callees: &[Callee<'_>],
-    subst: &Substitution,
+    subst: &mut Substitution,
     context: &PhantomContext<'_>,
     span: Span,
     ctx: BoundContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    fill_from_bounds(callees, subst, ctx);
     for callee in callees {
         if !subst.owns(callee.id) {
             continue;
@@ -127,5 +129,88 @@ pub(super) fn finalize_inference(
             ));
         }
         verify_bounds(*callee, subst, span, ctx, diagnostics);
+    }
+}
+
+/// Fill empty slots from protocol bounds. A slot that appears only
+/// as an argument of another slot's bound, `E` in `R: Reader<E>`,
+/// has no argument to bind from, and the bounded type's conformance
+/// carries the answer. Each pass reads the bounds of every filled
+/// slot, looks up the protocol args the filled type conforms with,
+/// and unifies them into the bound's args. A filled slot never
+/// changes, and a conflict leaves the bound for [`verify_bounds`] to
+/// report. Passes repeat while one fills something, since a fill can
+/// unlock a bound on another slot.
+fn fill_from_bounds(callees: &[Callee<'_>], subst: &mut Substitution, ctx: BoundContext<'_>) {
+    let registry = ctx.registry;
+    loop {
+        let filled_before = filled_slots(callees, subst);
+        for callee in callees {
+            if !subst.owns(callee.id) {
+                continue;
+            }
+            let Some(bounds) = registry.type_param_bounds(callee.id) else {
+                continue;
+            };
+            for (index, slot_bounds) in bounds.iter().enumerate() {
+                let Some(filled) = subst.slots(callee.id).get(index).cloned().flatten() else {
+                    continue;
+                };
+                for bound in slot_bounds.iter().filter(|bound| !bound.args.is_empty()) {
+                    let Some(protocol_args) =
+                        conforming_protocol_args(&filled, bound.protocol_id, ctx)
+                    else {
+                        continue;
+                    };
+                    for (template, actual) in bound.args.iter().zip(&protocol_args) {
+                        fill_from_expected(template, actual, subst, registry);
+                    }
+                }
+            }
+        }
+        if filled_slots(callees, subst) == filled_before {
+            return;
+        }
+    }
+}
+
+fn filled_slots(callees: &[Callee<'_>], subst: &Substitution) -> usize {
+    callees
+        .iter()
+        .filter(|callee| subst.owns(callee.id))
+        .map(|callee| subst.slots(callee.id).iter().flatten().count())
+        .sum()
+}
+
+/// The protocol args `ty` conforms to `protocol_id` with, when one
+/// answer exists. A named type reads its covering conformance
+/// record. A type param reads the one granted bound with that
+/// protocol. Structural shapes conform without protocol args.
+fn conforming_protocol_args(
+    ty: &ResolvedType,
+    protocol_id: GlobalRegistryId,
+    ctx: BoundContext<'_>,
+) -> Option<Vec<ResolvedType>> {
+    let registry = ctx.registry;
+    match peel_alias(ty, registry) {
+        ResolvedType::Named {
+            resolution: Resolution::Global(target_id),
+            type_args,
+        } => registry.conformance_args(target_id, protocol_id, &type_args, ctx.overlay),
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, index },
+            ..
+        } => {
+            let granted = registry.granted_bounds(owner, index, ctx.overlay);
+            let mut matching = granted
+                .iter()
+                .filter(|bound| bound.protocol_id == protocol_id);
+            let bound = matching.next()?;
+            if matching.next().is_some() {
+                return None;
+            }
+            Some(bound.args.clone())
+        }
+        _ => None,
     }
 }

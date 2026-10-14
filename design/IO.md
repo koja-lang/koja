@@ -568,18 +568,12 @@ The planned filesystem statics in an `FS` module are resolved by
 
 ## Open questions
 
-1. **Inferring the error argument from a bound.** Resolved for the
-   implementors by the type parameter (see "`IO.Reader<E>` and
-   `IO.Writer<E>`"), with one gap left for the generic consumer. A
-   function bounded as `fn drain<S: IO.Reader<E>, E>(source: S)`
-   fails with "cannot infer type parameter `E`" because call inference
-   binds parameters from argument types only and never consults `S`'s
-   conformance to fill `E`. The lookup exists, `conformance_args` in
-   `registry/conformance.rs`, and `for` uses it to find the
-   `Enumeration` arguments of its subject. A consumer with a concrete
-   bound, `S: IO.Reader<IO.Error | TLSError>`, works today. The
-   generic form is what a buffered reader over any stream needs, and
-   it lands with that reader. Recorded in GAPS.md.
+1. **Closed.** Inferring the error argument from a bound. Call
+   inference fills a type parameter that appears only in a bound's
+   arguments from the bounded type's conformance, so
+   `fn drain<S: IO.Reader<E>, E>(source: S)` takes `E` from the
+   argument's `IO.Reader` impl. A buffered reader over any stream can
+   now be written once.
 2. **Buffering.** `read_line` over `IO.Descriptor.read(1)` is one
    syscall per byte. The answer is a layer above the descriptor that implements
    `IO.Reader<E>` itself, a `BufferedReader<R: IO.Reader<E>, E>` or an

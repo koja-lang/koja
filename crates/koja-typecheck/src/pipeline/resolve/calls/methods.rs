@@ -359,7 +359,7 @@ pub(super) fn infer_method_call_type_args(
     }
     finalize_inference(
         &[method, receiver],
-        &subst,
+        &mut subst,
         &PhantomContext::Arguments,
         call_span,
         ctx,

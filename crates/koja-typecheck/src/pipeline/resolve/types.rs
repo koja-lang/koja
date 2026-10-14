@@ -361,10 +361,11 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
 /// Walk an inference substitution and emit one diagnostic per
 /// inferred concrete type that fails to satisfy a bound on the
 /// corresponding generic param. Substitution slots that are still
-/// `None` (phantom) are skipped, the caller already emits a
-/// "cannot infer" diagnostic for those. Inferred
-/// [`Resolution::TypeParam`] substitutions compare their declared
-/// protocol bounds, including protocol arguments.
+/// `None` (phantom) are skipped, and so is a bound whose arguments
+/// name one, since the caller already emits a "cannot infer"
+/// diagnostic for those. Inferred [`Resolution::TypeParam`]
+/// substitutions compare their declared protocol bounds, including
+/// protocol arguments.
 ///
 /// Wording follows LANGUAGE.md §10's bound-enforcement message
 /// verbatim. Keep this surface stable across slices that re-use it.
@@ -401,6 +402,13 @@ pub(super) fn verify_bounds(
                     .collect(),
                 protocol_id: bound.protocol_id,
             };
+            if !instantiated_bound
+                .args
+                .iter()
+                .all(ResolvedType::is_resolved)
+            {
+                continue;
+            }
             let Some(satisfied) = protocol_bound_satisfied(inferred, &instantiated_bound, ctx)
             else {
                 continue;

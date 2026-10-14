@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An operator stays quiet when an operand already failed to typecheck. Before, `not nope` and `nope + 1` reported the unknown identifier and then a second error about an `<unresolved>` operand.
 - `==` and `!=` accept a static method call or a qualified constant as the right operand, so `p == Point.ORIGIN` and `i == Outer.Inner.make(1)` typecheck, as does `Option.Some(i) == Option.Some(Outer.Inner.make(1))`. Before, the right operand was resolved twice and the second pass read the path as an unknown identifier or as a static call on a value. An operand of `==` that fails to typecheck now reports once.
 - A string interpolation whose expression fails to typecheck reports once. Before, `"#{nope}"` reported the unknown identifier twice, because the resolver wrapped the failed expression in `.format()` and walked it again.
+- A type parameter that appears only in a protocol bound's arguments is inferred from the bounded type's conformance. `fn drain<R: IO.Reader<E>, E>(source: R)` called with an `IO.Descriptor` fills `E` with `IO.Error`, and `fn count<T, Cursor, E: Enumeration<T, Cursor>>(source: E)` called with a `List<Int>` fills `T` and `Cursor`. Before, both failed with "cannot infer type parameter", and a generic consumer of `IO.Reader<E>` had to name one error type in its bound. When no conformance answers, the call reports the empty parameter once. Before, a second error named the bound with `<unresolved>` in it.
 
 ## [0.20.0] - 2026-10-10
 
