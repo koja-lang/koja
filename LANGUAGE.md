@@ -1228,7 +1228,7 @@ identity(42).print()
 identity("hello").print()
 ```
 
-Type arguments are inferred at call sites from arguments and type annotations.
+Type arguments are inferred at call sites from arguments, type annotations, and protocol bounds.
 
 #### Generic Structs
 
@@ -1598,6 +1598,8 @@ fn count_items<T, Cursor, E: Enumeration<T, Cursor>>(source: E) -> Int
   count
 end
 ```
+
+A type parameter that appears only in a bound's arguments is inferred from the bounded type's conformance. `count_items([1, 2, 3])` fills `E` from the argument, then `T` and `Cursor` from the `Enumeration<Int, Int>` conformance of `List<Int>`.
 
 Bounds are verified at call sites. If a concrete type doesn't implement a required protocol, the compiler emits an error:
 

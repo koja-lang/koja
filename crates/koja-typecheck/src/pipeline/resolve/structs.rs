@@ -292,7 +292,7 @@ fn infer_struct_type_args(
     });
     finalize_inference(
         &[callee],
-        &subst,
+        &mut subst,
         &PhantomContext::Fields,
         span,
         ctx,

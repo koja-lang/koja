@@ -106,21 +106,11 @@ fn implements_enumeration(ty: &ResolvedType, resolver: &Resolver<'_>) -> bool {
         ResolvedType::Named {
             resolution: Resolution::TypeParam { owner, index },
             ..
-        } => {
-            let slot = index.as_u32() as usize;
-            let declared = resolver
-                .registry
-                .type_param_bounds(*owner)
-                .and_then(|bounds| bounds.get(slot))
-                .is_some_and(|bounds| bounds.iter().any(|bound| bound.protocol_id == protocol_id));
-            declared
-                || resolver.bound_overlay.is_some_and(|overlay| {
-                    overlay.owner == *owner
-                        && overlay.bounds.get(slot).is_some_and(|bounds| {
-                            bounds.iter().any(|bound| bound.protocol_id == protocol_id)
-                        })
-                })
-        }
+        } => resolver
+            .registry
+            .granted_bounds(*owner, *index, resolver.bound_overlay)
+            .iter()
+            .any(|bound| bound.protocol_id == protocol_id),
         _ => false,
     }
 }

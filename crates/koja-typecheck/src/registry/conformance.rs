@@ -86,14 +86,18 @@ impl GlobalRegistry {
     }
 
     /// The protocol arguments of the conformance that covers one
-    /// target instantiation, with the target's type arguments substituted.
+    /// target instantiation, with the target's type arguments
+    /// substituted. `overlay` lets a conditional record answer from
+    /// inside the impl body that grants its condition.
     pub fn conformance_args(
         &self,
         target_id: GlobalRegistryId,
         protocol_id: GlobalRegistryId,
         target_args: &[ResolvedType],
+        overlay: Option<&BoundOverlay>,
     ) -> Option<Vec<ResolvedType>> {
-        let conformance = self.lookup_conformance(target_id, protocol_id, target_args)?;
+        let conformance =
+            self.lookup_conformance_with(target_id, protocol_id, target_args, overlay, None)?;
         let substitution = crate::pipeline::unify::Substitution::from_args(target_id, target_args);
         Some(
             conformance
@@ -208,8 +212,32 @@ impl GlobalRegistry {
         }
     }
 
+    /// The protocol bounds one type-param slot carries. These are the
+    /// owner's declared bounds for the slot, plus the overlay's slot
+    /// when the overlay targets the same owner.
+    pub fn granted_bounds<'a>(
+        &'a self,
+        owner: GlobalRegistryId,
+        index: TypeParamIndex,
+        overlay: Option<&'a BoundOverlay>,
+    ) -> Vec<&'a ResolvedProtocolBound> {
+        let slot = index.as_u32() as usize;
+        let declared = self
+            .type_param_bounds(owner)
+            .and_then(|all| all.get(slot))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let granted = overlay
+            .filter(|o| o.owner == owner)
+            .and_then(|o| o.bounds.get(slot))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        declared.iter().chain(granted).collect()
+    }
+
     /// A type param discharges a bound through a universal
-    /// protocol, its declared bounds, or an overlay slot.
+    /// protocol or through a granted bound with the same protocol
+    /// and equivalent protocol args.
     fn type_param_bound_granted(
         &self,
         owner: GlobalRegistryId,
@@ -220,31 +248,12 @@ impl GlobalRegistry {
         if bound.args.is_empty() && self.is_universal_protocol(bound.protocol_id) {
             return true;
         }
-        let slot = index.as_u32() as usize;
-        let declared = self
-            .type_param_bounds(owner)
-            .and_then(|all| all.get(slot))
-            .is_some_and(|bounds| self.bounds_grant(bounds, bound));
-        declared
-            || overlay.is_some_and(|o| {
-                o.owner == owner
-                    && o.bounds
-                        .get(slot)
-                        .is_some_and(|bounds| self.bounds_grant(bounds, bound))
+        self.granted_bounds(owner, index, overlay)
+            .into_iter()
+            .any(|candidate| {
+                candidate.protocol_id == bound.protocol_id
+                    && self.type_args_equivalent(&candidate.args, &bound.args)
             })
-    }
-
-    /// Whether one slot's bound list contains `bound`, by protocol id
-    /// and equivalent protocol args.
-    fn bounds_grant(
-        &self,
-        bounds: &[ResolvedProtocolBound],
-        bound: &ResolvedProtocolBound,
-    ) -> bool {
-        bounds.iter().any(|candidate| {
-            candidate.protocol_id == bound.protocol_id
-                && self.type_args_equivalent(&candidate.args, &bound.args)
-        })
     }
 
     /// Conformance for the shapes with no impl target, which are

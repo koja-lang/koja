@@ -110,9 +110,10 @@ pub(super) fn pick_carrier(
     let Some(protocol_id) = lookup_global_id(resolver, spec.protocol_name) else {
         return LiteralCarrier::Default;
     };
-    let Some(protocol_args) = resolver
-        .registry
-        .conformance_args(*id, protocol_id, type_args)
+    let Some(protocol_args) =
+        resolver
+            .registry
+            .conformance_args(*id, protocol_id, type_args, resolver.bound_overlay)
     else {
         return LiteralCarrier::Default;
     };

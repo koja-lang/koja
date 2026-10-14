@@ -758,7 +758,7 @@ fn infer_call_type_args(
     }
     finalize_inference(
         &[callee],
-        &subst,
+        &mut subst,
         &PhantomContext::Arguments,
         call_span,
         ctx,
