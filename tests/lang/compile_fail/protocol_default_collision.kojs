@@ -1,0 +1,18 @@
+protocol Sink
+  fn write(self, data: String, flush: Bool = false) -> Int
+end
+
+struct Out
+  fn write(path: String, content: String) -> Int
+    content.length()
+  end
+end
+
+impl Sink for Out
+  fn write(self, data: String, flush: Bool) -> Int
+    data.length()
+  end
+end
+
+out = Out{}
+IO.puts("#{out.write("hi")}")
