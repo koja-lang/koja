@@ -866,14 +866,19 @@ fn synthesize_default_method(
     // protocol itself declared them, and `ProtocolMethod` does not
     // carry a `Visibility` field at the AST level. They register
     // under the target type's name like any other method.
-    if !matches!(
-        scope.registry.insert_function(
-            method_identifier.clone(),
+    let outcome = scope.registry.insert_function(
+        method_identifier.clone(),
+        &function,
+        VisibilityScope::Public,
+    );
+    if let InsertOutcome::Collision { existing } = outcome {
+        diagnostics.push(default_method_collision(
+            site,
             &function,
-            VisibilityScope::Public
-        ),
-        InsertOutcome::Fresh(_)
-    ) {
+            impl_scope,
+            &existing.identifier,
+            existing.name_span,
+        ));
         return;
     }
     lift_function_with_identifier(
@@ -887,6 +892,46 @@ fn synthesize_default_method(
         diagnostics,
     );
     site.push_synthesized(function);
+}
+
+/// The `already defined` error for a synthesized default method
+/// whose name and arity the target type already uses. The error sits
+/// at the conformance site, where the user can see which protocol
+/// brought the method in, and the related note points at the
+/// function it collided with. An adapter synthesized from default
+/// parameters also names the canonical method it came from, because
+/// the user never wrote that arity.
+fn default_method_collision(
+    site: &ConformanceSite<'_>,
+    function: &Function,
+    impl_scope: ProtocolImplScope<'_>,
+    existing: &Identifier,
+    existing_name_span: Span,
+) -> Diagnostic {
+    let ProtocolImplScope {
+        protocol_identifier,
+        target_path,
+        ..
+    } = impl_scope;
+    let target = target_path.join(".");
+    let name = function.name.as_str();
+    let arity = function.params.len();
+    let message = format!(
+        "protocol `{protocol_identifier}` adds `&{name}/{arity}` to `{target}`, \
+         but `&{existing}/{arity}` is already defined"
+    );
+    let diagnostic = match function.origin {
+        FunctionOrigin::DefaultAdapter { canonical_arity } => Diagnostic::error_with_hint(
+            message,
+            format!(
+                "`&{name}/{arity}` comes from the default parameters of \
+                 `&{protocol_identifier}.{name}/{canonical_arity}`"
+            ),
+            site.span(),
+        ),
+        FunctionOrigin::Explicit | FunctionOrigin::Test => Diagnostic::error(message, site.span()),
+    };
+    diagnostic.with_related("previous function definition", existing_name_span)
 }
 
 /// Rewrite every reference to a protocol type-param (`M`, `R`, ...)

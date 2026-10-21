@@ -10,7 +10,9 @@ use koja_typecheck::GlobalKind;
 
 mod common;
 
-use common::{PACKAGE, assert_script_fails_with, typecheck_script as typecheck};
+use common::{
+    PACKAGE, assert_script_fails_with, typecheck_script as typecheck, typecheck_script_fail,
+};
 
 #[test]
 fn happy_path_impl_satisfies_protocol() {
@@ -368,4 +370,80 @@ fn inherent_and_trait_impl_collide_on_same_method_name() {
         ";
 
     assert_script_fails_with(source, &["already defined", "greet"]);
+}
+
+#[test]
+fn default_body_collides_with_inherent_method() {
+    let source = "
+        protocol Labeler
+          fn label(self) -> String
+            \"default\"
+          end
+        end
+
+        struct Tag
+          fn label(self) -> String
+            \"inherent\"
+          end
+        end
+
+        impl Labeler for Tag
+        end
+        ";
+
+    assert_script_fails_with(
+        source,
+        &[
+            "protocol `TestApp.Labeler` adds `&label/1`",
+            "`&TestApp.Tag.label/1` is already defined",
+        ],
+    );
+}
+
+/// The `&write/2` adapter from `flush: Bool = false` is what collides,
+/// so the hint names the `&write/3` it came from.
+#[test]
+fn default_adapter_collides_with_inherent_static_method() {
+    let source = "
+        protocol Sink
+          fn write(self, data: String, flush: Bool = false) -> Int
+        end
+
+        struct Out
+          fn write(path: String, content: String) -> Int
+            content.length()
+          end
+        end
+
+        impl Sink for Out
+          fn write(self, data: String, flush: Bool) -> Int
+            data.length()
+          end
+        end
+
+        out = Out{}
+        out.write(\"hi\")
+        ";
+
+    let failure = typecheck_script_fail(&dedent(source));
+    let diagnostic = failure
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic
+                .message
+                .contains("`&TestApp.Out.write/2` is already defined")
+        })
+        .expect("expected the adapter collision diagnostic");
+    assert!(
+        diagnostic
+            .message
+            .starts_with("protocol `TestApp.Sink` adds `&write/2` to `Out`"),
+        "unexpected message: {}",
+        diagnostic.message,
+    );
+    assert_eq!(
+        diagnostic.hint.as_deref(),
+        Some("`&write/2` comes from the default parameters of `&TestApp.Sink.write/3`")
+    );
 }
