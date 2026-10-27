@@ -578,8 +578,8 @@ pub(crate) fn resolved_type_to_ir_type(
                 members: ir_members,
             }
         }
-        ResolvedType::Unresolved => {
-            panic!("IR lower: resolved_type_to_ir_type received Unresolved (seal violation)",)
+        ResolvedType::Failed | ResolvedType::Unresolved => {
+            panic!("IR lower: resolved_type_to_ir_type received {ty:?} (seal violation)")
         }
     }
 }

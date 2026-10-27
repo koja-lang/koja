@@ -318,7 +318,7 @@ fn join_two_arms(
         unreachable!("join_two_arms called with {} tails", tails.len());
     };
     if !then_ty.is_resolved() || !else_ty.is_resolved() {
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let then_never = is_never(then_ty, registry);
     let else_never = is_never(else_ty, registry);
@@ -342,7 +342,7 @@ fn join_two_arms(
         ),
         span,
     ));
-    ResolvedType::unresolved()
+    ResolvedType::Failed
 }
 
 /// N-arm join used by `cond` and `match`. Returns the unique
@@ -358,7 +358,7 @@ pub(super) fn join_arm_tails(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     if tails.iter().any(|(_, t)| !t.is_resolved()) {
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let mut joined: Option<(&str, &ResolvedType)> = None;
     for (label, ty) in tails {
@@ -378,7 +378,7 @@ pub(super) fn join_arm_tails(
                     ),
                     span,
                 ));
-                return ResolvedType::unresolved();
+                return ResolvedType::Failed;
             }
         }
     }

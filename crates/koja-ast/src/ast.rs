@@ -1120,10 +1120,11 @@ pub struct Expr {
     /// See [`crate::coercion`]'s module doc for the full
     /// rationale.
     pub coercion: Option<Coercion>,
-    /// Type annotation. Default is [`ResolvedType::unresolved`].
-    /// Typecheck resolve populates it with a registry-pointing
-    /// shape, and seal asserts `resolution.is_resolved()` on every
-    /// non-excluded node.
+    /// Type annotation. Default is [`ResolvedType::Unresolved`],
+    /// which also marks a node resolve has not walked yet. Resolve
+    /// leaves every node it walks with a type or with
+    /// [`ResolvedType::Failed`], and seal asserts
+    /// `resolution.is_resolved()` on every non-excluded node.
     pub resolution: ResolvedType,
     pub span: Span,
 }
@@ -1137,7 +1138,7 @@ impl Expr {
             kind,
             literal_coercion: None,
             coercion: None,
-            resolution: ResolvedType::unresolved(),
+            resolution: ResolvedType::Unresolved,
             span,
         }
     }

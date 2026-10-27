@@ -349,6 +349,7 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
             resolution: Resolution::Unresolved,
             ..
         }
+        | ResolvedType::Failed
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
         ResolvedType::Union(members) => members
             .iter()
@@ -515,9 +516,8 @@ fn equality_protocol_id(registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
 /// which the caller leaves for the ordinary join diagnostic.
 pub(super) fn merge_partial(a: &ResolvedType, b: &ResolvedType) -> Option<ResolvedType> {
     match (a, b) {
-        (ResolvedType::Unresolved, other) | (other, ResolvedType::Unresolved) => {
-            Some(other.clone())
-        }
+        (ResolvedType::Failed | ResolvedType::Unresolved, other)
+        | (other, ResolvedType::Failed | ResolvedType::Unresolved) => Some(other.clone()),
         (
             ResolvedType::Named {
                 resolution,
@@ -567,8 +567,8 @@ mod tests {
 
     #[test]
     fn merge_partial_fills_holes_from_either_side() {
-        let left = named(1, vec![named(2, vec![]), ResolvedType::unresolved()]);
-        let right = named(1, vec![ResolvedType::unresolved(), named(3, vec![])]);
+        let left = named(1, vec![named(2, vec![]), ResolvedType::Unresolved]);
+        let right = named(1, vec![ResolvedType::Unresolved, named(3, vec![])]);
         let merged = merge_partial(&left, &right).expect("same head merges");
         assert_eq!(merged, named(1, vec![named(2, vec![]), named(3, vec![])]));
     }
@@ -585,7 +585,7 @@ mod tests {
                 elements: vec![named(9, vec![]), inner],
             })
         };
-        let left = tuple(named(1, vec![ResolvedType::unresolved()]));
+        let left = tuple(named(1, vec![ResolvedType::Unresolved]));
         let right = tuple(named(1, vec![named(2, vec![])]));
         let merged = merge_partial(&left, &right).expect("tuples merge elementwise");
         assert_eq!(merged, tuple(named(1, vec![named(2, vec![])])));
@@ -593,8 +593,18 @@ mod tests {
 
     #[test]
     fn merge_partial_keeps_hole_when_both_sides_have_it() {
-        let hole = named(1, vec![ResolvedType::unresolved()]);
+        let hole = named(1, vec![ResolvedType::Unresolved]);
         let merged = merge_partial(&hole, &hole).expect("same shape merges");
         assert!(!merged.is_resolved());
+    }
+
+    #[test]
+    fn merge_partial_absorbs_a_failed_side() {
+        let shape = named(1, vec![named(2, vec![])]);
+        assert_eq!(
+            merge_partial(&ResolvedType::Failed, &shape),
+            Some(shape.clone())
+        );
+        assert_eq!(merge_partial(&shape, &ResolvedType::Failed), Some(shape));
     }
 }

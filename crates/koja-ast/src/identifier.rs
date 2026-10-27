@@ -263,8 +263,14 @@ impl Resolution {
 /// - [`Self::Anonymous`]: structural types with no source name.
 ///   Identity is by shape. Covers function and tuple types today,
 ///   with records as a possible future addition.
-/// - [`Self::Unresolved`]: in-flight placeholder before resolve runs.
-///   `Default` returns this.
+/// - [`Self::Unresolved`]: not determined yet. `Default` returns
+///   this. At the top of an `Expr` it means resolve has not walked
+///   the node. Nested inside a type it is a hole inference may
+///   still fill.
+/// - [`Self::Failed`]: resolve or signature lifting reported a
+///   diagnostic and produced no type. Nothing fills it later. At the
+///   top of an `Expr` it marks a walked node. Nested, it is the
+///   result of a type expression that did not resolve.
 ///
 /// Shape examples:
 /// - `Int` -> `Named { Global(int_id), [] }`
@@ -294,19 +300,19 @@ pub enum ResolvedType {
     /// time, so diagnostics keep the user's chosen name.
     Union(Vec<ResolvedType>),
 
-    /// In-flight placeholder before resolve runs.
+    /// A diagnostic was reported and no type came out. Nothing fills
+    /// it later. At the top of an `Expr` it marks a walked node, which
+    /// the resolver skips instead of walking again. That is what keeps
+    /// one failure to one report.
+    Failed,
+
+    /// Not determined yet. The default for a fresh `Expr`, and the
+    /// hole inside a partial type such as `Result<Bool, ?>`.
     #[default]
     Unresolved,
 }
 
 impl ResolvedType {
-    /// Fully-unresolved placeholder. Equivalent to
-    /// [`ResolvedType::default`], exposed as a named constructor for
-    /// intent at call sites.
-    pub fn unresolved() -> Self {
-        Self::Unresolved
-    }
-
     /// Leaf [`Self::Named`] node: a head `resolution` and no type
     /// arguments. Convenience for primitives and other arity-0 types.
     pub fn leaf(resolution: Resolution) -> Self {
@@ -317,9 +323,9 @@ impl ResolvedType {
     }
 
     /// True iff every leaf is resolved. Seal uses this as its
-    /// whole-tree invariant, where a single [`Self::Unresolved`] hole or a
-    /// [`Resolution::Unresolved`] head anywhere in the tree fails the
-    /// check.
+    /// whole-tree invariant, where a single [`Self::Unresolved`] hole,
+    /// a [`Self::Failed`] node, or a [`Resolution::Unresolved`] head
+    /// anywhere in the tree fails the check.
     pub fn is_resolved(&self) -> bool {
         match self {
             Self::Anonymous(AnonymousKind::Function { params, ret }) => {
@@ -333,7 +339,7 @@ impl ResolvedType {
                 type_args,
             } => resolution.is_resolved() && type_args.iter().all(Self::is_resolved),
             Self::Union(members) => members.iter().all(Self::is_resolved),
-            Self::Unresolved => false,
+            Self::Failed | Self::Unresolved => false,
         }
     }
 }

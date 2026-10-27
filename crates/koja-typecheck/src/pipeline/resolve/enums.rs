@@ -54,7 +54,7 @@ pub(super) fn resolve_enum_construction(
             ),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     check_reference_visibility(enum_entry, resolver.package, span, diagnostics);
 
@@ -77,7 +77,7 @@ pub(super) fn resolve_enum_construction(
             )
         };
         diagnostics.push(Diagnostic::error(message, span));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let Some(definition) = definition else {
         bare_walk_construction_data(data, resolver, diagnostics);
@@ -128,7 +128,7 @@ pub(super) fn resolve_enum_construction(
             ),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
 
     let callee = Callee {

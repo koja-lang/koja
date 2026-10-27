@@ -185,7 +185,7 @@ fn desugar_try(
     }
     if resolver.error_channel.is_none() || subject_result.is_none() {
         expr.kind = ExprKind::Try { expr: subject };
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let binder_span = span.as_synthetic();
     let fail_tail = Expr::new(
@@ -264,7 +264,7 @@ pub(super) fn resolve_rescue(
             binder_span,
             handler,
         };
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let error_pattern = match &binder {
         Some(name) => binding_pattern(name, binder_span),

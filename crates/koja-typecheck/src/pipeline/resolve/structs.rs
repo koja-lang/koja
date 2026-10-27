@@ -88,7 +88,7 @@ pub(super) fn resolve_struct_construction(
             ),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     check_reference_visibility(struct_entry, resolver.package, span, diagnostics);
 
@@ -113,7 +113,7 @@ pub(super) fn resolve_struct_construction(
             ),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let Some(definition) = definition else {
         panic!(
@@ -437,7 +437,7 @@ pub(super) fn resolve_field_access(
                 ),
                 span,
             ));
-            return ResolvedType::unresolved();
+            return ResolvedType::Failed;
         }
         ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
             diagnostics.push(Diagnostic::error_with_hint(
@@ -449,7 +449,7 @@ pub(super) fn resolve_field_access(
                  instead with `(a, b) = value`",
                 span,
             ));
-            return ResolvedType::unresolved();
+            return ResolvedType::Failed;
         }
         _ => {}
     }
@@ -458,11 +458,11 @@ pub(super) fn resolve_field_access(
         type_args: receiver_args,
     } = &receiver.resolution
     else {
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let struct_id = *struct_id;
     let Some(entry) = resolver.registry.get(struct_id) else {
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         diagnostics.push(Diagnostic::error(
@@ -473,14 +473,14 @@ pub(super) fn resolve_field_access(
             ),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let Some((_, declared)) = definition.lookup_field(field.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no field `{field}`", entry.identifier),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     // Substitute the field's declared type through the receiver's
     // type-args so `self.item` on `Bag<Int>` types as `Int`, not

@@ -196,7 +196,9 @@ pub(super) fn dispatch_via_carrier(
             // inferred type-args), validates the arg shape against
             // `<from_method>(<param>: <DefaultCarrier>) -> Self`,
             // and returns the substituted `Self` (the carrier with
-            // its slots filled in).
+            // its slots filled in). The inner literal arrives
+            // stamped, so the resolver reads its type and does not
+            // walk it again.
             resolve_method_call_expr(expr, *expected, resolver, diagnostics)
         }
     }
@@ -228,7 +230,7 @@ fn static_receiver(path: &[String], span: Span) -> Expr {
 
 /// Diagnostic helper that emits "{spec.missing_root_label} requires
 /// `Global.<root_name>` to be autoimported" at `span`. Returns
-/// [`ResolvedType::unresolved`] so the caller can plumb the
+/// [`ResolvedType::Failed`] so the caller can plumb the
 /// short-circuit through its own control flow.
 pub(super) fn missing_root_diagnostic(
     spec: &CarrierSpec,
@@ -242,5 +244,5 @@ pub(super) fn missing_root_diagnostic(
         ),
         span,
     ));
-    ResolvedType::unresolved()
+    ResolvedType::Failed
 }

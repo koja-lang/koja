@@ -159,7 +159,7 @@ pub(super) fn walk_field_patterns(
             ));
             resolve_pattern(
                 &mut field.pattern,
-                &ResolvedType::unresolved(),
+                &ResolvedType::Failed,
                 resolver,
                 diagnostics,
             );
@@ -199,7 +199,7 @@ pub(super) fn resolve_field_patterns_unbound(
     for field in fields {
         resolve_pattern(
             &mut field.pattern,
-            &ResolvedType::unresolved(),
+            &ResolvedType::Failed,
             resolver,
             diagnostics,
         );

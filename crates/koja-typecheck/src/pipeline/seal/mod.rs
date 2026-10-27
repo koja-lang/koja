@@ -398,7 +398,7 @@ pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
                 seal_no_type_param(member, span);
             }
         }
-        ResolvedType::Unresolved => {}
+        ResolvedType::Failed | ResolvedType::Unresolved => {}
     }
 }
 
@@ -421,7 +421,7 @@ pub(super) fn seal_panic(message: &str, span: Span) -> ! {
 #[cfg(test)]
 mod tests {
     use koja_ast::ast::{Expr, ExprKind, Function, Literal, Name, TypeExpr, Visibility};
-    use koja_ast::identifier::{Identifier, Resolution};
+    use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
     use koja_ast::span::Span;
 
     use crate::registry::{FunctionOrigin, GlobalRegistry, VisibilityScope};
@@ -482,6 +482,20 @@ mod tests {
             },
             Span::default(),
         );
+
+        seal_expr(&expression, SealMode::GenericTemplate);
+    }
+
+    #[test]
+    #[should_panic(expected = "type annotation missing resolution")]
+    fn template_rejects_failed_expression() {
+        let mut expression = Expr::new(
+            ExprKind::Literal {
+                value: Literal::Unit,
+            },
+            Span::default(),
+        );
+        expression.resolution = ResolvedType::Failed;
 
         seal_expr(&expression, SealMode::GenericTemplate);
     }

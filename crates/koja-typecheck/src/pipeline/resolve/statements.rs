@@ -181,7 +181,7 @@ fn declare_operand(
 ) {
     if !value.resolution.is_resolved() {
         let name = lvalue.segments[0].text.clone();
-        lvalue.local_id = Some(resolver.scope.declare(&name, ResolvedType::unresolved()));
+        lvalue.local_id = Some(resolver.scope.declare(&name, ResolvedType::Failed));
         return;
     }
     let coerced = matches!(

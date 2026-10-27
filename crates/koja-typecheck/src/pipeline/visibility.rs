@@ -234,6 +234,6 @@ fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId>) {
                 collect_type_ids(member, ids);
             }
         }
-        ResolvedType::Unresolved => {}
+        ResolvedType::Failed | ResolvedType::Unresolved => {}
     }
 }

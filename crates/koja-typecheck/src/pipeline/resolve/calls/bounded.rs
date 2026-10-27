@@ -79,7 +79,7 @@ pub(super) fn resolve_bounded_method_call(
             format!("no method `{method}` on type parameter `{param_name}` (no bounds declared)",),
             call_span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let providers = collect_bound_providers(&bounds, method, args.len(), resolver.registry);
     if providers.is_empty() {
@@ -90,7 +90,7 @@ pub(super) fn resolve_bounded_method_call(
             ),
             call_span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     if providers.len() > 1 {
         let labels: Vec<String> = providers
@@ -111,7 +111,7 @@ pub(super) fn resolve_bounded_method_call(
             ),
             call_span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let (bound, protocol_method) = providers.into_iter().next().expect("len == 1");
     if protocol_method.dispatch != Dispatch::Instance {
@@ -122,7 +122,7 @@ pub(super) fn resolve_bounded_method_call(
             ),
             call_span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let _ = receiver;
     let receiver_type = type_param_ref(owner, index);

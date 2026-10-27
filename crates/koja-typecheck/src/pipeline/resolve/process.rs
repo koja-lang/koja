@@ -58,7 +58,7 @@ pub(super) fn resolve_spawn(
             "`spawn` requires `Type.start(config)` where `Type` implements `Process`",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     let Some(process_id) = resolver
@@ -70,7 +70,7 @@ pub(super) fn resolve_spawn(
             "`spawn` requires `Global.Process` in scope (autoimport `Global.process`)",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     let Some(protocol_args) = resolver
@@ -88,7 +88,7 @@ pub(super) fn resolve_spawn(
             "`spawn` requires a `Process` impl",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     // Process<C, M, R>: pick M and R off the recorded args.
@@ -97,7 +97,7 @@ pub(super) fn resolve_spawn(
             "`Process` impl must have exactly three type arguments (C, M, R)",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     let Some(ref_id) = resolver
@@ -109,7 +109,7 @@ pub(super) fn resolve_spawn(
             "`spawn` requires `Global.Ref` in scope (autoimport `Global.process`)",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     // A generic target records its `Process` args against its own type
@@ -212,7 +212,7 @@ pub(super) fn resolve_receive(
             "`receive` requires at least one arm",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
 
     let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len() + 1);

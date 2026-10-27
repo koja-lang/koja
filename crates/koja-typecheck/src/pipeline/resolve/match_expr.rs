@@ -84,7 +84,7 @@ pub(super) fn resolve_match_arms(
             format!("`{keyword}` requires at least one arm"),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
 
     let has_literal_arm = arms

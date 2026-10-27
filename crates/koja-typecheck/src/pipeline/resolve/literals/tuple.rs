@@ -32,8 +32,8 @@ pub(in super::super) fn resolve_tuple_literal(
     }
     if elements.len() < 2 {
         // Only reachable after a parser arity error, which already
-        // fails the compile. Leave the hole unresolved.
-        return ResolvedType::unresolved();
+        // fails the compile.
+        return ResolvedType::Failed;
     }
     ResolvedType::Anonymous(AnonymousKind::Tuple {
         elements: element_types,

@@ -52,7 +52,7 @@ fn zero_arg_call_resolves_to_callee_return_type() {
     assert_eq!(*resolution, Resolution::Global(answer_id));
 
     // Outer callee Expr.resolution stays Unresolved (carve-out).
-    assert_eq!(callee.resolution, ResolvedType::unresolved());
+    assert_eq!(callee.resolution, ResolvedType::Unresolved);
 }
 
 #[test]

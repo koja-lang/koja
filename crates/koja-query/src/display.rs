@@ -99,6 +99,7 @@ pub fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> Str
             resolution: Resolution::Unresolved,
             ..
         }
+        | ResolvedType::Failed
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
         ResolvedType::Union(members) => members
             .iter()

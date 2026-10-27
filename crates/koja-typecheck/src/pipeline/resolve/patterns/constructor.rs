@@ -59,7 +59,7 @@ pub(super) fn resolve_constructor_pattern(
                 unreachable!("resolve_constructor_pattern dispatched on non-Constructor");
             };
             for element in elements.iter_mut() {
-                resolve_pattern(element, &ResolvedType::unresolved(), resolver, diagnostics);
+                resolve_pattern(element, &ResolvedType::Failed, resolver, diagnostics);
             }
         }
     }

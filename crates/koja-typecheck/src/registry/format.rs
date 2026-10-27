@@ -326,6 +326,6 @@ fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
             .map(|m| format_resolved(m, registry))
             .collect::<Vec<_>>()
             .join(" | "),
-        ResolvedType::Unresolved => "<unresolved>".to_string(),
+        ResolvedType::Failed | ResolvedType::Unresolved => "<unresolved>".to_string(),
     }
 }
