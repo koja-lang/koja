@@ -45,7 +45,7 @@ pub(super) fn resolve_ident(
         && matches!(entry.kind, GlobalKind::Function(_))
     {
         diagnose_explicit_reference(name, &global_id, resolver.registry, span, diagnostics);
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     if let Some(id) = constant_named_by_ident(name, resolver.resolution_scope()) {
         *resolution = Resolution::Global(id);
@@ -55,7 +55,7 @@ pub(super) fn resolve_ident(
         format!("unknown identifier `{name}` in this scope"),
         span,
     ));
-    ResolvedType::unresolved()
+    ResolvedType::Failed
 }
 
 /// The identifier a file alias binds `name` to, when one does. The
@@ -188,7 +188,7 @@ pub(super) fn resolve_qualified_member(
                 format!("package `{package}` has no constant or function `{name}`"),
                 expr.span,
             ));
-            return Some(ResolvedType::unresolved());
+            return Some(ResolvedType::Failed);
         }
     };
     let ty = match &entry.kind {
@@ -202,7 +202,7 @@ pub(super) fn resolve_qualified_member(
                 expr.span,
                 diagnostics,
             );
-            return Some(ResolvedType::unresolved());
+            return Some(ResolvedType::Failed);
         }
         GlobalKind::Constant(None) => panic!(
             "resolve_qualified_member found `{}` without a stamped definition. \
@@ -214,7 +214,7 @@ pub(super) fn resolve_qualified_member(
                 format!("`{package}.{name}` is a {}, not a value", other.label()),
                 expr.span,
             ));
-            return Some(ResolvedType::unresolved());
+            return Some(ResolvedType::Failed);
         }
     };
     check_reference_visibility(entry, resolver.package, expr.span, diagnostics);
@@ -269,7 +269,7 @@ pub(super) fn resolve_named_function_reference(
             "named function reference has no function name",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
 
     if resolver.scope.lookup(&path[0]).is_some() {
@@ -278,7 +278,7 @@ pub(super) fn resolve_named_function_reference(
             "use the local function value directly, or wrap a receiver call in a closure",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
 
     let selected = if path.len() == 1 {
@@ -287,7 +287,7 @@ pub(super) fn resolve_named_function_reference(
         resolve_qualified_reference(path, arity, resolver, span, diagnostics)
     };
     let Some((id, entry)) = selected else {
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     check_function_reference_visibility(entry, resolver, span, diagnostics);
@@ -297,7 +297,7 @@ pub(super) fn resolve_named_function_reference(
             "wrap the call in a closure so its type arguments can be inferred",
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let signature = entry.expect_function_signature();
     *target = Resolution::Global(id);
@@ -598,5 +598,5 @@ pub(super) fn resolve_self(
         "`self` is only valid inside instance methods",
         span,
     ));
-    ResolvedType::unresolved()
+    ResolvedType::Failed
 }

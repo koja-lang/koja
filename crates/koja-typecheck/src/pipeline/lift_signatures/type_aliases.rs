@@ -9,7 +9,7 @@
 //! expansion through the registry. A visit count exceeding the
 //! number of registered aliases means the walk hit a cycle. Each cycle
 //! diagnoses once and the offending alias's expansion is rewritten
-//! to [`ResolvedType::unresolved`] so downstream peels short-circuit
+//! to [`ResolvedType::Failed`] so downstream peels short-circuit
 //! cleanly.
 
 use std::collections::HashSet;
@@ -26,7 +26,7 @@ use super::types::{TypeParamScope, resolve_type_expr};
 /// Lift every `Item::TypeAlias` across every file. Resolve the RHS,
 /// stamp the resulting `ResolvedType` on the registered alias
 /// entry. Then sweep for cycles and rewrite cycling aliases to
-/// `ResolvedType::unresolved` so subsequent peels short-circuit.
+/// `ResolvedType::Failed` so subsequent peels short-circuit.
 pub(super) fn lift_type_aliases(
     packages: &mut [CheckedPackage],
     registry: &mut GlobalRegistry,
@@ -66,7 +66,7 @@ struct AliasSite {
 
 /// For each alias entry, walk its expansion looking for itself. On a
 /// cycle, emit one diagnostic and rewrite the expansion to
-/// `ResolvedType::unresolved` so downstream peels return the alias's
+/// `ResolvedType::Failed` so downstream peels return the alias's
 /// `Named` head unchanged (no infinite recursion at peel time).
 fn diagnose_alias_cycles(
     packages: &[CheckedPackage],
@@ -105,7 +105,7 @@ fn diagnose_alias_cycles(
             format!("type alias `{}` references itself (cycle)", site.identifier),
             site.span,
         ));
-        registry.set_type_alias_definition_force(site.id, ResolvedType::unresolved());
+        registry.set_type_alias_definition_force(site.id, ResolvedType::Failed);
     }
 }
 
@@ -165,6 +165,6 @@ fn type_references_alias(
         ResolvedType::Union(members) => members
             .iter()
             .any(|m| type_references_alias(m, registry, seen)),
-        ResolvedType::Unresolved => false,
+        ResolvedType::Failed | ResolvedType::Unresolved => false,
     }
 }

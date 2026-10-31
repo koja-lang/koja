@@ -238,7 +238,7 @@ fn resolve_self(
         "`Self` is only valid inside a protocol, struct, enum, or impl block".to_string(),
         span,
     ));
-    ResolvedType::unresolved()
+    ResolvedType::Failed
 }
 
 /// Build a `ResolvedType` for `Self` in a struct/enum context. This
@@ -297,11 +297,11 @@ fn resolve_generic(
             format!("type parameter `{}` cannot take type arguments", path[0],),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let head = match resolve_path_to_global(path, span, scope, diagnostics) {
         Some(id) => Resolution::Global(id),
-        None => return ResolvedType::unresolved(),
+        None => return ResolvedType::Failed,
     };
     let resolved_args = args
         .iter_mut()
@@ -327,7 +327,7 @@ fn resolve_named(
     }
     match resolve_path_to_global(path, span, scope, diagnostics) {
         Some(id) => ResolvedType::leaf(Resolution::Global(id)),
-        None => ResolvedType::unresolved(),
+        None => ResolvedType::Failed,
     }
 }
 
@@ -541,6 +541,7 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
             resolution: Resolution::Unresolved,
             ..
         }
+        | ResolvedType::Failed
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
         ResolvedType::Union(members) => members
             .iter()

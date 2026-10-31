@@ -19,7 +19,7 @@
 //! otherwise from an `expected: fn (T0, T1) -> R` shape supplied by
 //! the surrounding context (the call/method-call resolvers thread
 //! this from the corresponding parameter's signature). Missing both
-//! sources is an error. The closure resolves with [`Unresolved`]
+//! sources is an error. The closure resolves with [`Failed`]
 //! params and the body still walks for diagnostic completeness.
 //!
 //! [`LocalScope`]: crate::pipeline::local_scope::LocalScope
@@ -27,7 +27,7 @@
 //! [`LocalId`]: koja_ast::identifier::LocalId
 //! [`ResolvedType`]: koja_ast::identifier::ResolvedType
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
-//! [`Unresolved`]: koja_ast::identifier::ResolvedType::Unresolved
+//! [`Failed`]: koja_ast::identifier::ResolvedType::Failed
 
 use koja_ast::ast::{ClosureParam, Diagnostic, Expr, Statement, TypeExpr};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
@@ -138,7 +138,7 @@ pub(super) fn resolve_short_closure(
 
 /// Compute each closure param's declared type. Annotation wins over
 /// context. Both missing diagnoses and substitutes
-/// [`ResolvedType::Unresolved`].
+/// [`ResolvedType::Failed`].
 fn bind_closure_params(
     params: &mut [ClosureParam],
     expected_params: Option<&[ResolvedType]>,
@@ -200,10 +200,10 @@ fn resolve_closure_param(
                     ),
                     *span,
                 ));
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         },
-        ClosureParam::Wildcard { .. } => expected.cloned().unwrap_or_else(ResolvedType::unresolved),
+        ClosureParam::Wildcard { .. } => expected.cloned().unwrap_or(ResolvedType::Unresolved),
     }
 }
 
@@ -245,7 +245,7 @@ fn closure_return_type(
     {
         return ty;
     }
-    expected.cloned().unwrap_or_else(ResolvedType::unresolved)
+    expected.cloned().unwrap_or(ResolvedType::Unresolved)
 }
 
 /// Resolve the closure's `-> T` annotation eagerly so it can both

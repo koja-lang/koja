@@ -19,7 +19,7 @@
 //!   fixed-width run between splices must total whole bytes.
 //!
 //! Feature gaps surface as a diagnostic and leave the literal at
-//! [`ResolvedType::unresolved`] so seal will not run. The segments are
+//! [`ResolvedType::Failed`] so seal will not run. The segments are
 //! still walked so any inner errors get reported in the same pass.
 
 use koja_ast::ast::{
@@ -81,7 +81,7 @@ impl SegmentInfo {
 /// A literal containing splices is always `Global.Binary`, and each
 /// fixed-width run between splices must total whole bytes (the
 /// lowerer builds each run as its own `Binary` and concatenates).
-/// Returns `ResolvedType::unresolved()` when any per-segment check
+/// Returns `ResolvedType::Failed` when any per-segment check
 /// errors so the seal pass declines to descend.
 pub(in super::super) fn resolve_binary_literal(
     segments: &mut [BinarySegment],
@@ -121,7 +121,7 @@ pub(in super::super) fn resolve_binary_literal(
         all_resolved = false;
     }
     if !all_resolved {
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let primitive_name = if has_splice || total_bits.is_multiple_of(8) {
         "Binary"

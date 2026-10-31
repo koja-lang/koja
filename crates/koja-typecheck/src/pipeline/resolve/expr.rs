@@ -44,12 +44,39 @@ pub(super) fn resolve_expr(
 
 /// Resolve `expr` with an optional expected-type hint. Closures,
 /// constructors, control flow, and literal protocols consume it.
+///
+/// A node is walked once. `expr.resolution` starts as
+/// [`ResolvedType::Unresolved`] and every walk leaves it as a type
+/// or as [`ResolvedType::Failed`], so a second call on the same node
+/// returns at once. A rewrite that wants a fresh walk over a
+/// subtree builds a fresh node with [`Expr::new`].
 pub(super) fn resolve_expr_with_expected(
     expr: &mut Expr,
     expected: Option<&ResolvedType>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    if !matches!(expr.resolution, ResolvedType::Unresolved) {
+        return;
+    }
+    let ty = resolve_expr_kind(expr, expected, resolver, diagnostics);
+    debug_assert!(
+        !matches!(ty, ResolvedType::Unresolved),
+        "resolve walked `{}` and left it Unresolved",
+        expr_kind_label(&expr.kind),
+    );
+    expr.resolution = ty;
+}
+
+/// Dispatch on `expr.kind` and return the type to stamp. Shapes that
+/// rewrite the outer node in place run before the main match, which
+/// holds a borrow on `expr.kind`.
+fn resolve_expr_kind(
+    expr: &mut Expr,
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
     // Pre-dispatch for AST-rewriting literal shapes. Scalar / List / Map
     // literals can rewrite the *outer* expression in place (e.g.
     // `s: Set<Int> = [1, 2]` becomes `Set.from_list([1, 2])` post-
@@ -58,19 +85,13 @@ pub(super) fn resolve_expr_with_expected(
     // inside an arm. Lifting these two cases out lets their
     // resolvers take `&mut Expr` and mutate the kind freely.
     if is_scalar_literal(expr) {
-        let ty = resolve_scalar_literal(expr, expected, resolver, diagnostics);
-        expr.resolution = ty;
-        return;
+        return resolve_scalar_literal(expr, expected, resolver, diagnostics);
     }
     if matches!(expr.kind, ExprKind::List { .. }) {
-        let ty = resolve_list_literal(expr, expected, resolver, diagnostics);
-        expr.resolution = ty;
-        return;
+        return resolve_list_literal(expr, expected, resolver, diagnostics);
     }
     if matches!(expr.kind, ExprKind::Map { .. }) {
-        let ty = resolve_map_literal(expr, expected, resolver, diagnostics);
-        expr.resolution = ty;
-        return;
+        return resolve_map_literal(expr, expected, resolver, diagnostics);
     }
     // `MethodCall` is also lifted out because the field-as-callable
     // fallback rewrites `recv.field(args)` in place to
@@ -78,9 +99,7 @@ pub(super) fn resolve_expr_with_expected(
     // requires `&mut Expr` access the main match's borrow on
     // `expr.kind` precludes.
     if matches!(expr.kind, ExprKind::MethodCall { .. }) {
-        let ty = resolve_method_call_expr(expr, expected, resolver, diagnostics);
-        expr.resolution = ty;
-        return;
+        return resolve_method_call_expr(expr, expected, resolver, diagnostics);
     }
     // `==` / `!=` on user struct / enum operands rewrites to
     // `lhs.equals?(rhs)` (or `not lhs.equals?(rhs)`) before re-resolving.
@@ -94,31 +113,24 @@ pub(super) fn resolve_expr_with_expected(
             ..
         }
     ) {
-        let ty = resolve_equality_op_expr(expr, resolver, diagnostics);
-        expr.resolution = ty;
-        return;
+        return resolve_equality_op_expr(expr, resolver, diagnostics);
     }
     // `try` / `rescue` desugar to `match` expressions over their
     // resolved subject, replacing the outer kind in place. Same
     // pre-dispatch shape as List / Map / MethodCall above.
     if matches!(expr.kind, ExprKind::Try { .. }) {
-        let ty = resolve_try(expr, resolver, diagnostics);
-        expr.resolution = ty;
-        return;
+        return resolve_try(expr, resolver, diagnostics);
     }
     if matches!(expr.kind, ExprKind::Rescue { .. }) {
-        let ty = resolve_rescue(expr, resolver, diagnostics);
-        expr.resolution = ty;
-        return;
+        return resolve_rescue(expr, resolver, diagnostics);
     }
     // Rewrite `A.B { … }` to a struct construction when the path names
     // a struct. A no-op for real enum variants.
     rewrite_dotted_struct_construction(expr, resolver);
     if let Some(ty) = resolve_qualified_member(expr, resolver, diagnostics) {
-        expr.resolution = ty;
-        return;
+        return ty;
     }
-    let ty = match &mut expr.kind {
+    match &mut expr.kind {
         // Statement-position `assert`s desugar in the walker, so one
         // reaching here is embedded in a larger expression.
         ExprKind::Assert {
@@ -134,7 +146,7 @@ pub(super) fn resolve_expr_with_expected(
                 "write `assert` as a statement of its own",
                 expr.span,
             ));
-            ResolvedType::unresolved()
+            ResolvedType::Failed
         }
         ExprKind::Binary { op, left, right } => {
             resolve_expr(left, resolver, diagnostics);
@@ -197,7 +209,7 @@ pub(super) fn resolve_expr_with_expected(
                  match arm tail",
                 expr.span,
             ));
-            ResolvedType::unresolved()
+            ResolvedType::Failed
         }
         ExprKind::FieldAccess { receiver, field } => {
             resolve_field_access(receiver, field, expr.span, resolver, diagnostics)
@@ -310,11 +322,11 @@ pub(super) fn resolve_expr_with_expected(
                     .to_string(),
                 expr.span,
             ));
-            ResolvedType::unresolved()
+            ResolvedType::Failed
         }
-        // Unsupported shapes diagnose and leave the expression
-        // unresolved. Seal runs only on the success path, so an
-        // `Unresolved` leaf here is harmless because diagnostics is
+        // Unsupported shapes diagnose and mark the expression
+        // failed. Seal runs only on the success path, so a
+        // `Failed` leaf here is harmless because diagnostics is
         // non-empty and `check_program` returns early.
         other => {
             diagnostics.push(Diagnostic::error(
@@ -324,8 +336,7 @@ pub(super) fn resolve_expr_with_expected(
                 ),
                 expr.span,
             ));
-            ResolvedType::unresolved()
+            ResolvedType::Failed
         }
-    };
-    expr.resolution = ty;
+    }
 }

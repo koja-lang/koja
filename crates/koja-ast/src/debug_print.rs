@@ -1034,8 +1034,9 @@ fn expr_header(expr: &Expr) -> String {
 /// Compact rendering of a [`ResolvedType`] for `--emit-ast` output.
 /// `Named` leaves show the head `<id>`, and generics show `<id><arg, ...>`
 /// recursively. Anonymous function types render as
-/// `fn (T, U) -> R`. Unresolved heads render as `?` so partial
-/// resolution states are visible during development.
+/// `fn (T, U) -> R`. Unresolved heads render as `?` and a failed
+/// node as `!` so partial resolution states are visible during
+/// development.
 fn format_resolved_type(ty: &ResolvedType) -> String {
     match ty {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
@@ -1072,6 +1073,7 @@ fn format_resolved_type(ty: &ResolvedType) -> String {
             .map(format_resolved_type)
             .collect::<Vec<_>>()
             .join(" | "),
+        ResolvedType::Failed => String::from("!"),
         ResolvedType::Unresolved => String::from("?"),
     }
 }

@@ -83,7 +83,7 @@ pub(in super::super) fn resolve_map_literal(
         diagnostics,
     ) else {
         expr.kind = ExprKind::Map { entries };
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let Some(value_ty) = infer_axis(
         entries.iter().map(|(_, v)| v),
@@ -95,7 +95,7 @@ pub(in super::super) fn resolve_map_literal(
         diagnostics,
     ) else {
         expr.kind = ExprKind::Map { entries };
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     let map_ty = ResolvedType::Named {
@@ -115,7 +115,7 @@ pub(in super::super) fn resolve_map_literal(
             span,
         ));
         expr.kind = ExprKind::Map { entries };
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     let tuple_ty = ResolvedType::Anonymous(AnonymousKind::Tuple {
         elements: vec![key_ty, value_ty],

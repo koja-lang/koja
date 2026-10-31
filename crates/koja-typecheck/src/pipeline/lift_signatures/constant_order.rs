@@ -208,7 +208,7 @@ fn diagnose_stuck(
         registry.set_constant_definition(
             pending.nodes[index].id,
             ConstantDefinition {
-                ty: ResolvedType::unresolved(),
+                ty: ResolvedType::Failed,
                 value: constant.value.clone(),
             },
         );

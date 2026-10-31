@@ -13,7 +13,9 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{global_leaf, global_named, script_body, typecheck_script as typecheck};
+use common::{
+    global_leaf, global_named, script_body, typecheck_script as typecheck, typecheck_script_fail,
+};
 
 fn set_named_type(checked: &CheckedProgram, element: &str) -> ResolvedType {
     global_named(checked, "Set", vec![global_leaf(checked, element)])
@@ -98,4 +100,21 @@ fn empty_set_literal_pins_element_from_binding_annotation() {
     };
     assert!(elements.is_empty(), "empty `[]` carries no elements");
     assert_eq!(inner.resolution, list_named_type(&checked, "Int"));
+}
+
+#[test]
+fn set_literal_with_a_failed_element_reports_once() {
+    let source = "
+        numbers: Set<Int> = [1, nope]
+        numbers
+        ";
+    let failure = typecheck_script_fail(&dedent(source));
+    assert_eq!(failure.diagnostics.len(), 1);
+    assert!(
+        failure.diagnostics[0]
+            .message
+            .contains("unknown identifier `nope`"),
+        "unexpected diagnostic: {}",
+        failure.diagnostics[0].message,
+    );
 }

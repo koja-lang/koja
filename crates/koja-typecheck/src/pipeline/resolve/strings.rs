@@ -34,9 +34,9 @@ pub(super) fn resolve_string(
 
 /// Resolve `expr`. If the result is not already `String`, swap it
 /// for a synthetic `expr.format()` MethodCall and dispatch through
-/// the normal method-call resolver. An expression that failed to
-/// resolve stays bare. Mirrors the in-place AST rewrite pattern used
-/// by `literals::carrier::dispatch_via_carrier`.
+/// the normal method-call resolver, which reads the walked receiver
+/// and does not resolve it again. Mirrors the in-place AST rewrite
+/// pattern used by `literals::carrier::dispatch_via_carrier`.
 fn resolve_interpolation(
     expr: &mut Box<Expr>,
     string_type: &ResolvedType,
@@ -44,10 +44,6 @@ fn resolve_interpolation(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     resolve_expr(expr, resolver, diagnostics);
-    if !expr.resolution.is_resolved() {
-        // Already reported. Wrapping it would walk it again.
-        return;
-    }
     if &expr.resolution == string_type {
         return;
     }

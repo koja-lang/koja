@@ -186,7 +186,7 @@ impl Substitution {
     }
 
     /// Materialize `owner`'s slots into a `Vec<ResolvedType>`,
-    /// substituting [`ResolvedType::unresolved`] for phantom slots.
+    /// substituting [`ResolvedType::Unresolved`] for phantom slots.
     /// Used by callers writing inferred type-args back onto the AST.
     pub(crate) fn args(&self, owner: GlobalRegistryId) -> Vec<ResolvedType> {
         let Some(scope) = self.scope(owner) else {
@@ -195,7 +195,7 @@ impl Substitution {
         scope
             .slots
             .iter()
-            .map(|slot| slot.clone().unwrap_or_else(ResolvedType::unresolved))
+            .map(|slot| slot.clone().unwrap_or(ResolvedType::Unresolved))
             .collect()
     }
 
@@ -275,15 +275,16 @@ fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRe
 /// `Int` actual, mismatched arities, owner-out-of-scope `TypeParam`)
 /// silently skips. The caller substitutes `subst` into the template
 /// and re-checks downstream, surfacing a clearer diagnostic on the
-/// post-substitution shape. `Resolution::Unresolved` actuals are
-/// silently accepted (upstream already diagnosed).
+/// post-substitution shape. An `Unresolved` actual is a hole with
+/// nothing to bind yet, and a `Failed` actual was already diagnosed,
+/// so both are silently accepted.
 pub(crate) fn unify_into(
     template: &ResolvedType,
     actual: &ResolvedType,
     subst: &mut Substitution,
     registry: &GlobalRegistry,
 ) -> Result<(), Conflict> {
-    if matches!(actual, ResolvedType::Unresolved) {
+    if matches!(actual, ResolvedType::Failed | ResolvedType::Unresolved) {
         return Ok(());
     }
     match (template, actual) {
@@ -359,7 +360,7 @@ pub(crate) fn unify_into(
 
 /// Apply `subst` to `template`: replace every `TypeParam` leaf whose
 /// owner is one of the substitution's scopes with the inferred value.
-/// Phantom slots substitute to [`ResolvedType::unresolved`]. Leaves
+/// Phantom slots substitute to [`ResolvedType::Unresolved`]. Leaves
 /// owned by out-of-scope owners (e.g. an outer-fn type-param when the
 /// substitution only covers an inner call) round-trip unchanged.
 pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType {
@@ -381,7 +382,7 @@ pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType
         } if subst.owns(*owner) => subst
             .get(*owner, *index)
             .cloned()
-            .unwrap_or_else(ResolvedType::unresolved),
+            .unwrap_or(ResolvedType::Unresolved),
         ResolvedType::Named {
             resolution,
             type_args,
@@ -392,6 +393,7 @@ pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType
         ResolvedType::Union(members) => {
             ResolvedType::Union(members.iter().map(|m| substitute(m, subst)).collect())
         }
+        ResolvedType::Failed => ResolvedType::Failed,
         ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
 }
@@ -508,6 +510,6 @@ mod tests {
         unify_into(&template, &string, &mut substitution, &registry)
             .expect("structural mismatch is deferred");
 
-        assert_eq!(substitution.args(owner), vec![ResolvedType::unresolved()]);
+        assert_eq!(substitution.args(owner), vec![ResolvedType::Unresolved]);
     }
 }

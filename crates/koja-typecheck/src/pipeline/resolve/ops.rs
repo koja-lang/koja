@@ -3,7 +3,7 @@
 //! Every helper is registry-backed. Outputs flow through
 //! [`GlobalRegistry::primitive`] so primitive identity stays
 //! single-sourced. On a type mismatch the helper emits a diagnostic
-//! and returns [`ResolvedType::unresolved`]. Resolve never aborts
+//! and returns [`ResolvedType::Failed`]. Resolve never aborts
 //! mid-walk, so a follow-on type rule sees `<unresolved>` operands.
 //! [`binary_type`] and [`unary_type`] return early on one, since the
 //! operand already reported and a mismatch against `<unresolved>`
@@ -37,14 +37,13 @@ use crate::registry::{GlobalKind, GlobalRegistry};
 
 const EQ_METHOD: &str = "equals?";
 
-/// Resolve `lhs == rhs` / `lhs != rhs`. Both operands resolve once,
-/// and an operand that fails ends the comparison there. Primitive
-/// operands (Bool, Int/Float widths, String) stay on the
-/// [`binary_type`] fast path. IR lowering keeps their equality
-/// operations primitive. User struct / enum operands rewrite to
-/// `lhs.equals?(rhs)` (wrapped in `not …` for `!=`) and go through
-/// the normal method-call path, which keeps the operands it is given
-/// instead of walking them again. `derive_equality` supplies an
+/// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
+/// Int/Float widths, String) stay on the [`binary_type`] fast path.
+/// IR lowering keeps their equality operations primitive. User
+/// struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
+/// `not …` for `!=`) and go through the normal method-call path.
+/// The operands are already walked, so that path reads their types
+/// and does not resolve them again. `derive_equality` supplies an
 /// `Equality` impl for every user type without a hand-written one,
 /// and [`diagnose_equality_unsupported`] rejects instantiations a
 /// hand-written conditional impl leaves out.
@@ -58,12 +57,6 @@ pub(super) fn resolve_equality_op_expr(
     };
     let op = *op;
     resolve_operands_with_sibling_hint(left, right, resolver, diagnostics);
-    if !left.resolution.is_resolved() || !right.resolution.is_resolved() {
-        // Each operand reported its own failure. Without a type on both
-        // sides there is no `equals?` to look up, and a second walk would
-        // report the failure again.
-        return ResolvedType::unresolved();
-    }
 
     let span = expr.span;
     let registry = resolver.registry;
@@ -73,7 +66,7 @@ pub(super) fn resolve_equality_op_expr(
     let left_unsupported = diagnose_equality_unsupported(left, resolver, diagnostics);
     let right_unsupported = diagnose_equality_unsupported(right, resolver, diagnostics);
     if left_unsupported || right_unsupported {
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
 
     let left_taken = std::mem::replace(left.as_mut(), placeholder_expr(span));
@@ -211,7 +204,7 @@ pub(super) fn binary_type(
     if !left.resolution.is_resolved() || !right.resolution.is_resolved() {
         // The operand already reported. A mismatch against
         // `<unresolved>` would only repeat it.
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     match op {
         BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
@@ -227,7 +220,7 @@ pub(super) fn binary_type(
                     span,
                     registry,
                 );
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         }
         BinOp::And | BinOp::Or => {
@@ -243,7 +236,7 @@ pub(super) fn binary_type(
                     span,
                     registry,
                 );
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         }
         BinOp::Eq | BinOp::NotEq => {
@@ -268,7 +261,7 @@ pub(super) fn binary_type(
                     span,
                     registry,
                 );
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         }
         BinOp::Gt | BinOp::GtEq | BinOp::Lt | BinOp::LtEq => {
@@ -284,7 +277,7 @@ pub(super) fn binary_type(
                     span,
                     registry,
                 );
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         }
         BinOp::Concat => {
@@ -309,7 +302,7 @@ pub(super) fn binary_type(
                     span,
                     registry,
                 );
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         }
     }
@@ -326,7 +319,7 @@ pub(super) fn unary_type(
     if !ty.is_resolved() {
         // The operand already reported. A mismatch against
         // `<unresolved>` would only repeat it.
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     match op {
         UnaryOp::Neg => {
@@ -340,7 +333,7 @@ pub(super) fn unary_type(
                     ),
                     span,
                 ));
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         }
         UnaryOp::Not => {
@@ -354,7 +347,7 @@ pub(super) fn unary_type(
                     ),
                     span,
                 ));
-                ResolvedType::unresolved()
+                ResolvedType::Failed
             }
         }
     }

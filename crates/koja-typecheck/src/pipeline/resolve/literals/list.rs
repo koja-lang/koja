@@ -85,10 +85,10 @@ pub(in super::super) fn resolve_list_literal(
     ) else {
         // Restore so the AST shape stays consistent for the
         // diagnostic-report path. `expr.resolution` ends up
-        // `Unresolved`, which seal never sees because diagnostics
+        // `Failed`, which seal never sees because diagnostics
         // are non-empty.
         expr.kind = ExprKind::List { elements };
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     let list_ty = ResolvedType::Named {

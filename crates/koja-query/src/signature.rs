@@ -164,6 +164,7 @@ pub fn type_expr_of(ty: &ResolvedType, registry: &GlobalRegistry) -> TypeExpr {
             resolution: Resolution::Local(_) | Resolution::Unresolved,
             ..
         }
+        | ResolvedType::Failed
         | ResolvedType::Unresolved => TypeExpr::named(vec![name_of("_")], span),
         ResolvedType::Union(members) => TypeExpr::Union {
             types: members.iter().map(|m| type_expr_of(m, registry)).collect(),

@@ -91,7 +91,7 @@ pub(super) fn resolve_call(
             ),
             callee.span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
 
     if let Some((local_id, local_ty)) = resolver.scope.lookup(name) {
@@ -121,7 +121,7 @@ pub(super) fn resolve_call(
                 format!("unknown function `{name}`"),
                 callee.span,
             ));
-            return ResolvedType::unresolved();
+            return ResolvedType::Failed;
         }
         BareCalleeLookup::WrongArity {
             identifier,
@@ -134,7 +134,7 @@ pub(super) fn resolve_call(
                 call_suggestion(name, suggested_arity),
                 call_span,
             ));
-            return ResolvedType::unresolved();
+            return ResolvedType::Failed;
         }
     };
     check_callee_visibility(entry, resolver, call_span, diagnostics);
@@ -148,7 +148,7 @@ pub(super) fn resolve_call(
             ),
             callee.span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     }
     let sig = entry.expect_function_signature().clone();
     let function = FunctionCallee {
@@ -403,7 +403,7 @@ pub(super) fn resolve_method_call(
 
     let Some(method_receiver) = classify_receiver(receiver, resolver, diagnostics) else {
         resolve_args(args, None, resolver, diagnostics);
-        return MethodCallOutcome::Method(ResolvedType::unresolved());
+        return MethodCallOutcome::Method(ResolvedType::Failed);
     };
 
     if let MethodReceiver::Bounded { owner, index } = method_receiver {
@@ -441,7 +441,7 @@ pub(super) fn resolve_method_call(
         }
     };
     let Some(struct_entry) = resolver.registry.get(struct_id) else {
-        return MethodCallOutcome::Method(ResolvedType::unresolved());
+        return MethodCallOutcome::Method(ResolvedType::Failed);
     };
     let receiver_label = struct_entry.identifier.to_string();
     // A protocol's type params (`Self`, `C`, ...) belong to its
@@ -502,7 +502,7 @@ pub(super) fn resolve_method_call(
                     call_suggestion(&format!("{receiver_name}.{method}"), explicit_arity),
                     call_span,
                 ));
-                return MethodCallOutcome::Method(ResolvedType::unresolved());
+                return MethodCallOutcome::Method(ResolvedType::Failed);
             }
             if matches!(method_receiver, MethodReceiver::Instance { .. })
                 && let Some(field_call) =
@@ -514,7 +514,7 @@ pub(super) fn resolve_method_call(
                 method_lookup_message(method_receiver, struct_entry, method),
                 call_span,
             ));
-            return MethodCallOutcome::Method(ResolvedType::unresolved());
+            return MethodCallOutcome::Method(ResolvedType::Failed);
         }
     };
     *target = Resolution::Global(method_id);
@@ -531,14 +531,14 @@ pub(super) fn resolve_method_call(
         )
     {
         resolve_args(args, None, resolver, diagnostics);
-        return MethodCallOutcome::Method(ResolvedType::unresolved());
+        return MethodCallOutcome::Method(ResolvedType::Failed);
     }
 
     let sig = match function_signature(method_entry) {
         Ok(sig) => sig.clone(),
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
-            return MethodCallOutcome::Method(ResolvedType::unresolved());
+            return MethodCallOutcome::Method(ResolvedType::Failed);
         }
     };
 
@@ -655,7 +655,7 @@ pub(super) fn resolve_method_call(
             ),
             call_span,
         ));
-        return MethodCallOutcome::Method(ResolvedType::unresolved());
+        return MethodCallOutcome::Method(ResolvedType::Failed);
     }
     let substituted_explicit = method_receiver.explicit_params(&substituted_params);
     validate_call_signature(
@@ -922,7 +922,7 @@ fn try_package_function_call(
                 format!("package `{name}` has no function `{method}`"),
                 call_span,
             ));
-            return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+            return Some(MethodCallOutcome::Method(ResolvedType::Failed));
         }
     };
     if !matches!(entry.kind, GlobalKind::Function(_)) {
@@ -934,7 +934,7 @@ fn try_package_function_call(
             ),
             call_span,
         ));
-        return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+        return Some(MethodCallOutcome::Method(ResolvedType::Failed));
     }
     let (id, entry) = match resolver
         .registry
@@ -955,7 +955,7 @@ fn try_package_function_call(
                 call_suggestion(&format!("{name}.{method}"), suggested_arity),
                 call_span,
             ));
-            return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+            return Some(MethodCallOutcome::Method(ResolvedType::Failed));
         }
     };
     let signature = entry.expect_function_signature().clone();
@@ -1071,25 +1071,8 @@ fn resolve_args(
         diagnose_named_arg(arg, diagnostics);
         let param = expected.and_then(|params| params.get(index));
         let expected_ty = param.map(|p| &p.ty);
-        resolve_arg_value(arg, expected_ty, resolver, diagnostics);
+        resolve_expr_with_expected(&mut arg.value, expected_ty, resolver, diagnostics);
     }
-}
-
-/// Resolve one call argument toward its expected type. An argument
-/// that already carries a resolution is kept as is. The `==` rewrite
-/// hands over operands it resolved with a sibling hint that a bare
-/// re-resolve would lose. Same contract as the receiver skip in
-/// `classify_receiver`.
-pub(super) fn resolve_arg_value(
-    arg: &mut Arg,
-    expected: Option<&ResolvedType>,
-    resolver: &mut Resolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if arg.value.resolution.is_resolved() {
-        return;
-    }
-    resolve_expr_with_expected(&mut arg.value, expected, resolver, diagnostics);
 }
 
 /// First-pass argument resolution for generic callees. Fully resolved
@@ -1110,7 +1093,7 @@ fn resolve_non_closure_args(
             .and_then(|params| params.get(index))
             .map(|param| &param.ty)
             .filter(|ty| ty.is_resolved());
-        resolve_arg_value(arg, expected_type, resolver, diagnostics);
+        resolve_expr_with_expected(&mut arg.value, expected_type, resolver, diagnostics);
     }
 }
 
@@ -1131,7 +1114,7 @@ fn resolve_closure_args(
             continue;
         }
         let expected_ty = expected.get(index).map(|p| &p.ty);
-        resolve_arg_value(arg, expected_ty, resolver, diagnostics);
+        resolve_expr_with_expected(&mut arg.value, expected_ty, resolver, diagnostics);
     }
 }
 
@@ -1274,7 +1257,7 @@ struct LocalCallee<'a> {
 /// Closure-typed local-call resolution: stamps the ident as
 /// [`Resolution::Local`], threads the function's params as expected
 /// arg types, and validates arity + per-position types. Non-function
-/// locals diagnose and return [`ResolvedType::unresolved`].
+/// locals diagnose and return [`ResolvedType::Failed`].
 fn resolve_local_call(
     local: LocalCallee<'_>,
     args: &mut [Arg],
@@ -1303,7 +1286,7 @@ fn resolve_local_call(
             ),
             span,
         ));
-        return ResolvedType::unresolved();
+        return ResolvedType::Failed;
     };
     *ident_resolution = Resolution::Local(id);
     *ty_slot = ty.clone();

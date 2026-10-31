@@ -12,7 +12,7 @@
 //! [`super::constant_order`] decides the order constants lift in.
 
 use koja_ast::ast::{Constant, Diagnostic};
-use koja_ast::identifier::GlobalRegistryId;
+use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 use crate::pipeline::resolve::coercion::{Mismatch, check_compatible_stamping};
 use crate::pipeline::resolve::resolve_in_declaring_scope;
@@ -50,7 +50,7 @@ pub(super) fn lift_constant(
             diagnostics,
         )
     } else {
-        constant.value.resolution.clone()
+        ResolvedType::Failed
     };
 
     if let Some(expected) = annotated.as_ref()

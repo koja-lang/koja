@@ -670,7 +670,7 @@ impl GlobalRegistry {
 
     /// Overwrite an alias's expansion regardless of its current
     /// stamp state. Used by `lift_type_aliases`'s cycle sweep to
-    /// rewrite cycling aliases to `ResolvedType::unresolved` so
+    /// rewrite cycling aliases to `ResolvedType::Failed` so
     /// downstream peels short-circuit cleanly. Panics if `id` is
     /// not a `TypeAlias` entry. Only the cycle pass should call
     /// this.

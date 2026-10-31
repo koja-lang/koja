@@ -379,7 +379,7 @@ fn lift_param(
                 ));
                 return ResolvedParam {
                     name: "self".to_string(),
-                    ty: ResolvedType::unresolved(),
+                    ty: ResolvedType::Failed,
                 };
             };
             let ty = match self_override {

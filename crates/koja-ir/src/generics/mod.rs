@@ -267,7 +267,7 @@ fn insert_function<'a>(
 /// here is "every Param leaf has a concrete arg" (enforced by the
 /// inference-then-substitute flow at construction sites in
 /// typecheck), so this helper panics on out-of-range index instead of
-/// substituting to `ResolvedType::unresolved` like the typecheck
+/// substituting to `ResolvedType::Unresolved` like the typecheck
 /// variant does for unresolved Phantom slots.
 pub(crate) fn substitute_resolved_type(
     template: &ResolvedType,
@@ -327,6 +327,7 @@ pub(crate) fn substitute_resolved_type(
                 .map(|m| substitute_resolved_type(m, args, owner))
                 .collect(),
         ),
+        ResolvedType::Failed => ResolvedType::Failed,
         ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
 }

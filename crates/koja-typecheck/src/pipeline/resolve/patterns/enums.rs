@@ -207,7 +207,7 @@ fn resolve_enum_tuple_elements_unbound(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for element in elements {
-        resolve_pattern(element, &ResolvedType::unresolved(), resolver, diagnostics);
+        resolve_pattern(element, &ResolvedType::Failed, resolver, diagnostics);
     }
 }
 
