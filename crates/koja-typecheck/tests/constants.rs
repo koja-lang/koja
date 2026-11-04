@@ -457,6 +457,29 @@ fn non_literal_rhs_diagnoses() {
 }
 
 #[test]
+fn function_reference_constant_diagnoses() {
+    // A field default admits `&name/arity`. A constant does not,
+    // and its diagnostic does not list the shape.
+    let source = "
+        fn plain(code: Int) -> Int
+          code
+        end
+
+        const HOOK: fn (Int) -> Int = &plain/1
+
+        0
+        ";
+
+    assert_script_fails_with(
+        source,
+        &[
+            "constant values are limited to literals, negated numerics, enum variants, constants, \
+           binary literals, and struct, list, map, or set literals of those",
+        ],
+    );
+}
+
+#[test]
 fn interpolated_string_constant_diagnoses() {
     let source = "
         const S = \"a #{7} b\"

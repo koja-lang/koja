@@ -151,7 +151,7 @@ x /= 4
 
 ### Constants
 
-Package-level constants are declared with `const`. A constant value takes the same grammar as a field default (see [Default Field Values](#default-field-values)): literals, negated numerics, enum variants, binary literals, other constants, and struct, list, map, or set literals of those:
+Package-level constants are declared with `const`. A constant value takes the same grammar as a field default (see [Default Field Values](#default-field-values)), except that a constant does not hold a named function reference. The allowed values are literals, negated numerics, enum variants, binary literals, other constants, and struct, list, map, or set literals of those:
 
 ```koja
 const MAX = 100
@@ -364,7 +364,7 @@ struct Counter
 end
 ```
 
-A public declaration cannot leak a private type through its signature. A public function whose parameter or return type names a private type, or a public struct field, enum variant payload, type alias, or protocol function that mentions one, is a compile error. Callers outside the package could see the type but never name it, so the compiler rejects the leak at the declaration site.
+A public declaration cannot leak a private item through its header. A public function whose parameter or return type names a private type, or a public struct field, enum variant payload, type alias, or protocol function that mentions one, is a compile error. So is a public struct or enum variant whose field default reads a private constant or references a private function. Callers outside the package could see the name but never use it, so the compiler rejects the leak at the declaration site.
 
 `@doc` on a private declaration is also a compile error. Private items never appear in generated documentation, so use regular `#` comments instead.
 
@@ -821,7 +821,22 @@ c = Config{name: "app"} # host and port fill from the defaults
 Config{} # error: `name` has no default
 ```
 
-Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default resolves in its declaring file, so it can name a type through a dotted path (`IO.Reader.Options{}`) or through one of that file's aliases.
+Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), named function references (`&name/arity`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default resolves in its declaring file, so it can name a type through a dotted path (`IO.Reader.Options{}`) or through one of that file's aliases. A default is part of the declaration's header, so a public struct's default can name only public items. A default that reads a `priv` constant or references a `priv fn` is a compile error unless the struct is `priv` too (see [Private Declarations](#private-declarations)).
+
+A `fn` typed field can default to a named function reference. A closure literal is not a default, because it is an expression with a body and possible captures.
+
+```koja
+fn plain_error(code: Int, message: String) -> String
+  "#{code}: #{message}"
+end
+
+struct Config
+  error_response: fn (Int, String) -> String = &plain_error/2
+  handler: fn (Request) -> Response
+end
+
+Config{handler: &route/1} # error_response fills with &plain_error/2
+```
 
 The default expression evaluates at each construction that omits the field. This makes generic defaults work: a `List<T>` field can default to `[]` and an `Option<T>` field to `Option.None`:
 

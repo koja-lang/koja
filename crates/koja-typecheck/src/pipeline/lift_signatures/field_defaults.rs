@@ -16,6 +16,8 @@
 //! because its value is resolved once where it is written.
 //! [`check_shape`] is the one description of the grammar, and
 //! [`ShapeRules`] is the only difference between the two callers.
+//! A default marks its spans and admits `&name/arity`. A constant
+//! does neither.
 
 use koja_ast::ast::{
     Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Name, StringPart, StructField,
@@ -27,6 +29,13 @@ use crate::pipeline::resolve::static_dotted_path;
 
 /// What a caller of [`check_shape`] does with the nodes it accepts.
 struct ShapeRules {
+    /// The shape list the catch-all diagnostic names, matching what
+    /// the arms accept under these rules.
+    allowed: &'static str,
+    /// Accept `&name/arity`. Field defaults set this. A constant does
+    /// not, because the IR has no pool shape for a function value
+    /// yet and a fn-valued constant could not be called.
+    function_references: bool,
     /// Mark every accepted span synthetic. Field defaults set this,
     /// because the stored clone is filled in at other sites.
     mark_synthetic: bool,
@@ -46,11 +55,17 @@ impl ShapeRules {
 }
 
 const CONSTANT_RULES: ShapeRules = ShapeRules {
+    allowed: "literals, negated numerics, enum variants, constants, binary literals, and \
+              struct, list, map, or set literals of those",
+    function_references: false,
     mark_synthetic: false,
     subject: "constant values",
 };
 
 const DEFAULT_RULES: ShapeRules = ShapeRules {
+    allowed: "literals, negated numerics, enum variants, constants, binary literals, named \
+              function references, and struct, list, map, or set literals of those",
+    function_references: true,
     mark_synthetic: true,
     subject: "default field values",
 };
@@ -147,6 +162,13 @@ fn check_shape(expr: &mut Expr, rules: &ShapeRules, diagnostics: &mut Vec<Diagno
             let value_ok = check_shape(value, rules, diagnostics);
             key_ok && value_ok && ok
         }),
+        // `&name/arity` names one function statically. Resolve looks
+        // it up in the declaring package, where an unknown name or a
+        // `priv fn` on a public owner diagnoses at the declaration.
+        ExprKind::NamedFunctionReference { path, .. } if rules.function_references => {
+            mark_names(path, rules);
+            true
+        }
         ExprKind::String { parts, .. } => {
             let interpolated = parts
                 .iter()
@@ -169,11 +191,7 @@ fn check_shape(expr: &mut Expr, rules: &ShapeRules, diagnostics: &mut Vec<Diagno
         } => check_shape(operand, rules, diagnostics),
         _ => {
             diagnostics.push(Diagnostic::error(
-                format!(
-                    "{} are limited to literals, negated numerics, enum variants, constants, \
-                     binary literals, and struct, list, map, or set literals of those",
-                    rules.subject
-                ),
+                format!("{} are limited to {}", rules.subject, rules.allowed),
                 span,
             ));
             false
