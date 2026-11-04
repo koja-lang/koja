@@ -5,11 +5,9 @@
 //! seam for every other reference position. Those are type expressions
 //! in signatures (`lift_signatures`), constructors / patterns / static
 //! receivers (`resolve`), `extend` targets (`collect`), and `alias`
-//! targets (`aliases`). It also owns the two header leak checks.
-//! [`check_signature_leaks`] rejects a public declaration that exposes
-//! a same-package private type on its signature surface, and
-//! [`check_value_leaks`] rejects one whose header value, such as a
-//! field default, names a same-package private constant or function.
+//! targets (`aliases`). It also owns the header leak checks,
+//! [`check_signature_leaks`] for the types on a signature and
+//! [`check_value_leaks`] for values such as field defaults.
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
@@ -60,9 +58,8 @@ pub(crate) fn check_reference_visibility(
 /// every surface is a stamped [`ResolvedType`] with registry ids.
 /// Cross-package private mentions are not re-checked here. The
 /// reference gate already diagnosed them during lift. Field defaults
-/// are the value half of the same rule. They have no resolutions
-/// until the walker trial-resolves them, so `resolve::field_defaults`
-/// runs [`check_value_leaks`] at that point.
+/// are the value half of this rule and resolve later, so
+/// `resolve::field_defaults` runs [`check_value_leaks`] on them.
 ///
 /// Functions declared on a private type are exempt. Their signatures
 /// necessarily mention the type (`self`, constructors returning
@@ -132,10 +129,9 @@ fn leaked_private_mentions<'r>(
     same_package_private(&mentioned, entry.identifier.package(), registry)
 }
 
-/// The entries among `ids` that a public declaration in `package`
-/// must not expose, meaning `priv` items of that same package,
-/// deduped in the given order. Cross-package private mentions are
-/// not leaks here. The reference gate already diagnosed them.
+/// The `priv` items of `package` among `ids`, deduped in order. A
+/// cross-package private mention is not a leak here, since the
+/// reference gate already diagnosed it.
 fn same_package_private<'r>(
     ids: &[GlobalRegistryId],
     package: &str,
@@ -256,17 +252,14 @@ fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId>) {
     }
 }
 
-/// Reject every same-package `priv` item that `value` names, where
-/// `value` is a resolved expression on `owner`'s header, such as a
-/// field default. A private owner exposes nothing, so the check
-/// returns at once for one. `subject` names the position in the
-/// diagnostic, as in "default for field `x` of `Pkg.Config`".
+/// Reject every same-package `priv` item that `value`, a resolved
+/// expression on `owner`'s header such as a field default, names. A
+/// private owner exposes nothing. `subject` names the position in
+/// the diagnostic, as in "default for field `x` of `Pkg.Config`".
 ///
-/// Only package-private items can fire here. A cross-package private
-/// reference already failed when `value` resolved, a type-private
-/// function fails there too when the value resolves with no enclosing
-/// type, and a private type on the header is
-/// [`check_signature_leaks`]'s job.
+/// Only package-private items can fire here. A cross-package or
+/// type-private reference already failed when `value` resolved, and
+/// a private type on the header is [`check_signature_leaks`]'s job.
 pub(crate) fn check_value_leaks(
     value: &Expr,
     subject: &str,
@@ -298,11 +291,10 @@ pub(crate) fn check_value_leaks(
     }
 }
 
-/// Append every `Resolution::Global` id that a resolved expression
-/// names, in source order. After resolve, a constant read is an
-/// `Ident` with a `Global` resolution whatever its spelling, and a
-/// named function reference carries its target the same way. Those
-/// are the only two expression nodes that name a global value.
+/// Append every `Resolution::Global` id that `value` names, in source
+/// order. A constant read is an `Ident` whatever its spelling, and a
+/// named function reference carries its target. No other expression
+/// node names a global value.
 fn collect_value_ids(value: &Expr, ids: &mut Vec<GlobalRegistryId>) {
     struct Collector<'a>(&'a mut Vec<GlobalRegistryId>);
 

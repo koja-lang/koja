@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A `fn` typed field can default to a named function reference, as in `on_reject: fn (Int) -> () = &ignore_reject/1`. A closure literal is still not a default, and a constant still does not hold a function reference.
+- A `fn` typed field can default to a named function reference, as in `on_reject: fn (Int) -> () = &ignore_reject/1`. A constant still does not hold one.
 
 ### Changed
 
-- A public struct or enum variant whose field default reads a `priv` constant or references a `priv fn` is a compile error, the same as a public field whose type is `priv`. A default is part of the declaration's header and `koja doc` prints it as written, so every name it shows must be one the reader can use. Before, a public struct's default could read a `priv` constant and a consumer package filled it.
+- A public struct or enum variant whose field default names a `priv` constant or `priv fn` is a compile error, the same as a public field whose type is `priv`. Before, a public struct's default could read a `priv` constant.
 
 ### Fixed
 

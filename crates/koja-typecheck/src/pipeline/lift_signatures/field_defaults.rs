@@ -29,12 +29,10 @@ use crate::pipeline::resolve::static_dotted_path;
 
 /// What a caller of [`check_shape`] does with the nodes it accepts.
 struct ShapeRules {
-    /// The shape list the catch-all diagnostic names, matching what
-    /// the arms accept under these rules.
+    /// The shape list the catch-all diagnostic names.
     allowed: &'static str,
-    /// Accept `&name/arity`. Field defaults set this. A constant does
-    /// not, because the IR has no pool shape for a function value
-    /// yet and a fn-valued constant could not be called.
+    /// Accept `&name/arity`. Only field defaults set this, since the
+    /// IR has no pool shape for a function value yet.
     function_references: bool,
     /// Mark every accepted span synthetic. Field defaults set this,
     /// because the stored clone is filled in at other sites.
@@ -162,9 +160,8 @@ fn check_shape(expr: &mut Expr, rules: &ShapeRules, diagnostics: &mut Vec<Diagno
             let value_ok = check_shape(value, rules, diagnostics);
             key_ok && value_ok && ok
         }),
-        // `&name/arity` names one function statically. Resolve looks
-        // it up in the declaring package, where an unknown name or a
-        // `priv fn` on a public owner diagnoses at the declaration.
+        // Resolve looks the target up in the declaring package and
+        // diagnoses an unknown name or a leaked `priv fn` there.
         ExprKind::NamedFunctionReference { path, .. } if rules.function_references => {
             mark_names(path, rules);
             true

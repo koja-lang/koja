@@ -649,10 +649,8 @@ fn type_private_function_reference_default_diagnoses() {
 
 #[test]
 fn cross_package_function_reference_default_resolves_in_declaring_package() {
-    // The default names a bare function of `Lib`. A construction in
-    // a consumer package with no alias for it fills it, because the
-    // reference resolves in the declaring package rather than at the
-    // site.
+    // The reference resolves in the declaring package, so a consumer
+    // with no alias for `Lib.plain_error` still fills it.
     let result = check_packages(
         &[
             (
@@ -684,9 +682,34 @@ fn cross_package_function_reference_default_resolves_in_declaring_package() {
     result.expect("a function of the declaring package should be a default at a consumer site");
 }
 
-// A default is part of its owner's public header. `koja doc` prints
-// it as written, so a public owner's default may name only items the
-// reader can call.
+#[test]
+fn enum_struct_variant_function_reference_default_fills() {
+    let source = "
+        fn plain(code: Int) -> Int
+          code
+        end
+
+        enum Step
+          Retry{attempts: Int, backoff: fn (Int) -> Int = &plain/1}
+          Stop
+        end
+
+        Step.Retry{attempts: 3}
+        ";
+    let checked = typecheck(&dedent(source));
+    let ExprKind::EnumConstruction { data, .. } = &trailing_expr(&checked).kind else {
+        panic!("expected trailing enum construction");
+    };
+    let EnumConstructionData::Struct(fields) = data else {
+        panic!("expected struct-variant construction data");
+    };
+    assert_eq!(fields.len(), 2, "the omitted `backoff` field should fill");
+    let backoff = fields.iter().find(|f| f.name == "backoff").unwrap();
+    assert!(
+        matches!(backoff.value.kind, ExprKind::NamedFunctionReference { .. }),
+        "the synthesized default should be the named function reference",
+    );
+}
 
 #[test]
 fn public_struct_default_naming_private_function_diagnoses() {
@@ -769,33 +792,4 @@ fn private_struct_default_may_name_private_items() {
         c.retries
         ";
     typecheck(&dedent(source));
-}
-
-#[test]
-fn enum_struct_variant_function_reference_default_fills() {
-    let source = "
-        fn plain(code: Int) -> Int
-          code
-        end
-
-        enum Step
-          Retry{attempts: Int, backoff: fn (Int) -> Int = &plain/1}
-          Stop
-        end
-
-        Step.Retry{attempts: 3}
-        ";
-    let checked = typecheck(&dedent(source));
-    let ExprKind::EnumConstruction { data, .. } = &trailing_expr(&checked).kind else {
-        panic!("expected trailing enum construction");
-    };
-    let EnumConstructionData::Struct(fields) = data else {
-        panic!("expected struct-variant construction data");
-    };
-    assert_eq!(fields.len(), 2, "the omitted `backoff` field should fill");
-    let backoff = fields.iter().find(|f| f.name == "backoff").unwrap();
-    assert!(
-        matches!(backoff.value.kind, ExprKind::NamedFunctionReference { .. }),
-        "the synthesized default should be the named function reference",
-    );
 }

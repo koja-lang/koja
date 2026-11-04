@@ -17,11 +17,8 @@
 //! locals. One scope shape at both points is what keeps them from
 //! diverging.
 //!
-//! A default is part of its owner's public header, the same as a
-//! field type, so the declaration pass also runs
-//! [`crate::pipeline::visibility::check_value_leaks`] on it. `koja
-//! doc` prints a default as written, and a reader must be able to
-//! call every name it shows.
+//! A default is part of its owner's header, so the declaration pass
+//! also runs [`crate::pipeline::visibility::check_value_leaks`] on it.
 
 use koja_ast::ast::{
     AliasDecl, Diagnostic, EnumDecl, EnumVariantData, Expr, FieldInit, Name, StructDecl,
@@ -39,10 +36,8 @@ use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::ResolverEnv;
 use super::resolve_in_declaring_scope;
 
-/// The declaration a default belongs to. `entry` is the struct or
-/// enum that the leak check reads visibility from. `label` names the
-/// exact owner in diagnostics, `Pkg.Config` for a struct field and
-/// `Pkg.Shape.Rect` for a variant field.
+/// The struct or enum a default belongs to. `label` names it in
+/// diagnostics, `Pkg.Config` or `Pkg.Shape.Rect` for a variant.
 struct DefaultOwner<'a> {
     entry: &'a RegistryEntry,
     label: String,
@@ -138,9 +133,8 @@ fn resolve_field_defaults(
 }
 
 /// Trial-resolve one default against its lifted field type in the
-/// declaring file's scope, then check that a public owner's default
-/// names only public items. Diagnostics land on the default
-/// expression.
+/// declaring file's scope, then check it for leaks. Diagnostics land
+/// on the default expression.
 fn resolve_declared_default(
     default: &mut Expr,
     field_ty: &ResolvedType,

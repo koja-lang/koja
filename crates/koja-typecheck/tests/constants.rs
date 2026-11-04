@@ -458,7 +458,7 @@ fn non_literal_rhs_diagnoses() {
 
 #[test]
 fn function_reference_constant_diagnoses() {
-    // A field default admits `&name/arity`. A constant does not,
+    // Unlike a field default, a constant does not admit `&name/arity`,
     // and its diagnostic does not list the shape.
     let source = "
         fn plain(code: Int) -> Int
