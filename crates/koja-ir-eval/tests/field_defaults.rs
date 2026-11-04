@@ -101,3 +101,50 @@ fn cross_package_default_evaluates_declaring_package_variant() {
         .expect("cross-package defaulted construction should evaluate");
     assert_eq!(value, Value::Int(3));
 }
+
+#[test]
+fn function_reference_default_evaluates() {
+    let source = "
+        fn plain_error(code: Int, message: String) -> String
+          \"#{code}: #{message}\"
+        end
+
+        fn loud_error(code: Int, message: String) -> String
+          \"#{code}! #{message}!\"
+        end
+
+        struct Config
+          error_response: fn (Int, String) -> String = &plain_error/2
+        end
+
+        plain = Config{}
+        loud = Config{error_response: &loud_error/2}
+        a = plain.error_response(500, \"boom\")
+        b = loud.error_response(500, \"boom\")
+        \"#{a} / #{b}\"
+        ";
+
+    let value = evaluate_script(&dedent(source));
+    assert_eq!(value, Value::string("500: boom / 500! boom!"));
+}
+
+#[test]
+fn cross_package_function_reference_default_evaluates_declaring_package_function() {
+    let dep = "
+        fn plain_error(code: Int, message: String) -> String
+          \"#{code}: #{message}\"
+        end
+
+        struct Config
+          error_response: fn (Int, String) -> String = &plain_error/2
+        end
+        ";
+    let script = "
+        c = Dep.Config{}
+        c.error_response(404, \"missing\")
+        ";
+
+    let value = common::evaluate_script_with_dep("Dep", &dedent(dep), &dedent(script))
+        .expect("a function of the declaring package should fill at a consumer site");
+    assert_eq!(value, Value::string("404: missing"));
+}

@@ -1084,3 +1084,32 @@ fn field_defaults_render_constant_reads_as_written() {
         vec![Some("MAX"), Some("Net.limit"), Some("[MAX, Net.limit]")]
     );
 }
+
+#[test]
+fn field_defaults_render_function_references_as_written() {
+    let mut project = DocProject::new("MyApp");
+    ingest(
+        &mut project,
+        "MyApp",
+        PackageKind::Project,
+        "
+        fn plain(code: Int) -> Int
+          code
+        end
+
+        struct Hooks
+          bare: fn (Int) -> Int = &plain/1
+          dotted: fn (Int) -> Int = &Net.plain/1
+        end
+        ",
+    );
+    let app = project.find_package("MyApp").expect("MyApp present");
+    let hooks = app
+        .structs
+        .iter()
+        .find(|s| s.name == "Hooks")
+        .expect("Hooks");
+
+    let defaults: Vec<Option<&str>> = hooks.fields.iter().map(|f| f.default.as_deref()).collect();
+    assert_eq!(defaults, vec![Some("&plain/1"), Some("&Net.plain/1")]);
+}

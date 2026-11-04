@@ -3,6 +3,7 @@
 //! and enum struct variants, within and across packages.
 
 use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, FieldInit, Name};
+use koja_ast::identifier::Resolution;
 use koja_ast::util::dedent;
 use koja_parser::ParseMode;
 
@@ -95,6 +96,7 @@ fn assert_expr_synthetic(expr: &Expr) {
         }
         ExprKind::List { elements } => elements.iter().for_each(assert_expr_synthetic),
         ExprKind::Literal { .. } => {}
+        ExprKind::NamedFunctionReference { path, .. } => assert_names_synthetic(path),
         ExprKind::StructConstruction { type_path, fields } => {
             assert_names_synthetic(type_path);
             fields.iter().for_each(assert_field_init_synthetic);
@@ -531,4 +533,263 @@ fn deprecated_enum_in_default_warns_at_declaration_not_per_site() {
         hits, 2,
         "expected declaration-only deprecation warnings, got: {warnings:#?}",
     );
+}
+
+#[test]
+fn function_reference_default_fills_with_global_target() {
+    let source = "
+        fn plain_error(code: Int, message: String) -> String
+          \"#{code}: #{message}\"
+        end
+
+        fn ignore(code: Int) -> ()
+        end
+
+        struct Config
+          error_response: fn (Int, String) -> String = &plain_error/2
+          on_reject: fn (Int) -> () = &ignore/1
+          port: Int = 5432
+        end
+
+        Config{}
+        ";
+    let checked = typecheck(&dedent(source));
+    let ExprKind::StructConstruction { fields, .. } = &trailing_expr(&checked).kind else {
+        panic!("expected trailing struct construction");
+    };
+    assert_eq!(fields.len(), 3, "every defaulted field should fill");
+    for name in ["error_response", "on_reject"] {
+        let field = fields.iter().find(|f| f.name == name).unwrap();
+        assert_field_init_synthetic(field);
+        let ExprKind::NamedFunctionReference { target, .. } = &field.value.kind else {
+            panic!("expected `{name}` to fill with a named function reference");
+        };
+        assert!(
+            matches!(target, Resolution::Global(_)),
+            "the synthesized reference for `{name}` should resolve to one function",
+        );
+        assert!(field.value.resolution.is_resolved());
+    }
+}
+
+#[test]
+fn function_reference_default_signature_mismatch_diagnoses() {
+    assert_script_fails_with(
+        "
+        fn plain(code: Int) -> Int
+          code
+        end
+
+        struct Config
+          hook: fn (String) -> String = &plain/1
+        end
+
+        0
+        ",
+        &[
+            "default for field `hook` of `TestApp.Config` expects `fn (String) -> String`, got \
+           `fn (Int) -> Int`",
+        ],
+    );
+}
+
+#[test]
+fn unknown_function_reference_default_diagnoses() {
+    assert_script_fails_with(
+        "
+        struct Config
+          hook: fn (Int) -> Int = &nope/1
+        end
+
+        0
+        ",
+        &["unknown named function reference `&nope/1`"],
+    );
+}
+
+#[test]
+fn closure_literal_default_diagnoses() {
+    assert_script_fails_with(
+        "
+        struct Config
+          hook: fn (Int) -> Int = fn (x: Int) -> Int
+            x
+          end
+        end
+
+        0
+        ",
+        &[
+            "default field values are limited to literals, negated numerics, enum variants, \
+           constants, binary literals, named function references, and struct, list, map, or \
+           set literals of those",
+        ],
+    );
+}
+
+#[test]
+fn type_private_function_reference_default_diagnoses() {
+    // A default resolves with no enclosing type, so a `priv fn` on
+    // the struct is out of reach even from the struct's own field.
+    assert_script_fails_with(
+        "
+        struct Config
+          hook: fn (Int) -> Int = &Config.helper/1
+
+          priv fn helper(code: Int) -> Int
+            code
+          end
+        end
+
+        0
+        ",
+        &["private function `TestApp.Config.helper` cannot be referenced from here"],
+    );
+}
+
+#[test]
+fn cross_package_function_reference_default_resolves_in_declaring_package() {
+    // The reference resolves in the declaring package, so a consumer
+    // with no alias for `Lib.plain_error` still fills it.
+    let result = check_packages(
+        &[
+            (
+                "Lib",
+                "lib.koja",
+                "
+                fn plain_error(code: Int, message: String) -> String
+                  \"#{code}: #{message}\"
+                end
+
+                struct Config
+                  error_response: fn (Int, String) -> String = &plain_error/2
+                  port: Int = 5432
+                end
+                ",
+            ),
+            (
+                PACKAGE,
+                "main.koja",
+                "
+                fn build() -> Lib.Config
+                  Lib.Config{}
+                end
+                ",
+            ),
+        ],
+        ParseMode::File,
+    );
+    result.expect("a function of the declaring package should be a default at a consumer site");
+}
+
+#[test]
+fn enum_struct_variant_function_reference_default_fills() {
+    let source = "
+        fn plain(code: Int) -> Int
+          code
+        end
+
+        enum Step
+          Retry{attempts: Int, backoff: fn (Int) -> Int = &plain/1}
+          Stop
+        end
+
+        Step.Retry{attempts: 3}
+        ";
+    let checked = typecheck(&dedent(source));
+    let ExprKind::EnumConstruction { data, .. } = &trailing_expr(&checked).kind else {
+        panic!("expected trailing enum construction");
+    };
+    let EnumConstructionData::Struct(fields) = data else {
+        panic!("expected struct-variant construction data");
+    };
+    assert_eq!(fields.len(), 2, "the omitted `backoff` field should fill");
+    let backoff = fields.iter().find(|f| f.name == "backoff").unwrap();
+    assert!(
+        matches!(backoff.value.kind, ExprKind::NamedFunctionReference { .. }),
+        "the synthesized default should be the named function reference",
+    );
+}
+
+#[test]
+fn public_struct_default_naming_private_function_diagnoses() {
+    assert_script_fails_with(
+        "
+        priv fn plain(code: Int) -> Int
+          code
+        end
+
+        struct Config
+          hook: fn (Int) -> Int = &plain/1
+        end
+
+        0
+        ",
+        &["default for field `hook` of `TestApp.Config` exposes private function `TestApp.plain`"],
+    );
+}
+
+#[test]
+fn public_struct_default_naming_private_constant_diagnoses() {
+    assert_script_fails_with(
+        "
+        priv const LIMIT = 3
+
+        struct Config
+          retries: Int = LIMIT
+          backoff: List<Int> = [1, LIMIT]
+        end
+
+        0
+        ",
+        &[
+            "default for field `retries` of `TestApp.Config` exposes private constant \
+             `TestApp.LIMIT`",
+            "default for field `backoff` of `TestApp.Config` exposes private constant \
+             `TestApp.LIMIT`",
+        ],
+    );
+}
+
+#[test]
+fn public_enum_variant_default_naming_private_function_diagnoses() {
+    assert_script_fails_with(
+        "
+        priv fn plain(code: Int) -> Int
+          code
+        end
+
+        enum Step
+          Retry{attempts: Int, backoff: fn (Int) -> Int = &plain/1}
+        end
+
+        0
+        ",
+        &[
+            "default for field `backoff` of `TestApp.Step.Retry` exposes private function \
+           `TestApp.plain`",
+        ],
+    );
+}
+
+#[test]
+fn private_struct_default_may_name_private_items() {
+    // A private owner is unreachable from other packages, so nothing
+    // on its header leaks.
+    let source = "
+        priv fn plain(code: Int) -> Int
+          code
+        end
+
+        priv const LIMIT = 3
+
+        priv struct Config
+          hook: fn (Int) -> Int = &plain/1
+          retries: Int = LIMIT
+        end
+
+        c = Config{}
+        c.retries
+        ";
+    typecheck(&dedent(source));
 }

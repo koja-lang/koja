@@ -5,13 +5,14 @@
 //! seam for every other reference position. Those are type expressions
 //! in signatures (`lift_signatures`), constructors / patterns / static
 //! receivers (`resolve`), `extend` targets (`collect`), and `alias`
-//! targets (`aliases`). It also owns the signature leak check
-//! ([`check_signature_leaks`]), which rejects public declarations that
-//! expose a same-package private type on their signature surface.
+//! targets (`aliases`). It also owns the header leak checks,
+//! [`check_signature_leaks`] for the types on a signature and
+//! [`check_value_leaks`] for values such as field defaults.
 
-use koja_ast::ast::Diagnostic;
+use koja_ast::ast::{Diagnostic, Expr, ExprKind};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
+use koja_ast::visit::{self, Visitor};
 
 use crate::registry::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedVariantData, VisibilityScope,
@@ -56,7 +57,9 @@ pub(crate) fn check_reference_visibility(
 /// same-package `priv` type. Runs right after `lift_signatures`, so
 /// every surface is a stamped [`ResolvedType`] with registry ids.
 /// Cross-package private mentions are not re-checked here. The
-/// reference gate already diagnosed them during lift.
+/// reference gate already diagnosed them during lift. Field defaults
+/// are the value half of this rule and resolve later, so
+/// `resolve::field_defaults` runs [`check_value_leaks`] on them.
 ///
 /// Functions declared on a private type are exempt. Their signatures
 /// necessarily mention the type (`self`, constructors returning
@@ -123,13 +126,24 @@ fn leaked_private_mentions<'r>(
 ) -> Vec<&'r RegistryEntry> {
     let mut mentioned = Vec::new();
     collect_surface_ids(entry, &mut mentioned);
+    same_package_private(&mentioned, entry.identifier.package(), registry)
+}
+
+/// The `priv` items of `package` among `ids`, deduped in order. A
+/// cross-package private mention is not a leak here, since the
+/// reference gate already diagnosed it.
+fn same_package_private<'r>(
+    ids: &[GlobalRegistryId],
+    package: &str,
+    registry: &'r GlobalRegistry,
+) -> Vec<&'r RegistryEntry> {
     let mut leaked: Vec<&RegistryEntry> = Vec::new();
-    for id in mentioned {
+    for &id in ids {
         let Some(target) = registry.get(id) else {
             continue;
         };
         if target.visibility != VisibilityScope::PackagePrivate
-            || target.identifier.package() != entry.identifier.package()
+            || target.identifier.package() != package
             || leaked
                 .iter()
                 .any(|seen| seen.identifier == target.identifier)
@@ -236,4 +250,70 @@ fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId>) {
         }
         ResolvedType::Failed | ResolvedType::Unresolved => {}
     }
+}
+
+/// Reject every same-package `priv` item that `value`, a resolved
+/// expression on `owner`'s header such as a field default, names. A
+/// private owner exposes nothing. `subject` names the position in
+/// the diagnostic, as in "default for field `x` of `Pkg.Config`".
+///
+/// Only package-private items can fire here. A cross-package or
+/// type-private reference already failed when `value` resolved, and
+/// a private type on the header is [`check_signature_leaks`]'s job.
+pub(crate) fn check_value_leaks(
+    value: &Expr,
+    subject: &str,
+    owner: &RegistryEntry,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if owner.visibility != VisibilityScope::Public {
+        return;
+    }
+    let mut mentioned = Vec::new();
+    collect_value_ids(value, &mut mentioned);
+    for leaked in same_package_private(&mentioned, owner.identifier.package(), registry) {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!(
+                "{subject} exposes private {} `{}`",
+                leaked.kind.label(),
+                leaked.identifier,
+            ),
+            format!(
+                "`{}` is public, so its header can name only public items. Remove `priv` \
+                 from `{}`, or declare `{}` as `priv` too",
+                owner.identifier,
+                leaked.identifier.last(),
+                owner.identifier.last(),
+            ),
+            value.span,
+        ));
+    }
+}
+
+/// Append every `Resolution::Global` id that `value` names, in source
+/// order. A constant read is an `Ident` whatever its spelling, and a
+/// named function reference carries its target. No other expression
+/// node names a global value.
+fn collect_value_ids(value: &Expr, ids: &mut Vec<GlobalRegistryId>) {
+    struct Collector<'a>(&'a mut Vec<GlobalRegistryId>);
+
+    impl<'ast> Visitor<'ast> for Collector<'_> {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            match &expr.kind {
+                ExprKind::Ident {
+                    resolution: Resolution::Global(id),
+                    ..
+                }
+                | ExprKind::NamedFunctionReference {
+                    target: Resolution::Global(id),
+                    ..
+                } => self.0.push(*id),
+                _ => {}
+            }
+            visit::walk_expr(self, expr);
+        }
+    }
+
+    Collector(ids).visit_expr(value);
 }

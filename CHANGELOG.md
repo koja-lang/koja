@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A `fn` typed field can default to a named function reference, as in `on_reject: fn (Int) -> () = &ignore_reject/1`. A constant still does not hold one.
+
+### Changed
+
+- A public struct or enum variant whose field default names a `priv` constant or `priv fn` is a compile error, the same as a public field whose type is `priv`. Before, a public struct's default could read a `priv` constant.
+
 ### Fixed
 
 - `assert` types a comparison in either direction, so `assert Option.None == p` and `assert 0 == n` on a `UInt32` typecheck the way `assert p == Option.None` and `assert n == 0` do. Before, only the right operand took its type from the left. An operand that fails to typecheck now reports once. Before, the failure was followed by four more errors that named the internal `$assert_left_0` temporary.

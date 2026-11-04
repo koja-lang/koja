@@ -16,6 +16,9 @@
 //! the declaring package with the declaring file's aliases and no
 //! locals. One scope shape at both points is what keeps them from
 //! diverging.
+//!
+//! A default is part of its owner's header, so the declaration pass
+//! also runs [`crate::pipeline::visibility::check_value_leaks`] on it.
 
 use koja_ast::ast::{
     AliasDecl, Diagnostic, EnumDecl, EnumVariantData, Expr, FieldInit, Name, StructDecl,
@@ -24,6 +27,7 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 use koja_ast::span::Span;
 
+use crate::pipeline::visibility::check_value_leaks;
 use crate::registry::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, ResolvedVariantData,
 };
@@ -31,6 +35,13 @@ use crate::registry::{
 use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::ResolverEnv;
 use super::resolve_in_declaring_scope;
+
+/// The struct or enum a default belongs to. `label` names it in
+/// diagnostics, `Pkg.Config` or `Pkg.Shape.Rect` for a variant.
+struct DefaultOwner<'a> {
+    entry: &'a RegistryEntry,
+    label: String,
+}
 
 /// Trial-resolve every field default on a struct decl. Called by the
 /// walker while it visits the declaring file.
@@ -46,11 +57,14 @@ pub(super) fn resolve_struct_defaults(
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         return;
     };
-    let owner_label = entry.identifier.to_string();
+    let owner = DefaultOwner {
+        entry,
+        label: entry.identifier.to_string(),
+    };
     resolve_field_defaults(
         &mut decl.fields,
         &definition.fields,
-        &owner_label,
+        &owner,
         env,
         diagnostics,
     );
@@ -80,15 +94,18 @@ pub(super) fn resolve_enum_defaults(
         let ResolvedVariantData::Struct(declared) = &lifted.data else {
             continue;
         };
-        let owner_label = format!("{}.{}", entry.identifier, variant.name);
-        resolve_field_defaults(fields, declared, &owner_label, env, diagnostics);
+        let owner = DefaultOwner {
+            entry,
+            label: format!("{}.{}", entry.identifier, variant.name),
+        };
+        resolve_field_defaults(fields, declared, &owner, env, diagnostics);
     }
 }
 
 fn resolve_field_defaults(
     fields: &mut [StructField],
     declared: &[ResolvedStructField],
-    owner_label: &str,
+    owner: &DefaultOwner<'_>,
     env: &ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -108,7 +125,7 @@ fn resolve_field_defaults(
             default,
             &lifted.ty,
             field.name.as_str(),
-            owner_label,
+            owner,
             env,
             diagnostics,
         );
@@ -116,13 +133,13 @@ fn resolve_field_defaults(
 }
 
 /// Trial-resolve one default against its lifted field type in the
-/// declaring file's scope. Diagnostics land on the default
-/// expression.
+/// declaring file's scope, then check it for leaks. Diagnostics land
+/// on the default expression.
 fn resolve_declared_default(
     default: &mut Expr,
     field_ty: &ResolvedType,
     field_name: &str,
-    owner_label: &str,
+    owner: &DefaultOwner<'_>,
     env: &ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -140,12 +157,14 @@ fn resolve_declared_default(
         return;
     }
 
+    let subject = format!("default for field `{field_name}` of `{}`", owner.label);
+    check_value_leaks(default, &subject, owner.entry, env.registry, diagnostics);
+
     let actual = default.resolution.clone();
     if !actual.is_resolved() || !field_ty.is_resolved() {
         return;
     }
     if let Some(mismatch) = check_compatible_stamping(default, &actual, field_ty, env.registry) {
-        let subject = format!("default for field `{field_name}` of `{owner_label}`");
         diagnostics.push(Diagnostic::error(
             mismatch_message(&subject, &mismatch, field_ty, &actual, env.registry),
             default.span,
