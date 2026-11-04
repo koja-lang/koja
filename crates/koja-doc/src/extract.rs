@@ -1158,9 +1158,9 @@ fn has_doc_false(annotations: &[koja_ast::ast::Annotation]) -> bool {
 /// numerics, enum variants, constants, binary literals, named
 /// function references, and struct, list, map, or set literals of
 /// those. A dotted struct literal such as `Pkg.Type{}` parses as a
-/// struct-shaped variant and prints the same way. A constant read
-/// prints as written, in its bare (`MAX`) or dotted (`Pkg.limit`)
-/// spelling, and a function reference prints as `&name/arity`.
+/// struct-shaped variant and prints the same way. Constant reads and
+/// function references print as written, `MAX`, `Pkg.limit`, or
+/// `&name/arity`.
 fn default_to_string(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::BinaryLiteral { segments } => {
