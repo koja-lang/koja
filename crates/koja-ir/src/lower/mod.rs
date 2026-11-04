@@ -19,6 +19,7 @@ mod drops;
 mod enums;
 mod equality;
 mod expr;
+mod hash_keys;
 mod loops;
 mod match_expr;
 mod ops;
@@ -32,5 +33,6 @@ mod unions;
 
 pub(crate) use body::lower_body_to_blocks;
 pub(crate) use ctx::LowerOutput;
+pub(crate) use hash_keys::enqueue_key_conformances;
 pub(crate) use package::{lower_package, resolved_type_to_ir_type};
 pub(crate) use process::{ProcessBodyTypes, synthesize_process_entry_wrapper};

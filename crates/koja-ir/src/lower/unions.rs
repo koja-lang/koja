@@ -278,7 +278,9 @@ pub(super) fn emit_union_format(
 
 /// Hash the carried member, then fold the tag in so two members with
 /// equal payload hashes still land apart: `member.hash().bxor(tag.hash())`.
-fn emit_union_hash(
+/// Also the body of the standalone `Union_X.hash/1` that
+/// `hash_keys` synthesizes for a hashtable key.
+pub(super) fn emit_union_hash(
     subject: UnionSubject<'_>,
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,

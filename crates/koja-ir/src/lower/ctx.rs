@@ -75,10 +75,14 @@ pub(crate) struct LowerOutput {
     /// many `spawn S.start(...)` sites hit it, so the IRPackage's
     /// function table only sees one entry.
     pub(crate) spawn_wrappers: BTreeSet<IRSymbol>,
-    /// Closure bodies, fn-as-value adapters, and spawn-wrapper
-    /// thunks minted during expression lowering. `lower_package`
-    /// drains this and merges into [`crate::IRPackage::functions`].
+    /// Closure bodies, fn-as-value adapters, spawn-wrapper thunks,
+    /// and union key `hash` / `equals?` pairs minted during lowering.
+    /// `lower_package` drains this and merges into
+    /// [`crate::IRPackage::functions`].
     pub(crate) synthesized_functions: Vec<IRFunction>,
+    /// Union symbols whose `hash/1` and `equals?/2` are already
+    /// synthesized, so `Map<U, V>` and `Set<U>` share one pair.
+    pub(crate) union_key_conformances: BTreeSet<IRSymbol>,
 }
 
 /// The shape every `lower_*` helper returns. `Open` carries the

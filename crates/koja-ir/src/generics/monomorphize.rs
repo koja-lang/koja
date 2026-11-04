@@ -10,14 +10,14 @@ use std::collections::BTreeSet;
 
 use koja_ast::identifier::{Identifier, ResolvedType};
 use koja_typecheck::{
-    EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedVariantData,
-    StructDefinition,
+    BuiltinShape, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
+    ResolvedVariantData, StructDefinition,
 };
 
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 use crate::function::{IRFunction, IRSymbol};
-use crate::lower::LowerOutput;
 use crate::lower::package::{lower_function_inner, resolved_type_to_ir_type};
+use crate::lower::{LowerOutput, enqueue_key_conformances};
 use crate::mangling::{
     mangled_function_name, mangled_method_name, mangled_type_name, source_function_symbol,
 };
@@ -59,9 +59,15 @@ pub(super) fn monomorphize(
         // so there is no IR storage to describe (the pointer or
         // hash-table shape lives entirely inside the LLVM type
         // lowering). Still enqueue its methods so call sites against
-        // `List_$T$.append`, `CPtr_$T$.alloc`, etc. resolve.
-        GlobalKind::Builtin(_) => {
+        // `List_$T$.append`, `CPtr_$T$.alloc`, etc. resolve. A
+        // hashtable is also a use of its key's `hash` and `equals?`,
+        // which the backend calls by symbol with no call site in
+        // user code to instantiate them.
+        GlobalKind::Builtin(definition) => {
             assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
+            if matches!(definition.shape, BuiltinShape::Map | BuiltinShape::Set) {
+                enqueue_key_conformances(&inst.args[0], registry, output);
+            }
             enqueue_member_methods(inst, registry, function_index, output);
         }
         GlobalKind::Struct(Some(definition)) => {

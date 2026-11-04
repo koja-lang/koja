@@ -66,7 +66,7 @@ pub(super) fn resolve_key_hash_ops<'ctx>(
     function: &IRFunction,
     key_ty: &IRType,
 ) -> Result<KeyHashOps<'ctx>, LlvmError> {
-    let (hash_fn, eq_fn) = resolve_hash_eq(ctx, function, key_ty)?;
+    let (hash_fn, eq_fn) = resolve_hash_eq(ctx, function, key_ty);
     let key_basic_ty = ir_basic_type(ctx, key_ty)?;
     Ok(KeyHashOps {
         hash_fn,
@@ -362,44 +362,48 @@ pub(crate) fn extract_table_fields<'ctx>(
 /// Resolve the Hash + Equality intrinsics for `key_ty` via the
 /// declared-function index. The lift pass stamps every primitive
 /// receiver's `hash` / `equals?` as a `Global.<Type>.hash`-style
-/// `IRSymbol`, and per-struct impls follow the same shape with
-/// the struct's already-mangled symbol as the receiver root, so
-/// the lookup is a single index hit per side. Misses are backend
-/// gaps (union keys, conditional `Hash` impls that nothing else
-/// instantiates) and surface as a codegen error.
+/// `IRSymbol`, and per-type impls follow the same shape with the
+/// type's already-mangled symbol as the receiver root, so the lookup
+/// is a single index hit per side. IR lower's `hash_keys` guarantees
+/// both symbols for every key type a `Map` or `Set` instantiates
+/// with, so a miss here is a lower bug.
 pub(super) fn resolve_hash_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     key_ty: &IRType,
-) -> Result<(FunctionValue<'ctx>, FunctionValue<'ctx>), LlvmError> {
-    let receiver = hash_receiver_symbol(key_ty).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "type `{key_ty:?}` does not implement Hash (no receiver symbol) for `{}`",
+) -> (FunctionValue<'ctx>, FunctionValue<'ctx>) {
+    let receiver = hash_receiver_symbol(key_ty).unwrap_or_else(|| {
+        panic!(
+            "LLVM emit: hashtable key `{key_ty:?}` has no hash receiver symbol for `{}` \
+             (seal invariant violation)",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     let hash_symbol = mangled_method_name(&receiver, &[], "hash", 1, &[]);
     let eq_symbol = mangled_method_name(&receiver, &[], "equals?", 2, &[]);
-    let hash_fn = ctx.declared_function(&hash_symbol).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "type `{key_ty:?}` does not implement Hash (no `{}` function) for `{}`",
-            hash_symbol, function.symbol,
-        ))
-    })?;
-    let eq_fn = ctx.declared_function(&eq_symbol).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "type `{key_ty:?}` does not implement Equality (no `{}` function) for `{}`",
-            eq_symbol, function.symbol,
-        ))
-    })?;
-    Ok((hash_fn, eq_fn))
+    let hash_fn = ctx.declared_function(&hash_symbol).unwrap_or_else(|| {
+        panic!(
+            "LLVM emit: hashtable key `{key_ty:?}` has no `{hash_symbol}` function for `{}` \
+             (seal invariant violation)",
+            function.symbol,
+        )
+    });
+    let eq_fn = ctx.declared_function(&eq_symbol).unwrap_or_else(|| {
+        panic!(
+            "LLVM emit: hashtable key `{key_ty:?}` has no `{eq_symbol}` function for `{}` \
+             (seal invariant violation)",
+            function.symbol,
+        )
+    });
+    (hash_fn, eq_fn)
 }
 
 /// Mint the receiver `IRSymbol` for `<key_ty>.hash` / `<key_ty>.eq`
 /// lookups. Primitives root at `Global.<Type>` via the lift pass'
-/// convention. Struct types reuse their already-mangled symbol so
-/// per-monomorphization impls (`MyApp.Pair_$Int.String$.hash`) hit
-/// the same lookup path.
+/// convention. Structs and enums reuse their already-mangled symbol
+/// so per-monomorphization impls (`MyApp.Pair_$Int.String$.hash`)
+/// hit the same lookup path, and a union roots at its mangled
+/// `Union_A_or_B` symbol, where IR lower synthesizes the pair.
 fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
     Some(match key_ty {
         IRType::Bool => global_primitive_symbol(&["Bool"]),
@@ -414,7 +418,8 @@ fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
         IRType::Binary => global_primitive_symbol(&["Binary"]),
         IRType::Bits => global_primitive_symbol(&["Bits"]),
         IRType::String => global_primitive_symbol(&["String"]),
-        IRType::Struct(symbol) => symbol.clone(),
+        IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.clone(),
+        IRType::Union { mangled, .. } => mangled.clone(),
         _ => return None,
     })
 }

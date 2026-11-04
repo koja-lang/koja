@@ -756,8 +756,9 @@ fn mint_wrapper_params(
 /// Read each promoted slot back into a fresh `ValueId` for the
 /// inner [`IRInstruction::Call`]. Mirrors `calls::emit_call`'s
 /// arg-lowering shape (`LocalRead` per arg) so callee semantics
-/// match a hand-written `fn (x) -> target(x) end` shim.
-fn read_wrapper_args(
+/// match a hand-written `fn (x) -> target(x) end` shim. Shared with
+/// `hash_keys`, whose union functions promote params the same way.
+pub(super) fn read_wrapper_args(
     params: &[IRFunctionParam],
     ctx: &mut FnLowerCtx<'_>,
     entry: IRBlockId,

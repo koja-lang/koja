@@ -17,7 +17,7 @@ use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
 
-use crate::pipeline::resolve::types::{is_primitive, types_equivalent};
+use crate::pipeline::resolve::types::{is_primitive, peel_alias, types_equivalent};
 use crate::registry::GlobalRegistry;
 
 /// A type parameter unified to two distinct concrete types across two
@@ -262,7 +262,7 @@ fn is_sized_float(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
 }
 
 fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    let ResolvedType::Union(members) = prev else {
+    let ResolvedType::Union(members) = peel_alias(prev, registry) else {
         return false;
     };
     members

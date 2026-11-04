@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `Map` or `Set` keyed by a union, by an enum with its own `Hash` impl, or by a generic struct whose `Hash` and `Equality` impls are conditional compiles under `--backend=llvm`. Before, each one typechecked and ran under the interpreter but failed LLVM codegen with "does not implement Hash".
+- A `Map` or `Set` keyed by a type alias to a union, such as `type Key = Int | String` and `Map<Key, Int>`, accepts a member of the union as a key, so `table.get(7)` and `table.put("seven", 7)` typecheck. Before, both failed with "type parameter `K` of `Map` cannot be both `Key` and `Int`".
 - `assert` types a comparison in either direction, so `assert Option.None == p` and `assert 0 == n` on a `UInt32` typecheck the way `assert p == Option.None` and `assert n == 0` do. Before, only the right operand took its type from the left. An operand that fails to typecheck now reports once. Before, the failure was followed by four more errors that named the internal `$assert_left_0` temporary.
 - An operator stays quiet when an operand already failed to typecheck. Before, `not nope` and `nope + 1` reported the unknown identifier and then a second error about an `<unresolved>` operand.
 - `==` and `!=` accept a static method call or a qualified constant as the right operand, so `p == Point.ORIGIN` and `i == Outer.Inner.make(1)` typecheck, as does `Option.Some(i) == Option.Some(Outer.Inner.make(1))`. Before, the right operand was resolved twice and the second pass read the path as an unknown identifier or as a static call on a value. An operand of `==` that fails to typecheck now reports once.

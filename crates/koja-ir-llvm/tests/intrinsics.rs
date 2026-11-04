@@ -8,6 +8,10 @@
 //! - the spawn-driven main trampoline lands `ret i64 0` after the
 //!   user body completes, regardless of the trailing expression's
 //!   value (scripts always exit 0 on normal completion)
+//! - the hashtable intrinsics resolve `hash` / `equals?` by symbol
+//!   for every key type the `Hash & Equality` bound admits (union,
+//!   enum, conditional impl on a generic struct), not only
+//!   primitives and concrete structs
 //!
 //! Byte-for-byte stdout coverage lives in the lang golden suite.
 //! Here we pin the static IR shape.
@@ -163,4 +167,98 @@ fn log_configure_hands_the_runtime_both_payload_shims() {
     assert_contains(config_body, "call i64 @koja_rt_log_config(ptr");
     assert_contains(config_body, "fill_some");
     assert_contains(config_body, "fill_none");
+}
+
+#[test]
+fn union_key_table_calls_the_synthesized_hash_and_equals() {
+    let source = "
+        m: Map<Int | String, Int> = [:]
+        m = m.put(1, 1)
+        m.get(\"a\")
+        ";
+
+    let script = lower_as_script(source);
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    let get_body =
+        extract_function_body(&ir_text, "Global.Map_$Union_Int64_or_String.Int64$.get/2");
+    assert_contains(get_body, "call i64 @\"Union_Int64_or_String.hash/1\"(");
+    assert_contains(get_body, "call i1 @\"Union_Int64_or_String.equals?/2\"(");
+    extract_function_body(&ir_text, "Union_Int64_or_String.hash/1");
+    extract_function_body(&ir_text, "Union_Int64_or_String.equals?/2");
+}
+
+#[test]
+fn conditional_impl_key_table_calls_the_instantiated_hash_and_equals() {
+    let source = "
+        struct Pair<A, B>
+          a: A
+          b: B
+        end
+
+        impl Hash for Pair<A: Hash, B: Hash>
+          fn hash(self) -> Int
+            self.a.hash().bxor(self.b.hash())
+          end
+        end
+
+        impl Equality for Pair<A: Equality, B: Equality>
+          fn equals?(self, other: Pair<A, B>) -> Bool
+            self.a == other.a and self.b == other.b
+          end
+        end
+
+        m: Map<Pair<Int, String>, Int> = [:]
+        m = m.put(Pair{a: 1, b: \"x\"}, 7)
+        m.get(Pair{a: 1, b: \"x\"})
+        ";
+
+    let script = lower_as_script(source);
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    let get_body = extract_function_body(
+        &ir_text,
+        "Global.Map_$TestApp.Pair_$Int64.String$.Int64$.get/2",
+    );
+    assert_contains(
+        get_body,
+        "call i64 @\"TestApp.Pair_$Int64.String$.hash/1\"(",
+    );
+    assert_contains(
+        get_body,
+        "call i1 @\"TestApp.Pair_$Int64.String$.equals?/2\"(",
+    );
+}
+
+#[test]
+fn enum_key_table_calls_the_enum_hash_and_equals() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        impl Hash for Color
+          fn hash(self) -> Int
+            match self
+              Color.Red -> 1
+              Color.Green -> 2
+            end
+          end
+        end
+
+        m: Map<Color, Int> = [:]
+        m = m.put(Color.Red, 1)
+        m.get(Color.Green)
+        ";
+
+    let script = lower_as_script(source);
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    let get_body = extract_function_body(&ir_text, "Global.Map_$TestApp.Color.Int64$.get/2");
+    assert_contains(get_body, "call i64 @\"TestApp.Color.hash/1\"(");
+    assert_contains(get_body, "call i1 @\"TestApp.Color.equals?/2\"(");
 }

@@ -1,0 +1,67 @@
+# Every key shape the `Hash & Equality` bound admits works on both
+# backends: a union with a heap member, a generic struct whose impls
+# are conditional, and an enum with an explicit impl.
+
+struct Pair<A, B>
+  a: A
+  b: B
+end
+
+impl Hash for Pair<A: Hash, B: Hash>
+  fn hash(self) -> Int
+    self.a.hash().bxor(self.b.hash())
+  end
+end
+
+impl Equality for Pair<A: Equality, B: Equality>
+  fn equals?(self, other: Pair<A, B>) -> Bool
+    self.a == other.a and self.b == other.b
+  end
+end
+
+enum Color
+  Red
+  Green
+end
+
+impl Hash for Color
+  fn hash(self) -> Int
+    match self
+      Color.Red -> 1
+      Color.Green -> 2
+    end
+  end
+end
+
+by_union: Map<Int | String, Int> = [:]
+by_union = by_union.put(1, 10)
+by_union = by_union.put("1", 20)
+by_union = by_union.put("one", 30)
+by_union.length().print()
+by_union.get(1).print()
+by_union.get("1").print()
+by_union = by_union.remove("1")
+by_union.get("1").print()
+by_union.get("one").print()
+
+members: Set<Int | String> = Set.new()
+members = members.insert(2)
+members = members.insert("2")
+members = members.insert(2)
+members.length().print()
+members.has?("2").print()
+members.has?(3).print()
+
+by_pair: Map<Pair<Int, String>, Int> = [:]
+by_pair = by_pair.put(Pair{a: 1, b: "x"}, 7)
+by_pair = by_pair.put(Pair{a: 1, b: "y"}, 8)
+by_pair.length().print()
+by_pair.get(Pair{a: 1, b: "x"}).print()
+by_pair.get(Pair{a: 2, b: "x"}).print()
+
+by_color: Map<Color, Int> = [:]
+by_color = by_color.put(Color.Red, 1)
+by_color = by_color.put(Color.Green, 2)
+by_color = by_color.put(Color.Red, 3)
+by_color.length().print()
+by_color.get(Color.Red).print()
