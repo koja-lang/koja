@@ -115,6 +115,21 @@ fn type_alias_widens_member_at_call_site() {
 }
 
 #[test]
+fn type_alias_widens_member_in_type_param_slot() {
+    // A receiver seeded with `K -> Key` and an arg that binds
+    // `K -> Int` is a widening, not a conflict. `Substitution::set`
+    // peels the alias before its union-member check.
+    let source = "
+        type Key = Int | String
+
+        fn lookup(table: Map<Key, Int>) -> Option<Int>
+          table.put(7, 1).get(\"seven\")
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn type_alias_preserves_name_in_mismatch_diagnostics() {
     // The mismatch diagnostic reports the alias (`Pet`), not the
     // expanded `Cat | Dog`. This is the headline contract for the
