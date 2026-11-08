@@ -11,6 +11,7 @@ use koja_runtime_core::{IoWait, deadline_from_user_millis};
 
 use crate::ffi::{libc_read, libc_write};
 use crate::reactor::{Interest, block_until_ready, io_block, release_fd_and_close};
+use crate::signals;
 use crate::util::{alloc_binary, set_last_error};
 
 /// Decodes a NUL-terminated C path pointer into `&str`, recording the
@@ -84,6 +85,9 @@ pub unsafe extern "C" fn koja_fd_write(
     }) {
         Ok(n) => n as i64,
         Err(e) => {
+            if (fd == 1 || fd == 2) && e.raw_os_error() == Some(libc::EPIPE) {
+                signals::die_from_sigpipe();
+            }
             set_last_error(e);
             -1
         }
@@ -302,4 +306,35 @@ pub extern "C" fn koja_io_block(fd: i32, interest: i64, timeout_ms: i64) -> i64 
     let deadline = deadline_from_user_millis(timeout_ms);
     let wait = io_block(fd, interest, deadline);
     i64::from(wait == IoWait::TimedOut)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+    use crate::util::{error_kind_code, koja_last_error_code};
+
+    #[test]
+    fn write_to_closed_pipe_fails_with_broken_pipe() {
+        let _guard = signals::SIGPIPE_TEST_LOCK
+            .lock()
+            .expect("sigpipe test lock");
+        signals::install();
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe(2)");
+        let [read_end, write_end] = fds;
+        unsafe { libc::close(read_end) };
+
+        let data = b"x";
+        let written = unsafe { koja_fd_write(write_end, data.as_ptr(), data.len() as i64, -1) };
+
+        assert_eq!(written, -1);
+        assert_eq!(
+            koja_last_error_code(),
+            error_kind_code(io::ErrorKind::BrokenPipe)
+        );
+        unsafe { libc::close(write_end) };
+    }
 }
