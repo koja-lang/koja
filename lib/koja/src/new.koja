@@ -146,26 +146,19 @@ end
 # minors are breaking, so a fresh project needs at least the
 # compiler that generated it.
 priv fn minimum_koja_version -> String
-  version = toolchain_version()
-  parts = version.split(".")
+  toolchain = version()
+  parts = toolchain.split(".")
 
   match parts.get(0)
     Option.None ->
-      version
+      toolchain
 
     Option.Some(major) ->
       match parts.get(1)
-        Option.None -> version
+        Option.None -> toolchain
         Option.Some(minor) -> "#{major}.#{minor}"
       end
   end
-end
-
-priv fn toolchain_version -> String
-  cs = koja_toolchain_version().to_cstring()
-  result = cs.to_string()
-  cs.free()
-  result.unwrap()
 end
 
 priv fn toml_content(name: String) -> String
@@ -264,6 +257,3 @@ priv fn app_test_content -> String
   end
   """
 end
-
-@extern "C"
-priv fn koja_toolchain_version -> CPtr<UInt8>

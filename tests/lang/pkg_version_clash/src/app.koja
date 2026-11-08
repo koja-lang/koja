@@ -1,0 +1,21 @@
+alias Process.Step
+alias Process.StopReason
+
+# koja.toml already declares `PACKAGE_VERSION`, so this is a duplicate
+# definition and the related note points at the manifest.
+const PACKAGE_VERSION: String = "9.9.9"
+
+struct App: Process<(), (), ()>
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    IO.puts(PACKAGE_VERSION)
+    StopReason.Normal
+  end
+end

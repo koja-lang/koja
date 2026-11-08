@@ -3,7 +3,8 @@ alias Process.StopReason
 
 # Package-qualified calls to package-level functions in a dependency:
 # monomorphic, generic (type args inferred at the call site), nested,
-# and chained into a method on the returned value.
+# and chained into a method on the returned value. Then the manifest
+# constants, bare for this package and qualified for the dependency.
 
 struct App: Process<(), (), ()>
   fn start(config: ()) -> Result<Self, StopReason>
@@ -20,6 +21,8 @@ struct App: Process<(), (), ()>
     Mathx.pick("left", "right", true).print()
     Mathx.pick(1, 2, false).print()
     Mathx.shout("koja").print()
+    IO.puts(PACKAGE_VERSION)
+    IO.puts(Mathx.PACKAGE_NAME)
     StopReason.Normal
   end
 end

@@ -1,0 +1,16 @@
+@doc """
+Returns the version of the Koja toolchain that compiled this program,
+such as `"0.21.0"`. It is the same string `koja --version` prints.
+
+For the version of your own package, read its `PACKAGE_VERSION`
+constant instead.
+"""
+fn version -> String
+  cs = koja_toolchain_version().to_cstring()
+  result = cs.to_string()
+  cs.free()
+  result.unwrap()
+end
+
+@extern "C"
+priv fn koja_toolchain_version -> CPtr<UInt8>
