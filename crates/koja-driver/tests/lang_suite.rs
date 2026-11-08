@@ -1257,6 +1257,36 @@ fn lang_dup_pkg_name() {
     );
 }
 
+/// A project that declares its own `const PACKAGE_VERSION` collides
+/// with the constant the loader synthesizes from koja.toml. The
+/// related note names the manifest as the previous definition.
+#[test]
+fn lang_pkg_version_clash() {
+    let dir = lang_dir().join("pkg_version_clash");
+    assert!(dir.exists(), "test fixture pkg_version_clash/ not found");
+
+    let mut cmd = Command::new(koja_bin());
+    cmd.arg("check").current_dir(&dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute koja check");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    assert!(
+        !output.status.success(),
+        "expected koja check to fail for a user PACKAGE_VERSION, but it succeeded\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("PACKAGE_VERSION` is already defined"),
+        "expected stderr to report PACKAGE_VERSION as already defined, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("koja.toml"),
+        "expected stderr to point at koja.toml, got:\n{stderr}"
+    );
+}
+
 #[test]
 fn lang_release_build_test() {
     let project_dir = lang_dir().join("project");

@@ -42,6 +42,9 @@ pub struct ResolvedDep {
     /// The dep's own manifest task exports (`[tasks]`), kept for task
     /// resolution across the dependency graph.
     pub tasks: HashMap<String, String>,
+    /// The `version` field of the dep's manifest, exposed to its code
+    /// as `PACKAGE_VERSION`.
+    pub version: String,
 }
 
 /// Which pins `koja deps get`/`update` re-resolve against the remote.
@@ -263,6 +266,7 @@ impl Resolver {
             root: canonical.clone(),
             src: dep_config.src.clone(),
             tasks: dep_config.tasks.clone(),
+            version: dep_config.version.clone(),
         });
 
         self.stack.push(key);
@@ -343,6 +347,7 @@ impl Resolver {
             root: dep_root.clone(),
             src: dep_config.src.clone(),
             tasks: dep_config.tasks.clone(),
+            version: dep_config.version.clone(),
         });
 
         self.stack.push(url.to_string());

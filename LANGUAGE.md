@@ -1673,6 +1673,16 @@ namespace = "HTTP"
 version = "0.1.0"
 ```
 
+### Manifest Constants
+
+Every project and dependency package declares two constants from its `koja.toml`. `PACKAGE_NAME` holds the manifest `name` and `PACKAGE_VERSION` holds its `version`. Inside the package they read bare. From another package they read through its namespace, like any other constant. Standard library packages do not declare them. For the toolchain version, call `Koja.version()`:
+
+```koja
+IO.puts("#{PACKAGE_NAME} #{PACKAGE_VERSION}")  # my_app 1.2.0
+IO.puts(Mathx.PACKAGE_VERSION)                  # 0.4.0
+IO.puts(Koja.version())                         # 0.21.0
+```
+
 ### Visibility
 
 Access control is at the declaration level (`priv`), not the file level:

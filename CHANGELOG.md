@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `PACKAGE_NAME` and `PACKAGE_VERSION`, constants every package declares from the `name` and `version` fields of its `koja.toml`.
+- `Koja.version()` returns the version of the toolchain that compiled the program, the same string `koja --version` prints.
+
 ## [0.20.1] - 2026-11-06
 
 ### Added

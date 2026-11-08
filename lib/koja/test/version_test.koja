@@ -1,0 +1,6 @@
+test "version is a dotted release number"
+  parts = version().split(".")
+
+  assert parts.length() >= 2
+  assert parts.all?(part -> part.length() > 0)
+end

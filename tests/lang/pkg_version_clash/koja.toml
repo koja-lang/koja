@@ -1,0 +1,4 @@
+[project]
+name = "pkg_version_clash"
+version = "0.1.0"
+entry = "App"

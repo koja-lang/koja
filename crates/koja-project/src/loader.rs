@@ -163,7 +163,9 @@ impl<'a> ProjectLoader<'a> {
 
     /// Resolve project sources per `opts`. Stdlib comes first, then
     /// the project's own `src` (plus `test` when requested), then
-    /// dependency sources. Bails with `Err` only under
+    /// dependency sources. The project and each dependency lead with
+    /// a virtual source at their `koja.toml` path that declares
+    /// `PACKAGE_NAME` and `PACKAGE_VERSION`. Bails with `Err` only under
     /// [`ErrorPolicy::Strict`]. `Lenient` always returns `Ok`, with
     /// anything broken named in [`Loaded::warnings`].
     pub fn sources(&self, opts: LoadOptions) -> Result<Loaded, String> {
@@ -175,6 +177,14 @@ impl<'a> ProjectLoader<'a> {
             collection.experimental.insert(namespace.clone());
         }
 
+        push_manifest(
+            &namespace,
+            &self.config.name,
+            &self.config.version,
+            self.root,
+            SourceOrigin::Project,
+            &mut collection,
+        );
         self.push_package(
             &namespace,
             &self.config.src,
@@ -302,6 +312,14 @@ impl<'a> ProjectLoader<'a> {
             if dep.experimental {
                 collection.experimental.insert(dep.namespace.clone());
             }
+            push_manifest(
+                &dep.namespace,
+                &dep.name,
+                &dep.version,
+                &dep.root,
+                SourceOrigin::Dependency,
+                collection,
+            );
             self.push_package(
                 &dep.namespace,
                 &dep.src,
@@ -328,6 +346,57 @@ struct Collection {
     out: Vec<LoadedSource>,
     seen_paths: BTreeSet<PathBuf>,
     warnings: Vec<String>,
+}
+
+/// Push the virtual source that declares a package's `PACKAGE_NAME`
+/// and `PACKAGE_VERSION` constants from its manifest. It carries the
+/// manifest's path, so a user declaration of the same name reports
+/// `koja.toml` as the previous definition. Call it before the
+/// package's files so the user's declaration is the duplicate.
+fn push_manifest(
+    package: &str,
+    name: &str,
+    version: &str,
+    package_root: &Path,
+    origin: SourceOrigin,
+    collection: &mut Collection,
+) {
+    collection.out.push(LoadedSource {
+        origin,
+        package: package.to_string(),
+        path: package_root.join("koja.toml"),
+        source: manifest_source(name, version),
+    });
+}
+
+/// The Koja text that declares `PACKAGE_NAME` and `PACKAGE_VERSION`
+/// for one manifest. Both carry `@doc false`, so `koja doc` leaves
+/// them off the package page.
+fn manifest_source(name: &str, version: &str) -> String {
+    format!(
+        "@doc false\nconst PACKAGE_NAME: String = {}\n@doc false\nconst PACKAGE_VERSION: String = {}\n",
+        string_literal(name),
+        string_literal(version)
+    )
+}
+
+/// Quote `text` as a Koja string literal.
+fn string_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '#' => out.push_str("\\#"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The stdlib sources a bundle links, as [`SourceOrigin::Stdlib`]
@@ -498,7 +567,7 @@ mod tests {
                 )
             })
             .collect();
-        tagged.sort_by(|a, b| a.0.cmp(&b.0));
+        tagged.sort_by(|a, b| (&a.0, &a.2).cmp(&(&b.0, &b.2)));
 
         assert_eq!(
             tagged,
@@ -509,6 +578,16 @@ mod tests {
                     "Greeter".to_string()
                 ),
                 (
+                    "koja.toml".to_string(),
+                    SourceOrigin::Dependency,
+                    "Greeter".to_string()
+                ),
+                (
+                    "koja.toml".to_string(),
+                    SourceOrigin::Project,
+                    "Main".to_string()
+                ),
+                (
                     "main.koja".to_string(),
                     SourceOrigin::Project,
                     "Main".to_string()
@@ -517,6 +596,63 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn manifests_lead_each_package_with_its_constants() {
+        let root = unique_temp("manifests");
+        scaffold(&root, "greeter");
+        let config = manifest::load_project(&root).unwrap().unwrap();
+
+        let loaded = ProjectLoader::new(&config, &root)
+            .sources(LoadOptions {
+                stdlib: Some(StdlibOptions {
+                    extraction_root: None,
+                    link_tests: false,
+                }),
+                ..strict(true)
+            })
+            .unwrap();
+        let manifests: Vec<_> = loaded
+            .sources
+            .iter()
+            .filter(|s| s.path.ends_with("koja.toml"))
+            .collect();
+        assert_eq!(manifests.len(), 2);
+        assert!(manifests.iter().all(|s| s.origin != SourceOrigin::Stdlib));
+
+        let main = loaded
+            .sources
+            .iter()
+            .position(|s| s.package == "Main")
+            .unwrap();
+        assert_eq!(loaded.sources[main].path, root.join("koja.toml"));
+        assert_eq!(
+            loaded.sources[main].source,
+            "@doc false\nconst PACKAGE_NAME: String = \"main\"\n@doc false\nconst PACKAGE_VERSION: String = \"0.1.0\"\n"
+        );
+
+        let greeter = loaded
+            .sources
+            .iter()
+            .position(|s| s.package == "Greeter")
+            .unwrap();
+        assert!(loaded.sources[greeter].path.ends_with("koja.toml"));
+        assert!(
+            loaded.sources[greeter]
+                .source
+                .contains("const PACKAGE_NAME: String = \"greeter\"")
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn manifest_source_quotes_its_values() {
+        assert_eq!(
+            manifest_source("say \"hi\"", "1.0.0+build\\#{x}"),
+            "@doc false\nconst PACKAGE_NAME: String = \"say \\\"hi\\\"\"\n@doc false\nconst PACKAGE_VERSION: String = \"1.0.0+build\\\\\\#{x}\"\n"
+        );
     }
 
     #[test]
@@ -626,7 +762,7 @@ mod tests {
                     .map(|s| s.path.clone())
                     .collect::<Vec<_>>()
             ),
-            ["main.koja"]
+            ["koja.toml", "main.koja"]
         );
         assert_eq!(loaded.warnings.len(), 1);
         assert!(loaded.warnings[0].contains("ghost"));
