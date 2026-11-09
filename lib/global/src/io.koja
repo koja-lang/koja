@@ -33,6 +33,10 @@ the stream protocols `IO.Reader` and `IO.Writer`, the stream error
 `IO.Error`, and the readiness message `IO.Ready` nest under it. For
 low-level console access, use `STDIN`, `STDOUT`, and `STDERR` directly
 as `IO.Descriptor` values.
+
+A write to stdout or stderr after its reader has gone ends the program
+with SIGPIPE, the way other Unix tools behave in a pipeline. A write to
+any other descriptor in that state fails with `IO.Error.BrokenPipe`.
 """
 struct IO
   @doc """

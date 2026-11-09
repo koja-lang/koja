@@ -343,7 +343,7 @@ pub const ERROR_CODE_NAME_NOT_FOUND: i32 = 13;
 ///
 /// `WouldBlock` has no code because `block_until_ready` parks and
 /// retries on `EAGAIN`, so it never reaches Koja code.
-fn error_kind_code(kind: io::ErrorKind) -> i32 {
+pub(crate) fn error_kind_code(kind: io::ErrorKind) -> i32 {
     match kind {
         io::ErrorKind::AddrInUse => 1,
         io::ErrorKind::AlreadyExists => 2,

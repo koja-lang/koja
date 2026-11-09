@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PACKAGE_NAME` and `PACKAGE_VERSION`, constants every package declares from the `name` and `version` fields of its `koja.toml`.
 - `Koja.version()` returns the version of the toolchain that compiled the program, the same string `koja --version` prints.
 
+### Fixed
+
+- A write to a socket whose peer has closed fails with `IO.Error.BrokenPipe`. Before, the OS ended the whole program with SIGPIPE. A write to stdout or stderr after the reader has gone still ends the program with SIGPIPE, so `app | head` behaves like other tools.
+
 ## [0.20.1] - 2026-11-06
 
 ### Added
