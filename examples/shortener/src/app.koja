@@ -13,31 +13,29 @@ alias Postgres.Connection
 alias Process.Lifecycle
 alias Process.Step
 alias Process.StopReason
+alias Trail.Router
 
 const POOL_SIZE: Int = 10
-const CHECKOUT_MS: Int = 5000
 
-# SCRAM-SHA-256 auth runs its 4096 PBKDF2 rounds in pure Koja, so each
-# connect costs ~1s under `koja run`'s interpreter (vs ~10ms compiled).
-# The startup probe waits for the pool to build all POOL_SIZE
-# connections, so give it an interpreter-sized budget.
-const STARTUP_PROBE_MS: Int = 30000
-
-# Keep-alive limits: how many bytes to pull per socket read, and how
-# many requests one connection may issue before the worker closes it.
+# Bytes pulled per socket read, and how many requests one connection
+# may issue before the worker closes it.
 const READ_CHUNK: Int = 8192
 const MAX_REQUESTS_PER_CONNECTION: Int = 1000
 
 @doc """
 The URL-shortener entry process. `start` loads config from the
-environment, spawns a pool of `POOL_SIZE` Postgres connections, and
-spawns a `Net.TCPServer` acceptor that delivers connected sockets as
-`TCPEvent.Connected` messages. Each connection is handed to a one-shot
-`Worker` process, so requests are handled concurrently and the entry
-process never blocks on IO.
+environment, spawns a pool of `POOL_SIZE` Postgres connections, builds
+the route table over it, and spawns a `Net.TCPServer` acceptor that
+delivers connected sockets as `TCPEvent.Connected` messages. Each
+connection is handed to a one-shot `Worker` process, so requests are
+handled concurrently and the entry process never blocks on IO.
+
+The pool builds its connections in the background and retries on a
+backoff timer while Postgres is down, so startup never waits on the
+database. Requests answer 503 until the first connection is ready.
 """
 struct App: Process<List<String>, TCPEvent, String>
-  pool: Pool<Connection>
+  router: Router
 
   fn start(config: List<String>) -> Self ! StopReason
     settings = Config.load()
@@ -51,31 +49,24 @@ struct App: Process<List<String>, TCPEvent, String>
       .with_password(settings.db_password)
       .with_statement_cache_size(settings.db_statement_cache)
 
-    pool = Pool.start(
-      PoolConfig{
-        create: fn () -> Result<Connection, String>
-          Connection.connect(db_config).map_err(e -> e.message())
-        end,
-        size: POOL_SIZE,
-        valid: Option.Some(fn (conn: Connection) -> Bool conn.idle?() end),
-      },
-    )
+    pool_config = PoolConfig{
+      create: fn () -> Result<Connection, String>
+        Connection.connect(db_config).map_err(e -> e.message())
+      end,
+      destroy: Option.Some(fn (conn: Connection) -> () _ = conn.close() end),
+      size: POOL_SIZE,
+      valid: Option.Some(fn (conn: Connection) -> Bool conn.idle?() end),
+    }
 
-    # The pool builds its connections eagerly but reports factory
-    # failure as PoolDown on first use. Probe once so a bad database
-    # config fails at startup instead of on the first request.
-    match pool.checkout(STARTUP_PROBE_MS)
-      Result.Ok(conn) ->
-        pool.checkin(conn)
+    pool =
+      match Pool.start(pool_config)
+        Result.Ok(started) ->
+          started
 
-      Result.Err(Pooler.Error.Timeout) ->
-        IO.puts("database connections are still warming up; try again shortly")
-        fail StopReason.Shutdown
-
-      Result.Err(_) ->
-        IO.puts("database connection failed (is the compose stack up?)")
-        fail StopReason.Shutdown
-    end
+        Result.Err(e) ->
+          IO.puts("invalid pool config: #{e}")
+          fail StopReason.Shutdown
+      end
 
     me: Ref<TCPEvent, String> = Ref.self_ref()
     _ = spawn TCPServer.start(TCPServerConfig{port: settings.port, owner: me})
@@ -84,13 +75,13 @@ struct App: Process<List<String>, TCPEvent, String>
     IO.puts("  POST /links {\"url\": \"...\"}  -> create")
     IO.puts("  GET  /:code                  -> redirect")
     IO.puts("  (#{POOL_SIZE} pooled db connections, press Ctrl-C to stop)")
-    App{pool: pool}
+    App{router: build_router(pool)}
   end
 
   fn handle(self, msg: TCPEvent, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       TCPEvent.Connected(client) ->
-        _ = spawn Worker.start(Worker{client: client, pool: self.pool})
+        _ = spawn Worker.start(Worker{client: client, router: self.router})
         Step.Continue(self)
 
       TCPEvent.Error(e) ->
@@ -118,15 +109,14 @@ end
 
 @doc """
 A one-shot process that owns a single client connection. Its `run`
-loop reads requests off the socket (HTTP keep-alive), checks a database
-connection out of the pool for each one, routes it, and writes the
-response. The worker exits when the client closes, a read or write
-fails, the request asks for `Connection: close`, or the per-connection
-request budget is spent.
+loop reads requests off the socket (HTTP keep-alive), dispatches each
+one through the router, and writes the response. The worker exits
+when the client closes, a read or write fails, the request asks for
+`Connection: close`, or the per-connection request budget is spent.
 """
 struct Worker: Process<Worker, (), ()>
   client: TCPSocket
-  pool: Pool<Connection>
+  router: Router
 
   fn start(config: Worker) -> Self ! StopReason
     config
@@ -168,24 +158,8 @@ struct Worker: Process<Worker, (), ()>
   priv fn respond(self, raw: String) -> (Response, Bool)
     match Parser.parse_request(raw)
       Result.Err(_) ->
-        (Router.error(Status.bad_request(), "malformed request"), false)
-
-      Result.Ok(req) ->
-        keep = wants_keep_alive?(req)
-
-        match self.pool.checkout(CHECKOUT_MS)
-          Result.Err(_) ->
-            error = Router.error(
-              Status.new(503, "Service Unavailable"),
-              "no database connection available",
-            )
-            (error, keep)
-
-          Result.Ok(conn) ->
-            (conn, response) = Router.route(req, conn)
-            self.pool.checkin(conn)
-            (response, keep)
-        end
+        (error_response(Status.bad_request(), "malformed request"), false)
+      Result.Ok(req) -> (self.router.dispatch(req), wants_keep_alive?(req))
     end
   end
 

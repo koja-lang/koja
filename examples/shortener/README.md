@@ -1,41 +1,51 @@
 # Shortener
 
-A URL shortener written in Koja — a complete end-to-end CRUD service:
-HTTP serving on `Net.TCPServer` + `HTTP.Parser`, JSON in and out via
-`JSON`, and PostgreSQL through the [Postgres](https://github.com/hpopp/postgres-koja)
-package, a pure-Koja driver speaking the v3 wire protocol (no C
-driver, no FFI), with connections managed by the
-[Pooler](../pooler) resource pool.
+A URL shortener written in Koja, and a complete end-to-end CRUD
+service. It serves HTTP on `Net.TCPServer` + `HTTP.Parser`, routes
+requests through [Trail](https://github.com/koja-lang/trail), and
+reads and writes `JSON`. Links live in PostgreSQL, reached through
+the [Postgres](https://github.com/hpopp/postgres-koja) package, a
+pure-Koja driver speaking the v3 wire protocol (no C driver, no FFI),
+with connections managed by the
+[Pooler](https://github.com/koja-lang/pooler) resource pool.
 
-It doubles as a tour of the things that make Koja great:
+It doubles as a tour of the things that make Koja great.
 
-- **Process entry** — the program starts from `App`
+- **Process entry.** The program starts from `App`
   (`struct App: Process<List<String>, TCPEvent, String>` in `src/app.koja`),
   named by `entry = "App"` in `koja.toml`.
-- **Event-driven accept** — a spawned `Net.TCPServer` watches the
+- **Event-driven accept.** A spawned `Net.TCPServer` watches the
   listener with the runtime's IO reactor and delivers each accepted
-  socket as a `TCPEvent.Connected` message; nothing polls.
-- **Process per connection** — `App` hands every socket to a one-shot
+  socket as a `TCPEvent.Connected` message. Nothing polls.
+- **Process per connection.** `App` hands every socket to a one-shot
   `Worker` process, so slow clients and concurrent requests never
   block each other. Workers speak HTTP keep-alive, framing requests
   off the socket with a buffered reader.
-- **Signal-driven lifecycle** — `handle_signal` receives `Lifecycle`
+- **Signal-driven lifecycle.** `handle_signal` receives `Lifecycle`
   events, so Ctrl-C (`Interrupt`) and SIGTERM (`Shutdown`) exit with
   the right code.
-- **Value semantics** — each request checks a Postgres connection out
-  of the pool; every query returns an updated connection that the
-  router threads through, and the updated value is checked back in.
+- **Routing as plain functions.** `Trail.Router` holds the route
+  table, and every handler is a `fn (Conn) -> Conn` closure that
+  captured the pool when the table was built. The router decodes
+  path and query parameters, binds `:code`, and answers 400, 404,
+  and 405 itself through one `on_reject` hook, so the service's JSON
+  error shape covers them too.
+- **Value semantics.** Each handler checks a Postgres connection out
+  of the pool as a `Lease`. Every query returns an updated connection,
+  which the handler stores back on the lease before checking it in.
   No locks, no mutation at a distance.
-- **Process-based pooling** — `Pooler.Pool` holds 10 eagerly built
-  connections behind a single process that lends them out one at a
-  time, queueing checkout callers in FIFO order when all are lent.
-  A connection that comes back closed or mid-transaction fails the
-  pool's `valid` check (`conn.idle?()`), so the pool drops it and
-  rebuilds the slot, on a backoff timer if Postgres is down.
-- **Git and path dependencies** — the driver is declared in
-  `koja.toml` (`postgres = { github = "hpopp/postgres-koja", tag = "v0.5.0" }`)
-  and pinned to an exact commit by the committed `koja.lock`, while
-  the pool comes from a local path (`pooler = { path = "../pooler" }`).
+- **Process-based pooling.** `Pooler.Pool` holds 10 connections
+  behind a single process that lends them out one at a time, queueing
+  checkout callers in FIFO order when all are lent. The pool builds in
+  the background, so startup never waits on Postgres and requests
+  answer 503 until the first connection is ready. A connection that
+  comes back closed or mid-transaction fails the pool's `valid` check
+  (`conn.idle?()`), so the pool drops it and rebuilds the slot, on a
+  backoff timer if Postgres is down.
+- **Git dependencies.** The driver, the pool, and the router are
+  declared in `koja.toml` by GitHub tag (for example
+  `trail = { github = "koja-lang/trail", tag = "v0.1.0" }`) and pinned
+  to exact commits by the committed `koja.lock`.
 
 ## Layout
 
@@ -46,32 +56,33 @@ src/
   app.koja        -- entry process, per-connection workers, keep-alive
   config.koja     -- env-driven runtime configuration
   json_util.koja  -- request-body parsing / response encoding helpers
-  links.koja      -- LinkStore: CRUD queries over the Postgres driver
-  router.koja     -- request -> response dispatch
+  links.koja      -- LinkStore, CRUD queries over the Postgres driver
+  router.koja     -- route table, handlers, and the JSON error shape
 test/             -- unit tests (no database required)
 ```
 
 ## Running
 
-Fetch dependencies (writes `deps/` from the pins in `koja.lock`):
+Fetch dependencies. This writes `deps/` from the pins in `koja.lock`.
 
 ```sh
 koja deps get
 ```
 
-Start Postgres (listens on host port 5433, schema applied on first boot):
+Start Postgres. It listens on host port 5433 and applies the schema
+on first boot.
 
 ```sh
 docker compose up -d
 ```
 
-Build and run the service:
+Build and run the service.
 
 ```sh
 koja run
 ```
 
-Then exercise it:
+Then exercise it.
 
 ```sh
 # create a link
@@ -107,7 +118,7 @@ collection with a request per route.
 ## Configuration
 
 All settings come from the environment, with defaults matching the
-compose stack:
+compose stack.
 
 | Variable      | Default     | Purpose           |
 | ------------- | ----------- | ----------------- |
@@ -128,4 +139,7 @@ during the connection handshake.
 koja test
 ```
 
-The unit tests cover the JSON helpers and run without a database.
+The unit tests cover the JSON helpers and the routes that answer
+before any database work (service info, 400, 404, 405, and the 503
+a stopped pool produces). They run without a database. The pool
+logs one error per test when its factory fails, which is expected.

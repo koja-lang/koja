@@ -3,8 +3,8 @@ alias Postgres.QueryResult
 alias Postgres.Value
 
 @doc """
-A shortened link: its short `code`, the target `url`, when it was
-created, and how many times it has been visited.
+A shortened link. It carries the short `code`, the target `url`, when
+it was created, and how many times it has been visited.
 """
 struct Link: JSON.Encoding
   code: String

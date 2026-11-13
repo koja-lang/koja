@@ -35,10 +35,11 @@ docs {
 
       { "url": "https://example.com/the/new/target" }
 
-  **Response 200** — the updated link object.
+  **Response 200** is the updated link object.
 
   **Errors**
 
-  - `400 Bad Request` for an invalid body / missing / empty `url`.
+  - `400 Bad Request` if the body is not valid JSON, or the `url` field is
+    missing, not a string, or empty.
   - `404 Not Found` if no link has that code.
 }

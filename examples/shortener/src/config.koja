@@ -2,8 +2,8 @@
 Runtime configuration, resolved from the environment with sensible
 defaults. The Postgres settings mirror `docker-compose.yml`.
 
-The entry process receives a zero-initialized config from the runtime
-(non-argv `Process` configs aren't populated), so `load` reads the
+The runtime hands the entry process a zero-initialized config, since
+only argv `Process` configs are populated, so `load` reads the
 environment directly rather than trusting the passed-in value.
 """
 struct Config
