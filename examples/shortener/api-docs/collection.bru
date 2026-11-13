@@ -7,11 +7,11 @@ docs {
 
   ## Getting started
 
-  1. Start the backing Postgres: `docker compose up` from the project root.
-  2. Run the service: `koja run` (listens on `PORT`, default `8080`).
-  3. Select the **Local** environment in Bruno (sets `baseUrl` and `code`).
+  1. Start the backing Postgres with `docker compose up` from the project root.
+  2. Run the service with `koja run`. It listens on `PORT`, default `8080`.
+  3. Select the **Local** environment in Bruno. It sets `baseUrl` and `code`.
 
-  Run the requests top to bottom: **Create Link** captures the generated
+  Run the requests top to bottom. **Create Link** captures the generated
   `code` into the `{{code}}` variable, so **Get / Update / Delete /
   Redirect** all operate on the link you just made.
 
@@ -20,7 +20,7 @@ docs {
   | Method | Path           | Purpose                              |
   |--------|----------------|--------------------------------------|
   | GET    | `/`            | Service info + route list            |
-  | GET    | `/links`       | List every link                      |
+  | GET    | `/links`       | List links, newest first             |
   | POST   | `/links`       | Create a link from `{"url": ...}`    |
   | GET    | `/links/:code` | Link metadata                        |
   | PUT    | `/links/:code` | Repoint a link at a new URL          |
@@ -29,7 +29,7 @@ docs {
 
   ## Shapes
 
-  A link is returned as:
+  A link is returned in this shape.
 
       {
         "code": "abc123",
@@ -39,7 +39,7 @@ docs {
         "short_path": "/abc123"
       }
 
-  Errors come back as JSON with the matching HTTP status:
+  Errors come back as JSON with the matching HTTP status.
 
       {
         "error": "Not Found",

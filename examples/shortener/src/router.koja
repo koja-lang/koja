@@ -1,21 +1,51 @@
 alias HTTP.Headers
-alias HTTP.Method
-alias HTTP.Request
 alias HTTP.Response
 alias HTTP.Status
 alias JSON.Value
+alias Pooler.Pool
 alias Postgres.Connection
+alias Trail.Conn
+alias Trail.Rejection
+alias Trail.Router
 
-const LINKS_PREFIX: String = "/links/"
 const DEFAULT_LIMIT: Int = 100
 const MAX_LIMIT: Int = 1000
+const CHECKOUT_MS: Int = 5000
 
 @doc """
-Maps an HTTP request to a response, threading the Postgres
-`Connection` through (each query yields an updated connection) and
-returning it alongside the response so the caller can rebind.
+Why a handler could not answer. Each variant renders as one status,
+so a handler fails with the variant and `failure` picks the status.
+"""
+enum Error
+  Database(String)
+  NotFound(String)
+  Unavailable(String)
+  Validation(String)
 
-Routes:
+  fn message(self) -> String
+    match self
+      Error.Database(text) -> text
+      Error.NotFound(text) -> text
+      Error.Unavailable(text) -> text
+      Error.Validation(text) -> text
+    end
+  end
+
+  fn status(self) -> Status
+    match self
+      Error.Database(_) -> Status.internal_server_error()
+      Error.NotFound(_) -> Status.not_found()
+      Error.Unavailable(_) -> Status.new(503, "Service Unavailable")
+      Error.Validation(_) -> Status.bad_request()
+    end
+  end
+end
+
+@doc """
+Builds the route table. Every handler captures the pool when the
+table is built, so each route is a plain `fn (Conn) -> Conn` closure
+and the `Worker` only calls `dispatch`.
+
 - `GET    /`            service info
 - `GET    /links`       list links, newest first (`limit` and `offset` query params)
 - `POST   /links`       create a link from a JSON `{"url": ...}` body
@@ -23,279 +53,216 @@ Routes:
 - `PUT    /links/:code` repoint a link at a new URL
 - `DELETE /links/:code` delete a link
 - `GET    /:code`       302-redirect to the target, counting the hit
+
+`/links` is registered before `/:code`, so the static route wins.
+The router answers 400, 404, and 405 itself through `reject`, in the
+same JSON error shape the handlers use.
 """
-struct Router
-  fn route(req: Request, conn: Connection) -> (Connection, Response)
-    (path, query) = split_query(req.path)
+fn build_router(pool: Pool<Connection>) -> Router
+  Router{}
+    .on_reject(&reject/2)
+    .get("/", c -> info(c))
+    .get("/links", c -> list_links(pool, c))
+    .post("/links", c -> create_link(pool, c))
+    .get("/links/:code", c -> show_link(pool, c))
+    .put("/links/:code", c -> update_link(pool, c))
+    .delete("/links/:code", c -> delete_link(pool, c))
+    .get("/:code", c -> redirect(pool, c))
+end
 
-    match req.method
-      Method.Delete -> handle_delete(path, conn)
-      Method.Get -> handle_get(path, query, conn)
-      Method.Post -> handle_post(req, conn)
-      Method.Put -> handle_put(req, conn)
-      _ ->
-        (
-          conn,
-          error(
-            Status.method_not_allowed(),
-            "#{req.method.to_string()} is not supported",
-          )
-        )
-    end
-  end
+@doc """
+Builds a JSON error response without a `Conn`, for a request the
+`Worker` could not parse.
+"""
+fn error_response(status: Status, message: String) -> Response
+  text = JSON.encode(error_body(status, message), pretty())
+  headers =
+    Headers.new()
+    .set("Content-Type", "application/json")
+    .set("Content-Length", "#{text.byte_length()}")
+  Response{body: text, headers: headers, status: status, version: "HTTP/1.1"}
+end
 
-  @doc """
-  Builds a JSON error response with the given status and message.
-  """
-  fn error(status: Status, message: String) -> Response
-    body: Value = [
-      "error": status.reason.to_json(), "message": message.to_json(),
-      "status": status.code.to_json()
+# --- handlers ---
+
+priv fn info(c: Conn) -> Conn
+  body: Value = [
+    "name": "koja-shortener",
+    "routes": [
+      "GET /links?limit=&offset=", "POST /links", "GET /links/:code",
+      "PUT /links/:code", "DELETE /links/:code", "GET /:code"
     ]
-    json_response(status, body)
+  ]
+  json(c, Status.ok(), body)
+end
+
+priv fn list_links(pool: Pool<Connection>, c: Conn) -> Conn
+  do_list(pool, c) rescue e -> failure(c, e)
+end
+
+priv fn do_list(pool: Pool<Connection>, c: Conn) -> Conn ! Error
+  (limit, offset) = try page_params(c)
+  links = try with_db(pool, db -> LinkStore.page(db, limit, offset))
+  json(c, Status.ok(), links)
+end
+
+priv fn create_link(pool: Pool<Connection>, c: Conn) -> Conn
+  do_create(pool, c) rescue e -> failure(c, e)
+end
+
+priv fn do_create(pool: Pool<Connection>, c: Conn) -> Conn ! Error
+  url = JsonUtil.parse_url(c.body) rescue m -> fail Error.Validation(m)
+  link = try with_db(pool, db -> LinkStore.create(db, url))
+  json(c, Status.created(), link)
+end
+
+priv fn show_link(pool: Pool<Connection>, c: Conn) -> Conn
+  do_show(pool, c) rescue e -> failure(c, e)
+end
+
+priv fn do_show(pool: Pool<Connection>, c: Conn) -> Conn ! Error
+  code = code_param(c)
+  link = try with_db(pool, db -> LinkStore.find(db, code))
+  json(c, Status.ok(), try found(link, code))
+end
+
+priv fn update_link(pool: Pool<Connection>, c: Conn) -> Conn
+  do_update(pool, c) rescue e -> failure(c, e)
+end
+
+priv fn do_update(pool: Pool<Connection>, c: Conn) -> Conn ! Error
+  code = code_param(c)
+  url = JsonUtil.parse_url(c.body) rescue m -> fail Error.Validation(m)
+  link = try with_db(pool, db -> LinkStore.update(db, code, url))
+  json(c, Status.ok(), try found(link, code))
+end
+
+priv fn delete_link(pool: Pool<Connection>, c: Conn) -> Conn
+  do_delete(pool, c) rescue e -> failure(c, e)
+end
+
+priv fn do_delete(pool: Pool<Connection>, c: Conn) -> Conn ! Error
+  code = code_param(c)
+  removed = try with_db(pool, db -> LinkStore.remove(db, code))
+
+  if not removed
+    fail Error.NotFound("no link with code #{code}")
   end
 
-  priv fn handle_get(path: String, query: String, conn: Connection)
-    -> (Connection, Response)
+  c.resp(Status.no_content(), "")
+end
 
-    cond
-      path == "/" ->
-        (conn, info())
+priv fn redirect(pool: Pool<Connection>, c: Conn) -> Conn
+  do_redirect(pool, c) rescue e -> failure(c, e)
+end
 
-      path == "/links" ->
-        list_links(query, conn)
+priv fn do_redirect(pool: Pool<Connection>, c: Conn) -> Conn ! Error
+  code = code_param(c)
+  target = try with_db(pool, db -> LinkStore.visit(db, code))
 
-      else ->
-        match code_after(path, LINKS_PREFIX)
-          Option.Some(code) ->
-            metadata(conn, code)
+  match target
+    Option.Some(url) ->
+      c.resp(Status.new(302, "Found"), "").put_resp_header("Location", url)
 
-          Option.None ->
-            match code_after(path, "/")
-              Option.Some(code) -> redirect(conn, code)
-              Option.None ->
-                (conn, error(Status.not_found(), "no route for #{path}"))
-            end
-        end
-    end
+    Option.None ->
+      fail Error.NotFound("no link with code #{code}")
+  end
+end
+
+# --- database access ---
+
+# Checks a connection out of the pool, runs `work`, and checks the
+# updated connection back in. The pool's `valid` check drops a
+# connection that comes back broken, so nothing here discards.
+priv fn with_db<T>(
+  pool: Pool<Connection>,
+  work: fn (Connection) -> (Connection, Result<T, String>),
+) -> T ! Error
+
+  lease = pool.checkout(CHECKOUT_MS)
+    rescue _ -> fail Error.Unavailable("no database connection available")
+
+  (db, outcome) = work(lease.resource)
+  lease.resource = db
+  pool.checkin(lease)
+  outcome rescue message -> fail Error.Database(message)
+end
+
+priv fn found(link: Option<Link>, code: String) -> Link ! Error
+  match link
+    Option.Some(found) -> found
+    Option.None -> fail Error.NotFound("no link with code #{code}")
+  end
+end
+
+# --- request reads ---
+
+priv fn code_param(c: Conn) -> String
+  c.param("code").or("")
+end
+
+# Parses and bounds the pagination params. `limit` defaults to
+# DEFAULT_LIMIT, `offset` to 0.
+priv fn page_params(c: Conn) -> (Int, Int) ! Error
+  limit = try int_param(c, "limit", DEFAULT_LIMIT)
+  offset = try int_param(c, "offset", 0)
+
+  if limit < 1 or limit > MAX_LIMIT
+    fail Error.Validation("limit must be between 1 and #{MAX_LIMIT}")
   end
 
-  priv fn handle_post(req: Request, conn: Connection) -> (Connection, Response)
-    if req.path != "/links"
-      return (conn, error(Status.not_found(), "no route for POST #{req.path}"))
-    end
-
-    match JsonUtil.parse_url(req.body)
-      Result.Err(message) ->
-        (conn, error(Status.bad_request(), message))
-
-      Result.Ok(url) ->
-        (conn, created) = LinkStore.create(conn, url)
-
-        match created
-          Result.Ok(link) -> (conn, json_response(Status.created(), link))
-          Result.Err(e) -> (conn, db_error(e))
-        end
-    end
+  if offset < 0
+    fail Error.Validation("offset must not be negative")
   end
 
-  priv fn handle_put(req: Request, conn: Connection) -> (Connection, Response)
-    code =
-      match code_after(req.path, LINKS_PREFIX)
-        Option.Some(c) -> c
-        Option.None ->
-          return (
-            conn, error(Status.not_found(), "no route for PUT #{req.path}")
-          )
-      end
+  (limit, offset)
+end
 
-    match JsonUtil.parse_url(req.body)
-      Result.Err(message) ->
-        (conn, error(Status.bad_request(), message))
-
-      Result.Ok(url) ->
-        outcome = LinkStore.update(conn, code, url)
-        link_or_404(outcome, code)
-    end
+priv fn int_param(c: Conn, name: String, default: Int) -> Int ! Error
+  match c.query_param(name)
+    Option.None -> default
+    Option.Some(text) ->
+      text.to_int()
+        rescue _ -> fail Error.Validation("#{name} must be an integer, got '#{text}'")
   end
+end
 
-  priv fn handle_delete(path: String, conn: Connection)
-    -> (Connection, Response)
+# --- responses ---
 
-    code =
-      match code_after(path, LINKS_PREFIX)
-        Option.Some(c) -> c
-        Option.None ->
-          return (
-            conn, error(Status.not_found(), "no route for DELETE #{path}")
-          )
-      end
+priv fn json<T: JSON.Encoding>(c: Conn, status: Status, body: T) -> Conn
+  text = JSON.encode(body, pretty())
+  c.resp(status, text).put_resp_header("Content-Type", "application/json")
+end
 
-    (conn, removed) = LinkStore.remove(conn, code)
+priv fn failure(c: Conn, e: Error) -> Conn
+  json(c, e.status(), error_body(e.status(), e.message()))
+end
 
-    match removed
-      Result.Err(e) -> (conn, db_error(e))
-      Result.Ok(deleted) ->
-        deleted ? (conn, no_content()) : (conn, not_found(code))
-    end
-  end
+# Renders the answers the router gives without a handler in the same
+# error shape.
+priv fn reject(c: Conn, rejection: Rejection) -> Conn
+  message =
+    match rejection
+      Rejection.BadRequest(_) ->
+        "malformed encoding in path or query"
 
-  priv fn list_links(query: String, conn: Connection) -> (Connection, Response)
-    (limit, offset) =
-      match page_params(query)
-        Result.Ok(params) -> params
-        Result.Err(message) ->
-          return (conn, error(Status.bad_request(), message))
-      end
+      Rejection.MethodNotAllowed(_) ->
+        "#{c.method.to_string()} is not supported"
 
-    (conn, listed) = LinkStore.page(conn, limit, offset)
-
-    match listed
-      Result.Ok(links) -> (conn, json_response(Status.ok(), links))
-      Result.Err(e) -> (conn, db_error(e))
-    end
-  end
-
-  # Parses and bounds the pagination params. `limit` defaults to
-  # DEFAULT_LIMIT, `offset` to 0.
-  priv fn page_params(query: String) -> (Int, Int) ! String
-    limit = try int_param(query, "limit", DEFAULT_LIMIT)
-    offset = try int_param(query, "offset", 0)
-
-    if limit < 1 or limit > MAX_LIMIT
-      fail "limit must be between 1 and #{MAX_LIMIT}"
-    end
-
-    if offset < 0
-      fail "offset must not be negative"
-    end
-
-    (limit, offset)
-  end
-
-  priv fn int_param(query: String, name: String, default: Int) -> Int ! String
-    match query_param(query, name)
-      Option.None -> default
-      Option.Some(text) ->
-        text.to_int()
-          rescue _ -> fail "#{name} must be an integer, got '#{text}'"
-    end
-  end
-
-  priv fn query_param(query: String, name: String) -> Option<String>
-    prefix = name <> "="
-
-    query.split("&")
-      .find(pair -> pair.starts_with?(prefix))
-      .map(pair -> pair.slice(
-        Range{start: prefix.length(), stop: pair.length() - 1},
-      ))
-  end
-
-  # Splits a request target into its path and query string, e.g.
-  # "/links?limit=10" into ("/links", "limit=10").
-  priv fn split_query(target: String) -> (String, String)
-    parts = target.split("?")
-    (parts.get(0).or(target), parts.get(1).or(""))
-  end
-
-  priv fn metadata(conn: Connection, code: String) -> (Connection, Response)
-    link_or_404(LinkStore.find(conn, code), code)
-  end
-
-  priv fn redirect(conn: Connection, code: String) -> (Connection, Response)
-    (conn, visited) = LinkStore.visit(conn, code)
-
-    match visited
-      Result.Err(e) ->
-        (conn, db_error(e))
-
-      Result.Ok(target) ->
-        match target
-          Option.Some(url) -> (conn, redirect_response(url))
-          Option.None -> (conn, not_found(code))
-        end
-    end
-  end
-
-  priv fn link_or_404(
-    outcome: (Connection, Result<Option<Link>, String>),
-    code: String,
-  ) -> (Connection, Response)
-
-    (conn, found) = outcome
-
-    match found
-      Result.Err(e) ->
-        (conn, db_error(e))
-
-      Result.Ok(maybe) ->
-        match maybe
-          Option.Some(link) -> (conn, json_response(Status.ok(), link))
-          Option.None -> (conn, not_found(code))
-        end
-    end
-  end
-
-  priv fn info -> Response
-    body: Value = [
-      "name": "koja-shortener",
-      "routes": [
-        "GET /links?limit=&offset=", "POST /links", "GET /links/:code",
-        "PUT /links/:code", "DELETE /links/:code", "GET /:code"
-      ]
-    ]
-    json_response(Status.ok(), body)
-  end
-
-  priv fn not_found(code: String) -> Response
-    error(Status.not_found(), "no link with code #{code}")
-  end
-
-  priv fn db_error(message: String) -> Response
-    error(Status.internal_server_error(), message)
-  end
-
-  priv fn json_response<T: JSON.Encoding>(status: Status, body: T) -> Response
-    text = JSON.encode(body, JSON.EncodeOptions{pretty?: true})
-    headers =
-      Headers.new()
-      .set("Content-Type", "application/json")
-      .set("Content-Length", "#{text.byte_length()}")
-    Response{body: text, headers: headers, status: status, version: "HTTP/1.1"}
-  end
-
-  priv fn redirect_response(target: String) -> Response
-    headers = Headers.new().set("Location", target).set("Content-Length", "0")
-    Response{
-      body: "",
-      headers: headers,
-      status: Status.new(302, "Found"),
-      version: "HTTP/1.1",
-    }
-  end
-
-  priv fn no_content -> Response
-    headers = Headers.new().set("Content-Length", "0")
-    Response{
-      body: "",
-      headers: headers,
-      status: Status.no_content(),
-      version: "HTTP/1.1",
-    }
-  end
-
-  priv fn code_after(path: String, prefix: String) -> Option<String>
-    if not path.starts_with?(prefix)
-      return Option.None
+      Rejection.NotFound ->
+        "no route for #{c.path}"
     end
 
-    code = path.slice(Range{start: prefix.length(), stop: path.length() - 1})
+  json(c, rejection.status(), error_body(rejection.status(), message))
+end
 
-    if code.empty?() or code.contains?("/")
-      return Option.None
-    end
+priv fn error_body(status: Status, message: String) -> Value
+  [
+    "error": status.reason.to_json(), "message": message.to_json(),
+    "status": status.code.to_json()
+  ]
+end
 
-    Option.Some(code)
-  end
+priv fn pretty -> JSON.EncodeOptions
+  JSON.EncodeOptions{pretty?: true}
 end

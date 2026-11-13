@@ -1,7 +1,19 @@
 version = 1
 
 [[package]]
+name = "pooler"
+requirement = "tag = v0.1.0"
+rev = "1a3d0ba5761e9f4eb164e2f9852f7004b3e42e53"
+source = "git+https://github.com/koja-lang/pooler"
+
+[[package]]
 name = "postgres"
 requirement = "tag = v0.5.0"
 rev = "05add4e3eca52f6d579675ec2b99d29674019d18"
 source = "git+https://github.com/hpopp/postgres-koja"
+
+[[package]]
+name = "trail"
+requirement = "tag = v0.1.0"
+rev = "658bbc97c7ef9dfea1c3c5052239e1b56733d02b"
+source = "git+https://github.com/koja-lang/trail"

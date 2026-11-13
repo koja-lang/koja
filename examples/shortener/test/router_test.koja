@@ -1,0 +1,79 @@
+alias HTTP.Headers
+alias HTTP.Method
+alias HTTP.Request
+alias Pooler.Config as PoolConfig
+alias Pooler.Pool
+alias Postgres.Connection
+alias Trail.Router
+
+# A router over a stopped pool. Every checkout reports PoolDown, so a
+# test that passes against it never touched the database.
+priv fn offline_router -> Router
+  create =
+    fn () -> Result<Connection, String>
+      failed: Result<Connection, String> = Result.Err("no database in test")
+      failed
+    end
+
+  pool = Pool.start(PoolConfig{create: create, size: 1}).unwrap()
+  _ = pool.stop()
+  build_router(pool)
+end
+
+priv fn request(method: Method, target: String, body: String) -> Request
+  Request{
+    body: body,
+    headers: Headers.new(),
+    method: method,
+    path: target,
+    version: "HTTP/1.1",
+  }
+end
+
+test "GET / lists the routes without a database"
+  response = offline_router().dispatch(request(Method.Get, "/", ""))
+
+  assert response.status.code == 200
+  assert response.body.contains?("koja-shortener")
+end
+
+test "an unknown route answers 404 in the error shape"
+  response = offline_router().dispatch(
+    request(Method.Get, "/links/abc/extra", ""),
+  )
+
+  assert response.status.code == 404
+  assert response.body.contains?("Not Found")
+  assert response.body.contains?("no route for /links/abc/extra")
+end
+
+test "a verb with no route answers 405 and lists the allowed methods"
+  response = offline_router().dispatch(request(Method.Patch, "/links", ""))
+
+  assert response.status.code == 405
+  assert response.headers.get("Allow") == Option.Some("GET, POST")
+  assert response.body.contains?("PATCH is not supported")
+end
+
+test "invalid pagination fails before any pool checkout"
+  response = offline_router().dispatch(
+    request(Method.Get, "/links?limit=0", ""),
+  )
+
+  assert response.status.code == 400
+  assert response.body.contains?("limit must be between 1 and 1000")
+end
+
+test "an invalid body fails before any pool checkout"
+  response = offline_router().dispatch(request(Method.Post, "/links", "{}"))
+
+  assert response.status.code == 400
+  assert response.body.contains?("missing")
+end
+
+test "a route that needs the database answers 503 while the pool is down"
+  response = offline_router().dispatch(request(Method.Get, "/links", ""))
+
+  assert response.status.code == 503
+  assert response.body.contains?("no database connection available")
+end
