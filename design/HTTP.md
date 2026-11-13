@@ -848,11 +848,11 @@ The worker keeps a buffer and loops.
 
 Three deadlines bound a slow client.
 
-| Setting         | Default | Bounds                                     |
-| --------------- | ------- | ------------------------------------------ |
-| `idle_timeout`  | 60 s    | The wait for the first byte of a request   |
-| `read_timeout`  | 30 s    | The first byte of a request to its last    |
-| `write_timeout` | 30 s    | Each write of a response                   |
+| Setting         | Default | Bounds                                   |
+| --------------- | ------- | ---------------------------------------- |
+| `idle_timeout`  | 60 s    | The wait for the first byte of a request |
+| `read_timeout`  | 30 s    | The first byte of a request to its last  |
+| `write_timeout` | 30 s    | Each write of a response                 |
 
 A request that passes `read_timeout` gets a 408. A `Parser.Error`
 gets the status that the codec section lists. Both go through
@@ -954,14 +954,14 @@ descriptor does not show, so one read for each wakeup is not enough.
 It gives the bytes to `receive`, acts on the events, writes
 `take_output()`, and watches the descriptor again.
 
-| Event               | The worker                                    |
-| ------------------- | --------------------------------------------- |
-| `Request`           | Starts a collector entry                      |
-| `Data`              | Appends, or answers 413 past the body cap     |
-| `End`               | Finishes the entry and spawns the handler     |
-| `UnsupportedMethod` | Answers 501                                   |
-| `Reset`             | Drops the entry, marks the stream as dropped  |
-| `Closed`            | Stops reading                                 |
+| Event               | The worker                                   |
+| ------------------- | -------------------------------------------- |
+| `Request`           | Starts a collector entry                     |
+| `Data`              | Appends, or answers 413 past the body cap    |
+| `End`               | Finishes the entry and spawns the handler    |
+| `UnsupportedMethod` | Answers 501                                  |
+| `Reset`             | Drops the entry, marks the stream as dropped |
+| `Closed`            | Stops reading                                |
 
 A response from a handler goes to `respond`. A crash is a 500 on
 that stream, and the other streams on the connection do not notice.
@@ -1237,11 +1237,11 @@ stays possible.
 
 ### Timeouts
 
-| Setting           | Default | Bounds                                   |
-| ----------------- | ------- | ---------------------------------------- |
-| `connect_timeout` | 5 s     | The TCP connect and the TLS handshake    |
-| `pool_timeout`    | 5 s     | The wait for a lease on HTTP/1.1         |
-| `timeout`         | 30 s    | The whole request, to its last byte      |
+| Setting           | Default | Bounds                                |
+| ----------------- | ------- | ------------------------------------- |
+| `connect_timeout` | 5 s     | The TCP connect and the TLS handshake |
+| `pool_timeout`    | 5 s     | The wait for a lease on HTTP/1.1      |
+| `timeout`         | 30 s    | The whole request, to its last byte   |
 
 Each function takes a `timeout` that replaces the default for one
 request. No wait in `scout` is without a bound.
