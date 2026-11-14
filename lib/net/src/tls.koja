@@ -84,6 +84,7 @@ enum TLSError
   PeerClosed
   PrivateKeyInvalid
   ProtocolFailed
+  ProtocolNameInvalid
   TrustStoreInvalid
   VerificationFailed(VerificationError)
 
@@ -109,6 +110,9 @@ enum TLSError
 
       TLSError.ProtocolFailed ->
         "TLS protocol failure"
+
+      TLSError.ProtocolNameInvalid ->
+        "ALPN protocol name is empty or longer than 255 bytes"
 
       TLSError.TrustStoreInvalid ->
         "CA bundle was rejected"
@@ -152,8 +156,13 @@ values. To use files, read and parse them first, as in
 
 `with_ca` replaces the system trust store with a custom CA bundle
 for verification.
+
+`with_alpn` names the application protocols a client offers during
+the handshake, most preferred first. `alpn` is empty by default, and
+the client then offers none.
 """
 struct TLSConfig
+  alpn: List<String> = []
   identity: Option<TLSIdentity>
   trust: TrustStore
   verify: Bool
@@ -186,16 +195,56 @@ struct TLSConfig
   end
 
   @doc """
+  Returns a copy of the configuration that offers `protocols` through
+  ALPN, most preferred first, as in
+  `TLSConfig.client().with_alpn(["h2", "http/1.1"])`. The server makes
+  the choice and can follow its own order. After the handshake,
+  `TCPSocket.alpn` returns the protocol the server selected.
+
+  Each name has from 1 to 255 bytes. The client handshake fails with
+  `TLSError.ProtocolNameInvalid` for any other name. Only a client
+  offers protocols. A server handshake ignores the list.
+  """
+  fn with_alpn(self, protocols: List<String>) -> TLSConfig
+    TLSConfig{
+      alpn: protocols,
+      identity: self.identity,
+      trust: self.trust,
+      verify: self.verify,
+    }
+  end
+
+  @doc """
   Returns a copy of the configuration that trusts the given CA
   bundle instead of the system trust store.
   """
   fn with_ca(self, ca: Certificate) -> TLSConfig
     TLSConfig{
+      alpn: self.alpn,
       identity: self.identity,
       trust: TrustStore.Custom(ca),
       verify: self.verify,
     }
   end
+end
+
+# Encodes ALPN protocol names in wire form, where one length byte comes
+# before each name. Package-private so the tests can call it.
+priv fn alpn_wire(protocols: List<String>) -> Binary ! TLSError
+  wire: Binary = <<>>
+
+  for entry in protocols
+    name = entry.to_binary()
+    size = name.byte_size()
+
+    if size == 0 or size > 255
+      fail TLSError.ProtocolNameInvalid
+    end
+
+    wire = <<wire, size: UInt8>> <> name
+  end
+
+  wire
 end
 
 @doc """
@@ -257,12 +306,38 @@ struct TLSSession
   end
 
   @doc """
+  Returns the application protocol the handshake selected through
+  ALPN, or `Option.None` when it selected none.
+  """
+  fn alpn(self) -> Option<String>
+    data: CPtr<CPtr<UInt8>> = CPtr.alloc(1)
+    size: CPtr<UInt32> = CPtr.alloc(1)
+    ssl_get0_alpn_selected(self.ssl, data, size)
+    name = data.read()
+    length: Int = size.read()
+    data.free()
+    size.free()
+
+    if name.null?() or length == 0
+      return Option.None
+    end
+
+    # BoringSSL owns the name. Copy it and never free it.
+    match name.to_binary(length).to_string()
+      Result.Ok(selected) -> Option.Some(selected)
+      Result.Err(_) -> Option.None
+    end
+  end
+
+  @doc """
   Performs a client-side TLS handshake over the connected `descriptor`.
   Sends `hostname` for SNI and, when `config.verify` is set, checks
-  the server certificate chain against it. Suspends the process while
-  the socket is not ready. `timeout` bounds the whole handshake,
-  measured from this call, and a wait past it fails with
-  `IOError.TimedOut`. Returns the established session.
+  the server certificate chain against it. Offers the protocols in
+  `config.alpn`, and fails with `TLSError.ProtocolNameInvalid` when a
+  name cannot be encoded. Suspends the process while the socket is not
+  ready. `timeout` bounds the whole handshake, measured from this
+  call, and a wait past it fails with `IOError.TimedOut`. Returns the
+  established session.
   """
   fn connect(
     descriptor: Descriptor,
@@ -278,6 +353,15 @@ struct TLSSession
     end
 
     match configure_verification(ctx, config)
+      Result.Err(e) ->
+        ssl_ctx_free(ctx)
+        fail e
+
+      Result.Ok(_) ->
+        ()
+    end
+
+    match configure_alpn(ctx, config.alpn)
       Result.Err(e) ->
         ssl_ctx_free(ctx)
         fail e
@@ -415,6 +499,24 @@ struct TLSSession
     end
 
     try add_store_certs(store, bio, loaded + 1)
+  end
+
+  priv fn configure_alpn(ctx: CPtr<UInt8>, protocols: List<String>) ! TLSError
+    wire = try alpn_wire(protocols)
+
+    if wire.byte_size() > 0
+      # Returns 0 on success, the reverse of its neighbors. BoringSSL
+      # copies the list, so the borrow ends with the call.
+      failed: Int = ssl_ctx_set_alpn_protos(
+        ctx,
+        CPtr.borrow(wire),
+        wire.byte_size(),
+      )
+
+      if failed != 0
+        fail TLSError.Internal
+      end
+    end
   end
 
   priv fn configure_verification(ctx: CPtr<UInt8>, config: TLSConfig)
@@ -760,6 +862,13 @@ struct TLSSession
   @extern "C" @link "ssl:SSL_CTX_new"
   priv fn ssl_ctx_new(method: CPtr<UInt8>) -> CPtr<UInt8>
 
+  @extern "C" @link "ssl:SSL_CTX_set_alpn_protos"
+  priv fn ssl_ctx_set_alpn_protos(
+    ctx: CPtr<UInt8>,
+    protocols: CPtr<UInt8>,
+    len: Int64,
+  ) -> Int32
+
   @extern "C" @link "ssl:SSL_CTX_set_default_verify_paths"
   priv fn ssl_ctx_set_default_verify_paths(ctx: CPtr<UInt8>) -> Int32
 
@@ -778,6 +887,13 @@ struct TLSSession
 
   @extern "C" @link "ssl:SSL_free"
   priv fn ssl_free(ssl: CPtr<UInt8>)
+
+  @extern "C" @link "ssl:SSL_get0_alpn_selected"
+  priv fn ssl_get0_alpn_selected(
+    ssl: CPtr<UInt8>,
+    out_data: CPtr<CPtr<UInt8>>,
+    out_len: CPtr<UInt32>,
+  )
 
   @extern "C" @link "ssl:SSL_get_error"
   priv fn ssl_get_error(ssl: CPtr<UInt8>, ret: Int64) -> Int32

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `PACKAGE_NAME` and `PACKAGE_VERSION`, constants every package declares from the `name` and `version` fields of its `koja.toml`.
 - `Koja.version()` returns the version of the toolchain that compiled the program, the same string `koja --version` prints.
+- `IO.Writer.write_all(data, options)` writes all of `data`. It is a default body on the protocol, so `IO.Descriptor`, `TCPSocket`, and every other writer have it. It calls `write` until the destination has accepted every byte. `options.timeout` bounds each `write`, not the whole call, and a failure can come after some bytes are written. The contract of `write` now says that a call with data writes at least one byte or fails.
+- `TCPSocket.set_nodelay(enabled)` and `Socket.set_nodelay(enabled)` turn the `TCP_NODELAY` option on or off, and fail with `Socket.Error`. A new connection keeps the system default, which is off. A package that writes a message and then waits for the reply turns it on after `connect` or `accept`.
+- `TLSConfig.with_alpn(protocols)` names the application protocols a client offers during the TLS handshake, as in `TLSConfig.client().with_alpn(["h2", "http/1.1"])`. `TCPSocket.alpn()` and `TLSSession.alpn()` return the protocol the server selected as an `Option<String>`, with `Option.None` when it selected none and on a connection without TLS. The list is the new field `TLSConfig.alpn`, which is empty by default. A name that is empty or longer than 255 bytes fails the client handshake with the new variant `TLSError.ProtocolNameInvalid`, so an exhaustive `match` on `TLSError` needs one more arm. A server handshake ignores the list.
 
 ### Fixed
 

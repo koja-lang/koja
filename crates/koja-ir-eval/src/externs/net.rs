@@ -13,8 +13,8 @@
 //!   handshake is initiated), so it drives the runtime's split
 //!   `connect_start` / `connect_finish` around an eval `io_block` on
 //!   writability.
-//! - `create` / `bind` / `listen` / `setsockopt_reuse` and the last-error
-//!   readers pass straight through.
+//! - `create` / `bind` / `listen` / `setsockopt_nodelay` /
+//!   `setsockopt_reuse` and the last-error readers pass straight through.
 
 use koja_runtime::{ConnectProgress, connect_finish, connect_start, set_last_error};
 use koja_runtime_core::{Interest, IoWait, deadline_from_user_millis};
@@ -47,6 +47,10 @@ pass_through_externs! {
         port: Int64,
     ) -> Int64;
     socket_listen => fn koja_socket_listen(fd: Int32, backlog: Int64) -> Int64;
+    socket_setsockopt_nodelay => fn koja_socket_setsockopt_nodelay(
+        fd: Int32,
+        enabled: Int64,
+    ) -> Int64;
     socket_setsockopt_reuse => fn koja_socket_setsockopt_reuse(fd: Int32) -> Int64;
 }
 

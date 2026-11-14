@@ -155,14 +155,14 @@ struct Request
   headers: Headers
   method: Method
   uri: URI
-  version: Version = Version.HTTP11
+  version: Version = Version.HTTP1_1
 end
 
 struct Response
   body: Binary
   headers: Headers
   status: Status
-  version: Version = Version.HTTP11
+  version: Version = Version.HTTP1_1
 end
 ```
 
@@ -258,15 +258,15 @@ on the status line, and the parser drops the phrase a server sent.
 
 ```koja
 enum Version
-  HTTP10
-  HTTP11
+  HTTP1_0
+  HTTP1_1
   HTTP2
 end
 ```
 
 The field says what a received message arrived as. A writer ignores
 it, because the connection decides the wire version and the message
-does not. The default is `HTTP11`, so code that builds a message
+does not. The default is `HTTP1_1`, so code that builds a message
 never names it.
 
 #### `Headers` does not change
@@ -374,6 +374,7 @@ The client is rebuilt on the pieces above.
 
 - It writes with `write_all` and reads bytes into the incremental
   parser, so a binary body and a multibyte character both survive.
+- It turns `TCP_NODELAY` on after it connects.
 - The body parameters take `Binary | String`.
 - Every function takes a trailing
   `timeout: Option<Duration> = Option.None`. It bounds the whole
@@ -430,18 +431,30 @@ signature when it lands. The client half ships first.
 
 #### `TCP_NODELAY`
 
-Every TCP connection has `TCP_NODELAY` set, from `connect` and from
-`accept`. `TCPSocket.set_nodelay(false)` turns it off.
+`TCPSocket.set_nodelay(enabled)` sets the option. A new connection
+keeps the system default, which is off, and `Net` sets nothing for
+the caller.
 
-This is Go's default, and it fits how Koja programs write. A process
-builds a whole message, a response or a frame or a query, and writes
-it once. Nagle's algorithm adds nothing to that pattern except a
-delay when a small write waits for an acknowledgment. The Postgres
-driver gets the same fix with no change of its own.
+A package that speaks a message protocol turns the option on after
+`connect` or `accept`. Such a package builds a whole message, a
+response or a frame or a query, and writes it once. Nagle's
+algorithm adds nothing to that pattern except a delay when a small
+write waits for an acknowledgment. `ranger`, `scout`, and the
+one-shot client each make the call, and the Postgres driver can make
+it too.
+
+`Net` does not make the call because the call can fail. On macOS it
+fails with `EINVAL` on a connection that the peer already reset. If
+`accept` made the call, an accept loop would get
+`SocketError.Unknown` and could not tell one dead connection from a
+fault in the listener. A call that the package makes puts the error
+on the connection it belongs to, and the package closes that
+connection.
 
 [IO.md](IO.md) expected a `TCPListener.Options` for options that an
-accepted connection inherits. A default needs no options struct, so
-that type stays out until an option needs a choice at the listener.
+accepted connection inherits. A call on the accepted socket needs no
+options struct, so that type stays out until an option must be set
+on the listener itself.
 
 #### `write_all`
 
@@ -782,10 +795,12 @@ accept the connection and then close it, with or without a 503.
 
 A worker owns one connection from accept to close.
 
-1. If the server has a `TLSConfig`, the worker runs the TLS
+1. The worker turns `TCP_NODELAY` on. If the call fails, the
+   connection is already dead, and the worker closes it and exits.
+2. If the server has a `TLSConfig`, the worker runs the TLS
    handshake under a deadline. The listener never waits for a
    handshake.
-2. The worker reads the first bytes. If they are the start of
+3. The worker reads the first bytes. If they are the start of
    `HTTP2.PREFACE`, the connection is HTTP/2. If they are not, it is
    HTTP/1.1.
 
@@ -1135,7 +1150,9 @@ The first connection to an origin fixes its protocol.
   negotiates it.
 
 An HTTP/1.1 origin gets a pool. An HTTP/2 origin gets shared
-connections.
+connections. Every connection of both kinds has `TCP_NODELAY` turned
+on after it connects, and a connection that refuses the option
+counts as a failed connect.
 
 A directory process holds the entries. Each request asks it once for
 the route to its origin. After that the caller talks to the pool or
@@ -1355,11 +1372,14 @@ and `scout` sections. They are functions over values, with no
 process and no policy in them. They can start while the rest is
 under review.
 
-1. **`Net`.** `write_all`, `TCP_NODELAY` by default, and the client
-   half of ALPN. Nothing breaks.
+1. **`Net`.** Done. `write_all`, `set_nodelay`, and the client half
+   of ALPN. The one break is the new variant
+   `TLSError.ProtocolNameInvalid`, which an exhaustive `match` must
+   cover.
 2. **`HTTP`.** The vocabulary types, the incremental parser,
-   `serialize` to bytes, and the one-shot client on top of them.
-   This is the breaking step.
+   `serialize` to bytes, and the one-shot client on top of them. The
+   client turns `TCP_NODELAY` on after it connects. This is the
+   breaking step.
 3. **`http2`.** A new package. `Frame` and `HPACK` come first, then
    the core, then the two connection types and `Collector`. Its
    tests need no socket. A client connection talks to a server
@@ -1468,9 +1488,13 @@ body to the application piece by piece.
 - **A parser that keeps its position.** It is faster for a body that
   arrives in many reads, and it makes the parser a value that every
   caller must hold. It can come later behind the same functions.
-- **`TCP_NODELAY` that a caller turns on.** Every protocol package
-  would have to remember it. A package that forgets gets a delay
-  that is hard to find.
+- **`TCP_NODELAY` on by default.** Go does this, and no package can
+  then forget the option. The call can fail on a connection that is
+  already dead, and an accept loop cannot tell that failure from a
+  fault in the listener. `Net` could ignore the failure, and then a
+  connection without the option looks the same as one with it. A
+  package that forgets the call gets a delay that is hard to find.
+  This design accepts that cost.
 - **A pool of workers in `ranger`.** A pool bounds a resource that
   is expensive to make. A Koja process is not. The connection limit
   and the stream limit bound the load directly.

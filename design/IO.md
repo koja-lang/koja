@@ -198,7 +198,7 @@ works on a file, a socket, or `STDIN`, so the byte-accumulation loops
 in the postgres driver and the HTTP parser have one implementation to
 lean on. `read_to_end` is not in the protocol. `File.read(path)` and
 `File.read_binary(path)` cover whole-file reads, and a stream version
-can land with `write_all` when a caller needs it. A `lines()`
+can land when a caller needs it. A `lines()`
 `Enumeration` can follow once the buffered reader question below is
 settled.
 
@@ -583,10 +583,11 @@ The planned filesystem statics in an `FS` module are resolved by
    separate choice.
 3. **Closed.** `IO.Descriptor.block` and friends stay on the
    descriptor. See "`IO.Descriptor` is the handle".
-4. **`write_all` and `read_to_end`.** `IO.Writer.write` returns the
-   count, the Rust and Go position, and a short write is the caller's
-   to notice. A `write_all` default body on `IO.Writer` and a
-   `read_to_end` on `IO.Reader` are the obvious additions. They wait
-   for a caller, and for the one-shot `File.read` and `File.write` to
-   be rebuilt over `open` and the protocols instead of the
-   `read_all` and `write_all` runtime entry points they use today.
+4. **`read_to_end`.** `IO.Writer.write` returns the count, the Rust
+   and Go position. `write_all` is now a default body on `IO.Writer`
+   for a caller that needs every byte written, and HTTP was the
+   caller it waited for. A `read_to_end` on `IO.Reader` is the
+   matching addition. It waits for a caller, and for the one-shot
+   `File.read` and `File.write` to be rebuilt over `open` and the
+   protocols instead of the `read_all` and `write_all` runtime entry
+   points they use today.

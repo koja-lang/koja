@@ -113,6 +113,29 @@ test "TCPSocket.read fails with TimedOut when the peer is silent"
   end
 end
 
+test "TCPSocket.set_nodelay sets the option on both ends of a connection"
+  (listener, port) = try bind_loopback_tcp()
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
+  client = try require(TCPSocket.connect_addr(addr))
+  accepted = listener.accept(Option.Some(SHORT_WAIT))
+  _ = listener.close()
+  server = try require(accepted)
+
+  client_on = client.set_nodelay(true)
+  server_on = server.set_nodelay(true)
+  written = client.write_all("ping")
+  read = server.read(16, ReaderOptions{timeout: Option.Some(SHORT_WAIT)})
+  client_off = client.set_nodelay(false)
+  _ = client.close()
+  _ = server.close()
+
+  try require(client_on)
+  try require(server_on)
+  try require(written)
+  assert try require(read) == "ping".to_binary()
+  try require(client_off)
+end
+
 test "UDPSocket.bind to port 0"
   sock = try require(UDPSocket.bind(0))
   _ = sock.close()
