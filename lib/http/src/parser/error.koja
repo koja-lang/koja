@@ -1,0 +1,25 @@
+@doc """
+Why the parser rejected a message. Each cause is one response a
+server sends: `BodyTooLarge` is 413, `HeadersTooLarge` is 431,
+`Malformed` is 400, and `UnsupportedMethod` is 501. `Malformed`
+carries what was wrong, and `UnsupportedMethod` carries the method
+name.
+"""
+enum Parser.Error
+  BodyTooLarge
+  HeadersTooLarge
+  Malformed(String)
+  UnsupportedMethod(String)
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      Parser.Error.BodyTooLarge -> "the body is larger than the limit"
+      Parser.Error.HeadersTooLarge -> "the head is larger than the limit"
+      Parser.Error.Malformed(detail) -> "malformed message: " <> detail
+      Parser.Error.UnsupportedMethod(name) -> "unsupported method: " <> name
+    end
+  end
+end

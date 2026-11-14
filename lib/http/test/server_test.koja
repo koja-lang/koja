@@ -2,20 +2,21 @@ test "Response.new sets Content-Length and version"
   resp = Response.new(Status.ok(), "hello")
 
   assert resp.status.code == 200
-  assert resp.version == "HTTP/1.1"
+  assert resp.version == Version.HTTP1_1
   assert resp.headers.get("Content-Length").unwrap() == "5"
-  assert resp.body == "hello"
+  assert resp.body == "hello".to_binary()
 end
 
-test "Request.body_as_binary converts body"
-  req = Request{
-    body: "test",
-    headers: Headers.new(),
-    method: Method.Get,
-    path: "/",
-    version: "HTTP/1.1",
-  }
-  bin = req.body_as_binary()
+test "a handler reads the path and the body of a parsed request"
+  raw = "POST /items HTTP/1.1\r\nHost: example.com\r\nContent-Length: 4\r\n\r\ntest"
 
-  assert bin.byte_size() == 4
+  req =
+    match Parser.parse_request(raw.to_binary())
+      Result.Ok(Parser.Outcome.Complete((request, _))) -> request
+      _ -> fail "expected a complete request"
+    end
+
+  assert req.uri.path == "/items"
+  assert req.body.byte_size() == 4
+  assert req.text() == Result.Ok("test")
 end

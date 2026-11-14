@@ -1,60 +1,53 @@
 @doc """
-An HTTP response with status, headers, body, and protocol
-version. Returned by the parser when reading server responses,
-or constructed by handler functions for the server.
+An HTTP response with a status, headers, and a body. The parser
+creates one from the bytes a client reads, and a server handler
+builds one with `Response.new`.
+
+`body` holds bytes. Use `text` to decode it as UTF-8.
+
+`version` says which HTTP version a received response arrived as. A
+writer ignores it.
 """
 struct Response
-  body: String
+  body: Binary
   headers: Headers
   status: Status
-  version: String
+  version: Version = Version.HTTP1_1
 
   @doc """
-  Converts the body to a Binary value.
+  Creates a response with the given status and body. A `String` body
+  is stored as its UTF-8 bytes. Sets `Content-Length` from the byte
+  size of the body.
   """
-  fn body_as_binary(self) -> Binary
-    self.body.to_binary()
+  fn new(status: Status, body: Binary | String) -> Response
+    bytes = body_bytes(body)
+    headers = Headers.new().set("Content-Length", "#{bytes.byte_size()}")
+    Response{body: bytes, headers: headers, status: status}
   end
 
   @doc """
-  Creates a response with the given status and body.
-  Automatically sets Content-Length and version HTTP/1.1.
+  Encodes the response as an HTTP/1.1 message. The status line
+  carries `status.reason()`. Sets `Content-Length` from the byte size
+  of the body when the headers have none. Does not set `Connection`.
+  Ignores `version`, and never writes a chunked body.
   """
-  fn new(status: Status, body: String) -> Response
-    headers = Headers.new().set("Content-Length", "#{body.length()}")
-    Response{body: body, headers: headers, status: status, version: "HTTP/1.1"}
+  fn serialize(self) -> Binary
+    head = "HTTP/1.1 #{self.status.code} " <> self.status.reason() <> "\r\n" <>
+      header_lines(self.headers)
+
+    if not self.headers.has?("Content-Length")
+      head = head <> "Content-Length: #{self.body.byte_size()}\r\n"
+    end
+
+    (head <> "\r\n").to_binary() <> self.body
   end
 
   @doc """
-  Serializes the response into a raw HTTP/1.1 message string
-  suitable for writing to a TCP socket.
+  Decodes the body as UTF-8. Fails with
+  `String.ConversionError.InvalidUTF8` when the bytes are not valid
+  UTF-8.
   """
-  fn serialize(self) -> String
-    out = self.version <> " #{self.status.code} " <> self.status.reason <>
-      "\r\n"
-
-    headers = self.headers
-
-    if not headers.has?("Content-Length")
-      headers = headers.set("Content-Length", "#{self.body.byte_length()}")
-    end
-
-    out = Response.write_headers(out, headers, 0) <> "\r\n"
-
-    if not self.body.empty?()
-      out = out <> self.body
-    end
-
-    out
-  end
-
-  priv fn write_headers(out: String, headers: Headers, i: Int) -> String
-    if i >= headers.entries.length()
-      return out
-    end
-
-    entry = headers.entries.get(i).unwrap()
-    out = out <> entry.name <> ": " <> entry.value <> "\r\n"
-    Response.write_headers(out, headers, i + 1)
+  fn text(self) -> String ! String.ConversionError
+    try self.body.to_string()
   end
 end

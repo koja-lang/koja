@@ -1,0 +1,231 @@
+alias Test.require
+
+test "Request.version defaults to HTTP/1.1"
+  request = try build_request(
+    Method.Get,
+    "http://example.com/",
+    Headers.new(),
+    "",
+  )
+
+  assert request.version == Version.HTTP1_1
+end
+
+test "Request.text decodes the body as UTF-8"
+  request = try build_request(
+    Method.Post,
+    "http://example.com/",
+    Headers.new(),
+    "héllo",
+  )
+
+  assert request.body.byte_size() == 6
+  assert request.text() == Result.Ok("héllo")
+end
+
+test "Request.text fails for a body that is not UTF-8"
+  request = try build_request(
+    Method.Post,
+    "http://example.com/",
+    Headers.new(),
+    <<255, 254>>,
+  )
+
+  assert request.text() == Result.Err(String.ConversionError.InvalidUTF8)
+end
+
+test "Request.serialize writes the path and the query as the target"
+  headers = Headers.new().set("Accept", "*/*")
+  request = try build_request(
+    Method.Get,
+    "http://example.com/search?q=koja#top",
+    headers,
+    "",
+  )
+
+  expected = "GET /search?q=koja HTTP/1.1\r\nHost: example.com\r\nAccept: */*\r\n\r\n"
+
+  assert (try serialized_text(request)) == expected
+end
+
+test "Request.serialize writes an empty path as a slash"
+  request = try build_request(
+    Method.Get,
+    "http://example.com",
+    Headers.new(),
+    "",
+  )
+
+  assert (try serialized_text(request)) ==
+    "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+end
+
+test "Request.serialize adds Host with a port that is not the default"
+  cases: List<(String, String)> = [
+    ("http://example.com:8080/", "Host: example.com:8080\r\n"),
+    ("http://example.com:80/", "Host: example.com\r\n"),
+    ("https://example.com/", "Host: example.com\r\n"),
+    ("https://example.com:8443/", "Host: example.com:8443\r\n"),
+    ("http://[::1]:3000/", "Host: [::1]:3000\r\n")
+  ]
+
+  for test_case in cases
+    (url, expected) = test_case
+    request = try build_request(Method.Get, url, Headers.new(), "")
+
+    assert (try serialized_text(request)).contains?(expected)
+  end
+end
+
+test "Request.serialize keeps a Host header the caller set"
+  headers = Headers.new().set("host", "other.example")
+  request = try build_request(Method.Get, "http://example.com/", headers, "")
+
+  assert (try serialized_text(request)) ==
+    "GET / HTTP/1.1\r\nhost: other.example\r\n\r\n"
+end
+
+test "Request.serialize sets Content-Length from the byte size of the body"
+  request = try build_request(
+    Method.Post,
+    "http://example.com/items",
+    Headers.new(),
+    "héllo",
+  )
+
+  expected = "POST /items HTTP/1.1\r\nHost: example.com\r\nContent-Length: 6\r\n\r\nhéllo"
+
+  assert (try serialized_text(request)) == expected
+end
+
+test "Request.serialize sets Content-Length for a method that expects a body"
+  for method in [Method.Patch, Method.Post, Method.Put, Method.Query]
+    request = try build_request(
+      method,
+      "http://example.com/",
+      Headers.new(),
+      "",
+    )
+
+    assert (try serialized_text(request)).contains?("Content-Length: 0\r\n")
+  end
+
+  for method in [Method.Delete, Method.Get, Method.Head, Method.Options]
+    request = try build_request(
+      method,
+      "http://example.com/",
+      Headers.new(),
+      "",
+    )
+
+    assert not (try serialized_text(request)).contains?("Content-Length")
+  end
+
+  with_body = try build_request(
+    Method.Delete,
+    "http://example.com/",
+    Headers.new(),
+    "ab",
+  )
+
+  assert (try serialized_text(with_body)).contains?("Content-Length: 2\r\n")
+end
+
+test "Request.serialize keeps a Content-Length the caller set"
+  headers = Headers.new().set("Content-Length", "2")
+  request = try build_request(Method.Post, "http://example.com/", headers, "ab")
+
+  expected = "POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 2\r\n\r\nab"
+
+  assert (try serialized_text(request)) == expected
+end
+
+test "Request.serialize does not set Connection"
+  request = try build_request(
+    Method.Get,
+    "http://example.com/",
+    Headers.new(),
+    "",
+  )
+
+  assert not (try serialized_text(request)).contains?("Connection")
+end
+
+test "Request.serialize keeps a body that is not UTF-8"
+  body = <<0, 255, 254, 13, 10>>
+  request = try build_request(
+    Method.Put,
+    "http://example.com/blob",
+    Headers.new(),
+    body,
+  )
+  head = "PUT /blob HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\n\r\n"
+
+  assert request.serialize() == head.to_binary() <> body
+end
+
+test "Request.serialize writes the host and the port as a CONNECT target"
+  request = try build_request(
+    Method.Connect,
+    "//example.com:443",
+    Headers.new(),
+    "",
+  )
+
+  expected = "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+
+  assert (try serialized_text(request)) == expected
+end
+
+test "Request.serialize writes the asterisk target of OPTIONS"
+  request = try build_request(
+    Method.Options,
+    "http://example.com",
+    Headers.new(),
+    "",
+  )
+  request.uri.path = "*"
+
+  assert (try serialized_text(request)) ==
+    "OPTIONS * HTTP/1.1\r\nHost: example.com\r\n\r\n"
+end
+
+test "a serialized request parses back to the same request"
+  headers = Headers.new().set("Content-Type", "application/json")
+  request = try build_request(
+    Method.Post,
+    "http://example.com:8080/a/b?c=d",
+    headers,
+    "{\"n\":1}",
+  )
+
+  parsed =
+    match Parser.parse_request(request.serialize())
+      Result.Ok(Parser.Outcome.Complete((message, _))) -> message
+      _ -> fail "expected the serialized request to parse"
+    end
+
+  assert parsed.method == request.method
+  assert parsed.body == request.body
+  assert parsed.uri.path == "/a/b"
+  assert parsed.uri.query == Option.Some("c=d")
+  assert parsed.uri.host == Option.Some("example.com")
+  assert parsed.uri.port == Option.Some(8080)
+  assert parsed.headers.get("Content-Type") == Option.Some("application/json")
+  assert parsed.headers.get("Content-Length") == Option.Some("7")
+end
+
+priv fn build_request(
+  method: Method,
+  url: String,
+  headers: Headers,
+  body: Binary | String,
+) -> Request ! Test.Failure
+
+  uri = try require(URI.parse(url))
+  Request{body: body_bytes(body), headers: headers, method: method, uri: uri}
+end
+
+priv fn serialized_text(request: Request) -> String ! Test.Failure
+  try require(request.serialize().to_string())
+end

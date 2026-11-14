@@ -1,70 +1,144 @@
 alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
+alias IO.Writer.Options as WriterOptions
 alias Net.Socket.Error as SocketError
 alias Net.TCPSocket
+alias Net.TLSConfig
 alias Net.TLSError
 alias URI.Error as URIError
 
+# The largest response body the client accepts, 16 MiB.
+priv const MAX_RESPONSE_BODY_BYTES: Int = 16777216
+
+priv const READ_SIZE: Int = 8192
+
 @doc """
-Sends a DELETE request to the given URL.
+Sends a DELETE request to the given URL. See `request` for the
+timeout and the errors.
 """
-fn delete(url: String, headers: Headers) -> Response ! Error
-  try request(Method.Delete, url, headers, "")
+fn delete(
+  url: String,
+  headers: Headers,
+  timeout: Option<Duration> = Option.None,
+) -> Response ! Error | SocketError | IOError | TLSError
+
+  try request(Method.Delete, url, headers, "", timeout)
 end
 
 @doc """
-Sends a GET request to the given URL.
+Sends a GET request to the given URL. See `request` for the timeout
+and the errors.
 """
-fn get(url: String) -> Response ! Error
-  try request(Method.Get, url, Headers.new(), "")
+fn get(url: String, timeout: Option<Duration> = Option.None)
+  -> Response ! Error | SocketError | IOError | TLSError
+
+  try request(Method.Get, url, Headers.new(), "", timeout)
 end
 
 @doc """
-Sends a HEAD request to the given URL.
+Sends a HEAD request to the given URL. The response has no body. See
+`request` for the timeout and the errors.
 """
-fn head(url: String) -> Response ! Error
-  try request(Method.Head, url, Headers.new(), "")
+fn head(url: String, timeout: Option<Duration> = Option.None)
+  -> Response ! Error | SocketError | IOError | TLSError
+
+  try request(Method.Head, url, Headers.new(), "", timeout)
 end
 
 @doc """
-Sends an OPTIONS request to the given URL.
+Sends an OPTIONS request to the given URL. See `request` for the
+timeout and the errors.
 """
-fn options(url: String) -> Response ! Error
-  try request(Method.Options, url, Headers.new(), "")
+fn options(url: String, timeout: Option<Duration> = Option.None)
+  -> Response ! Error | SocketError | IOError | TLSError
+
+  try request(Method.Options, url, Headers.new(), "", timeout)
 end
 
 @doc """
-Sends a PATCH request to the given URL with a body.
+Sends a PATCH request to the given URL with a body. See `request` for
+the timeout and the errors.
 """
-fn patch(url: String, body: String, headers: Headers) -> Response ! Error
-  try request(Method.Patch, url, headers, body)
+fn patch(
+  url: String,
+  body: Binary | String,
+  headers: Headers,
+  timeout: Option<Duration> = Option.None,
+) -> Response ! Error | SocketError | IOError | TLSError
+
+  try request(Method.Patch, url, headers, body, timeout)
 end
 
 @doc """
-Sends a POST request to the given URL with a body.
+Sends a POST request to the given URL with a body. See `request` for
+the timeout and the errors.
 """
-fn post(url: String, body: String, headers: Headers) -> Response ! Error
-  try request(Method.Post, url, headers, body)
+fn post(
+  url: String,
+  body: Binary | String,
+  headers: Headers,
+  timeout: Option<Duration> = Option.None,
+) -> Response ! Error | SocketError | IOError | TLSError
+
+  try request(Method.Post, url, headers, body, timeout)
 end
 
 @doc """
-Sends a PUT request to the given URL with a body.
+Sends a PUT request to the given URL with a body. See `request` for
+the timeout and the errors.
 """
-fn put(url: String, body: String, headers: Headers) -> Response ! Error
-  try request(Method.Put, url, headers, body)
+fn put(
+  url: String,
+  body: Binary | String,
+  headers: Headers,
+  timeout: Option<Duration> = Option.None,
+) -> Response ! Error | SocketError | IOError | TLSError
+
+  try request(Method.Put, url, headers, body, timeout)
 end
 
 @doc """
-Sends an HTTP request with the given method, URL, headers,
-  and body. Opens a TCP connection, writes the request, reads
-  the full response, and closes the connection.
-"""
-fn request(method: Method, url: String, headers: Headers, body: String)
-  -> Response ! Error
+Sends one HTTP/1.1 request and returns the response. The client opens
+a connection for the request and closes it after the response, so it
+sets `Connection: close`. A `String` body is sent as its UTF-8 bytes.
 
-  parsed = URI.parse(url)
+`timeout` bounds the whole request, from the connect to the last byte
+of the response. It does not bound the DNS lookup. `Option.None`
+waits with no limit. A request that passes the limit fails with
+`HTTP.Error.Timeout`.
+
+A response body larger than 16 MiB fails with
+`HTTP.Error.Parse(Parser.Error.BodyTooLarge)`. The client drops a 1xx
+response and returns the response that follows it. A 101 is the
+exception, and the client returns it.
+
+A URL that cannot be requested fails with `HTTP.Error.InvalidUrl`
+before any network call. A network failure keeps its own type, which
+is `Socket.Error` for the connect and `IO.Error` or `TLSError` after
+it. Match by type to tell the causes apart.
+
+```koja
+match HTTP.get("https://example.com")
+  Result.Ok(response) -> use(response)
+  Result.Err(http_error: HTTP.Error) -> log(http_error.message())
+  Result.Err(socket_error: Net.Socket.Error) -> log(socket_error.message())
+  Result.Err(io_error: IO.Error) -> log(io_error.message())
+  Result.Err(tls_error: Net.TLSError) -> log(tls_error.message())
+end
+```
+"""
+fn request(
+  method: Method,
+  url: String,
+  headers: Headers,
+  body: Binary | String,
+  timeout: Option<Duration> = Option.None,
+) -> Response ! Error | SocketError | IOError | TLSError
+
+  uri = URI.parse(url)
     rescue e -> fail Error.InvalidUrl(uri_error_message(e, url))
 
-  scheme = try parsed.scheme.or_err(
+  scheme = try uri.scheme.or_err(
     Error.InvalidUrl("URL must be absolute and use http or https: " <> url),
   )
 
@@ -73,38 +147,174 @@ fn request(method: Method, url: String, headers: Headers, body: String)
   end
 
   host =
-    match parsed.host
+    match uri.host
       Option.Some(h) when not h.empty?() -> h
       _ -> fail Error.InvalidUrl("missing host in URL: " <> url)
     end
 
-  port = try parsed.port.or_err(
-    Error.InvalidUrl("missing port in URL: " <> url),
-  )
-  path = parsed.path.empty?() ? "/" : parsed.path
+  port = try uri.port.or_err(Error.InvalidUrl("missing port in URL: " <> url))
 
-  target =
-    match parsed.query
-      Option.Some(query) -> path <> "?" <> query
-      Option.None -> path
-    end
+  message = Request{
+    body: body_bytes(body),
+    headers: headers.set("Connection", "close"),
+    method: method,
+    uri: uri,
+  }
+
+  deadline = timeout.map(limit -> Instant.now().plus(limit))
+  limit = try remaining(deadline)
+
+  plain = TCPSocket.connect(host, port, limit) rescue e -> fail socket_cause(e)
+
+  try exchange(plain, host, scheme == "https", message, deadline)
+end
+
+# Closes a socket whose request is over. The request already has its
+# result, so a failed close changes nothing.
+priv fn discard(socket: TCPSocket)
+  match socket.close()
+    _ -> ()
+  end
+end
+
+# Runs one request on a new connection, and closes the connection in
+# every case.
+priv fn exchange(
+  plain: TCPSocket,
+  host: String,
+  secure: Bool,
+  message: Request,
+  deadline: Option<Instant>,
+) -> Response ! Error | SocketError | IOError | TLSError
 
   socket =
-    if scheme == "https"
-      TCPSocket.connect_tls(host, port)
-        rescue e -> fail Error.ConnectionFailed(net_error_message(e))
-    else
-      TCPSocket.connect(host, port)
-        rescue e -> fail Error.ConnectionFailed(e.message())
+    match prepare(plain, host, secure, deadline)
+      Result.Ok(ready) ->
+        ready
+
+      Result.Err(cause) ->
+        discard(plain)
+        fail cause
     end
 
-  raw = build_request(method, host, target, headers, body)
+  result = transfer(socket, message, deadline)
+  discard(socket)
+  try result
+end
 
-  socket.write(raw)
-    rescue e -> fail Error.ConnectionFailed("write failed: " <>
-      net_error_message(e))
+# A 1xx response that is not the last response to its request. A 101
+# is the last one, because the connection changes protocol after it.
+priv fn interim?(status: Status) -> Bool
+  status.code >= 100 and status.code < 200 and status.code != 101
+end
 
-  try read_response(socket)
+# Turns `TCP_NODELAY` on, then starts TLS when the URL asks for it.
+priv fn prepare(
+  plain: TCPSocket,
+  host: String,
+  secure: Bool,
+  deadline: Option<Instant>,
+) -> TCPSocket ! Error | SocketError | IOError | TLSError
+
+  socket = try plain.set_nodelay(true)
+
+  if not secure
+    return socket
+  end
+
+  limit = try remaining(deadline)
+
+  socket.upgrade_tls(host, TLSConfig.client(), limit)
+    rescue e -> fail stream_cause(e)
+end
+
+# Returns the time left before the deadline, for the next network
+# call. Fails with `Error.Timeout` when the deadline has passed.
+priv fn remaining(deadline: Option<Instant>) -> Option<Duration> ! Error
+  match deadline
+    Option.Some(limit) ->
+      now = Instant.now()
+
+      if now.nanoseconds >= limit.nanoseconds
+        fail Error.Timeout
+      end
+
+      Option.Some(limit.since(now))
+
+    Option.None ->
+      Option.None
+  end
+end
+
+# Maps a connect that timed out to `Error.Timeout`, so a caller sees
+# one timeout for the whole request.
+priv fn socket_cause(e: SocketError) -> Error | SocketError
+  if e == SocketError.TimedOut
+    return Error.Timeout
+  end
+
+  e
+end
+
+# Maps a read, a write, or a handshake that timed out to
+# `Error.Timeout`, so a caller sees one timeout for the whole request.
+priv fn stream_cause(e: IOError | TLSError) -> Error | IOError | TLSError
+  match e
+    io_error: IOError ->
+      if io_error == IOError.TimedOut
+        return Error.Timeout
+      end
+
+      return io_error
+
+    tls_error: TLSError ->
+      return tls_error
+  end
+end
+
+# Writes the request, then reads until the parser has a whole
+# response.
+priv fn transfer(socket: TCPSocket, message: Request, deadline: Option<Instant>)
+  -> Response ! Error | IOError | TLSError
+
+  limit = try remaining(deadline)
+
+  socket.write_all(message.serialize(), WriterOptions{timeout: limit})
+    rescue e -> fail stream_cause(e)
+
+  buffer: Binary = <<>>
+  ended = false
+  limits = Parser.Limits{max_body_bytes: MAX_RESPONSE_BODY_BYTES}
+  response: Option<Response> = Option.None
+
+  while response.none?()
+    outcome = Parser.parse_response(buffer, message.method, ended, limits)
+      rescue e -> fail Error.Parse(e)
+
+    match outcome
+      Parser.Outcome.Complete((received, rest)) ->
+        if interim?(received.status)
+          buffer = rest
+        else
+          response = Option.Some(received)
+        end
+
+      Parser.Outcome.Incomplete ->
+        limit = try remaining(deadline)
+
+        chunk = socket.read(READ_SIZE, ReaderOptions{timeout: limit})
+          rescue e -> fail stream_cause(e)
+
+        if chunk.byte_size() == 0
+          ended = true
+        else
+          buffer = buffer <> chunk
+        end
+    end
+  end
+
+  # The loop ends only when `response` holds a value.
+  response.unwrap()
 end
 
 priv fn uri_error_message(error: URIError, url: String) -> String
@@ -118,80 +328,4 @@ priv fn uri_error_message(error: URIError, url: String) -> String
     URIError.InvalidUTF8 ->
       "URL is not valid UTF-8: " <> url
   end
-end
-
-priv fn build_request(
-  method: Method,
-  host: String,
-  path: String,
-  headers: Headers,
-  body: String,
-) -> String
-
-  out = method.to_string() <> " " <> path <> " HTTP/1.1\r\n" <> "Host: " <>
-    host <> "\r\n"
-
-  if not body.empty?() and not headers.has?("Content-Length")
-    out = out <> "Content-Length: #{body.byte_length()}\r\n"
-  end
-
-  out = write_headers(out, headers, 0) <> "Connection: close\r\n\r\n"
-
-  if not body.empty?()
-    out = out <> body
-  end
-
-  out
-end
-
-priv fn write_headers(out: String, headers: Headers, i: Int) -> String
-  if i >= headers.entries.length()
-    return out
-  end
-
-  entry = headers.entries.get(i).unwrap()
-  out = out <> entry.name <> ": " <> entry.value <> "\r\n"
-  write_headers(out, headers, i + 1)
-end
-
-priv fn read_response(socket: TCPSocket) -> Response ! Error
-  data = try read_all(socket, "")
-  try Parser.parse_response(data)
-end
-
-priv fn net_error_message(
-  e: SocketError | IOError | TLSError | String.ConversionError,
-) -> String
-
-  match e
-    socket_error: SocketError ->
-      socket_error.message()
-
-    io_error: IOError ->
-      io_error.message()
-
-    tls_error: TLSError ->
-      tls_error.message()
-
-    conversion: String.ConversionError ->
-      match conversion
-        String.ConversionError.InvalidUTF8 -> "response is not valid UTF-8"
-      end
-  end
-end
-
-priv fn read_all(socket: TCPSocket, acc: String) -> String ! Error
-  chunk = socket.read_string(8192)
-    rescue e -> fail Error.ConnectionFailed("read failed: " <>
-      net_error_message(e))
-
-  if chunk.empty?()
-    match socket.close()
-      _ -> ()
-    end
-
-    return acc
-  end
-
-  try read_all(socket, acc <> chunk)
 end
