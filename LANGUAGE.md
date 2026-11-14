@@ -1453,8 +1453,10 @@ The subject must produce a `Result`, and the enclosing function (or closure) mus
 Errors compose with ordinary [union types](#union-types). A function calling into two error domains declares the union, and each propagated or failed error widens into it without conversion ceremony:
 
 ```koja
-fn fetch_user(id: Int) -> User ! HTTP.Error | ParseError
-  response = try HTTP.get(user_url(id)) # HTTP.Error widens
+fn fetch_user(id: Int)
+  -> User ! HTTP.Error | Net.Socket.Error | IO.Error | Net.TLSError | ParseError
+
+  response = try HTTP.get(user_url(id)) # the four client errors widen
   try parse_user(response.body) # ParseError widens
 end
 ```

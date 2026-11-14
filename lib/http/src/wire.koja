@@ -1,0 +1,22 @@
+# Helpers that `Request`, `Response`, and the client share to put a
+# message on the wire.
+
+# Returns a body as bytes. A `String` becomes its UTF-8 bytes.
+priv fn body_bytes(body: Binary | String) -> Binary
+  match body
+    bytes: Binary -> bytes
+    text: String -> text.to_binary()
+  end
+end
+
+# Returns one `name: value` line for each header, in order. Each line
+# ends with CRLF.
+priv fn header_lines(headers: Headers) -> String
+  lines = ""
+
+  for entry in headers.entries
+    lines = lines <> entry.name <> ": " <> entry.value <> "\r\n"
+  end
+
+  lines
+end

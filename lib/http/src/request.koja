@@ -1,19 +1,120 @@
 @doc """
-An HTTP request with method, path, headers, body, and
-protocol version. Created by the parser when handling
-incoming requests, or constructed directly for client use.
+An HTTP request with a method, a URI, headers, and a body. The parser
+creates one from the bytes a server reads, and a client builds one
+directly.
+
+`body` holds bytes. Use `text` to decode it as UTF-8.
+
+`uri` carries the path and the query of the request target, and the
+host and the port. The parser fills the host and the port from the
+`Host` header.
+
+`version` says which HTTP version a received request arrived as. A
+writer ignores it.
 """
 struct Request
-  body: String
+  body: Binary
   headers: Headers
   method: Method
-  path: String
-  version: String
+  uri: URI
+  version: Version = Version.HTTP1_1
 
   @doc """
-  Converts the body to a Binary value.
+  Encodes the request as an HTTP/1.1 message. The target is the path
+  and the query of `uri`, or the host and the port for `CONNECT`. Adds
+  `Host` from `uri` when the headers have none. Sets `Content-Length`
+  from the byte size of the body when the headers have none, and the
+  body has bytes or the method is `PATCH`, `POST`, `PUT`, or `QUERY`.
+  Does not set `Connection`. Ignores `version`, and never writes a
+  chunked body.
   """
-  fn body_as_binary(self) -> Binary
-    self.body.to_binary()
+  fn serialize(self) -> Binary
+    head = self.method.to_string() <> " " <> self.target() <> " HTTP/1.1\r\n"
+
+    if not self.headers.has?("Host")
+      match self.authority(false)
+        Option.Some(authority) -> head = head <> "Host: " <> authority <> "\r\n"
+        Option.None -> ()
+      end
+    end
+
+    head = head <> header_lines(self.headers)
+
+    if self.length_expected?() and not self.headers.has?("Content-Length")
+      head = head <> "Content-Length: #{self.body.byte_size()}\r\n"
+    end
+
+    (head <> "\r\n").to_binary() <> self.body
+  end
+
+  @doc """
+  Decodes the body as UTF-8. Fails with
+  `String.ConversionError.InvalidUTF8` when the bytes are not valid
+  UTF-8.
+  """
+  fn text(self) -> String ! String.ConversionError
+    try self.body.to_string()
+  end
+
+  # The host of `uri` with its port, or `Option.None` when `uri` has no
+  # host. An IPv6 host gets brackets. The default port of the scheme
+  # is left out unless `always_port` is set.
+  priv fn authority(self, always_port: Bool) -> Option<String>
+    host =
+      match self.uri.host
+        Option.Some(name) when not name.empty?() -> name
+        _ -> return Option.None
+      end
+
+    text = host.contains?(":") ? "[" <> host <> "]" : host
+
+    match self.uri.port
+      Option.Some(port) when always_port or not self.default_port?(port) ->
+        Option.Some("#{text}:#{port}")
+      _ -> Option.Some(text)
+    end
+  end
+
+  priv fn default_port?(self, port: Int) -> Bool
+    match self.uri.scheme
+      Option.Some(scheme) ->
+        match URI.default_port(scheme)
+          Option.Some(default) -> default == port
+          Option.None -> false
+        end
+
+      Option.None ->
+        false
+    end
+  end
+
+  priv fn length_expected?(self) -> Bool
+    if self.body.byte_size() > 0
+      return true
+    end
+
+    match self.method
+      Method.Patch | Method.Post | Method.Put | Method.Query -> true
+      _ -> false
+    end
+  end
+
+  # The request target. `CONNECT` takes the host and the port. Every
+  # other method takes the path and the query, and an empty path is
+  # written as `/`.
+  priv fn target(self) -> String
+    if self.method == Method.Connect
+      match self.authority(true)
+        Option.Some(authority) -> return authority
+        Option.None -> ()
+      end
+    end
+
+    path = self.uri.path.empty?() ? "/" : self.uri.path
+
+    match self.uri.query
+      Option.Some(query) -> path <> "?" <> query
+      Option.None -> path
+    end
   end
 end

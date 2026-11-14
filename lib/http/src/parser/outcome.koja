@@ -1,0 +1,14 @@
+@doc """
+What one parser call found in a buffer.
+
+`Complete` carries the message and the bytes that came after it. On
+a keep-alive connection those bytes are the start of the next
+message.
+
+`Incomplete` means the buffer does not hold a whole message yet.
+Read more bytes, append them, and call the parser again.
+"""
+enum Parser.Outcome<T>
+  Complete((T, Binary))
+  Incomplete
+end

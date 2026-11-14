@@ -375,26 +375,38 @@ The client is rebuilt on the pieces above.
 - It writes with `write_all` and reads bytes into the incremental
   parser, so a binary body and a multibyte character both survive.
 - It turns `TCP_NODELAY` on after it connects.
+- It sets `Connection: close`.
+- It accepts a response body of at most 16 MiB, which is the `scout`
+  default.
 - The body parameters take `Binary | String`.
 - Every function takes a trailing
   `timeout: Option<Duration> = Option.None`. It bounds the whole
   request, from the connect to the last byte of the response.
   `HTTP.Error.Timeout` gets its first producer.
 
-`HTTP.Error` keeps its name, and its variants carry causes in place
-of strings.
+`HTTP.Error` keeps its name and holds what `HTTP` itself decides. A
+network failure keeps its own type on the error channel, the way
+`TCPSocket.connect_tls` reports it.
 
 ```koja
 enum Error
-  Connection(SocketError | IOError | TLSError)
   InvalidUrl(String)
   Parse(Parser.Error)
   Timeout
 end
+
+fn get(url: String, timeout: Option<Duration> = Option.None)
+  -> Response ! Error | SocketError | IOError | TLSError
 ```
 
 A caller can then tell a refused connection from a certificate that
-failed to verify.
+failed to verify, with one `match` by type. The client maps a
+connect, a read, or a write that timed out to `Timeout`, so a
+timeout has one name.
+
+The cost is the message. A union has no methods, so a caller that
+wants text for any failure matches by type and calls `message()` on
+each member.
 
 ### `Net`
 
@@ -1315,8 +1327,9 @@ enum Error
 end
 ```
 
-`Connection`, `InvalidUrl`, `Parse`, and `Timeout` mean what they
-mean in the one-shot client. `PoolTimeout` means every connection to
+`InvalidUrl`, `Parse`, and `Timeout` mean what they mean in the
+one-shot client. `Connection` carries the network failure that the
+one-shot client leaves on the error channel. `PoolTimeout` means every connection to
 the origin stayed busy for `pool_timeout`. `Reset` means the peer
 reset the stream or closed the connection with that code. `Stopped`
 means the client was stopped.
@@ -1376,7 +1389,7 @@ under review.
    of ALPN. The one break is the new variant
    `TLSError.ProtocolNameInvalid`, which an exhaustive `match` must
    cover.
-2. **`HTTP`.** The vocabulary types, the incremental parser,
+2. **`HTTP`.** Done. The vocabulary types, the incremental parser,
    `serialize` to bytes, and the one-shot client on top of them. The
    client turns `TCP_NODELAY` on after it connects. This is the
    breaking step.
@@ -1488,6 +1501,11 @@ body to the application piece by piece.
 - **A parser that keeps its position.** It is faster for a body that
   arrives in many reads, and it makes the parser a value that every
   caller must hold. It can come later behind the same functions.
+- **`Connection(SocketError | IOError | TLSError)` on `HTTP.Error`.**
+  One variant gives a caller one type with a `message()`. It also
+  puts a second `match` between the caller and the cause, and `Net`
+  already reports the three types side by side. The flat union costs
+  each caller a `match` by type to get a message.
 - **`TCP_NODELAY` on by default.** Go does this, and no package can
   then forget the option. The call can fail on a connection that is
   already dead, and an accept loop cannot tell that failure from a
@@ -1577,13 +1595,10 @@ sections mark **Open**.
     arrived. An HTTP/2 request has lowercase names and an HTTP/1.1
     request has the names that the client wrote. Code that looks a
     header up does not notice. Code that walks the list does.
-13. **The shape of `HTTP.Error`.** `Connection` wraps a union of
-    three causes. A flat union on the error channel is the other
-    shape.
-14. **When the server ALPN shim ships.** It can ship with the client
+13. **When the server ALPN shim ships.** It can ship with the client
     half or wait for a service that ends TLS itself.
-15. **Client certificates.** `TLSSession.connect` does not load an
+14. **Client certificates.** `TLSSession.connect` does not load an
     identity. No caller needs one until a push library does.
 
-Questions 11 to 13 touch the standard library. Each one adds to the
+Questions 11 and 12 touch the standard library. Each one adds to the
 surface in this document or changes one small type.

@@ -1,0 +1,15 @@
+@doc """
+Size limits for one parsed message. Every field has a default, so a
+call site names only what it changes, as in
+`Parser.Limits{max_body_bytes: 65536}`.
+
+`max_body_bytes` caps the decoded body. The default is 1 MiB.
+
+`max_header_bytes` caps the head, which is the start line and the
+headers with the empty line that ends them. It also caps one chunk
+size line and the trailers of a chunked body. The default is 16 KiB.
+"""
+struct Parser.Limits
+  max_body_bytes: Int = 1048576
+  max_header_bytes: Int = 16384
+end

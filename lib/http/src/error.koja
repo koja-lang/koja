@@ -1,11 +1,15 @@
 @doc """
-Error type for HTTP operations. Covers connection failures,
-URL parsing errors, response/request parse errors, and timeouts.
+Why a client request failed inside `HTTP` itself. `InvalidUrl` says
+the URL cannot be requested, `Parse` carries why the response was
+rejected, and `Timeout` says the request passed its time limit.
+
+A network failure is not an `HTTP.Error`. The client functions fail
+with `HTTP.Error | Socket.Error | IO.Error | TLSError`, so a refused
+connection or a certificate that did not verify keeps its own type.
 """
 enum Error
-  ConnectionFailed(String)
   InvalidUrl(String)
-  ParseError(String)
+  Parse(Parser.Error)
   Timeout
 
   @doc """
@@ -13,9 +17,8 @@ enum Error
   """
   fn message(self) -> String
     match self
-      Error.ConnectionFailed(msg) -> "connection failed: " <> msg
       Error.InvalidUrl(msg) -> "invalid URL: " <> msg
-      Error.ParseError(msg) -> "parse error: " <> msg
+      Error.Parse(cause) -> "invalid response: " <> cause.message()
       Error.Timeout -> "request timed out"
     end
   end

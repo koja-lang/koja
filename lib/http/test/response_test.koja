@@ -1,0 +1,98 @@
+alias Test.require
+
+test "Response.new stores a String body as bytes"
+  response = Response.new(Status.ok(), "héllo")
+
+  assert response.body == "héllo".to_binary()
+  assert response.headers.get("Content-Length") == Option.Some("6")
+  assert response.status == Status.ok()
+  assert response.version == Version.HTTP1_1
+end
+
+test "Response.new takes a Binary body"
+  body = <<0, 255, 254>>
+  response = Response.new(Status.created(), body)
+
+  assert response.body == body
+  assert response.headers.get("Content-Length") == Option.Some("3")
+end
+
+test "Response.text decodes the body as UTF-8"
+  assert Response.new(Status.ok(), "héllo").text() == Result.Ok("héllo")
+end
+
+test "Response.text fails for a body that is not UTF-8"
+  response = Response.new(Status.ok(), <<255, 254>>)
+
+  assert response.text() == Result.Err(String.ConversionError.InvalidUTF8)
+end
+
+test "Response.serialize writes the status line, the headers, and the body"
+  response = Response.new(Status.not_found(), "missing")
+  response.headers = response.headers.append("Content-Type", "text/plain")
+
+  expected = "HTTP/1.1 404 Not Found\r\nContent-Length: 7\r\nContent-Type: text/plain\r\n\r\nmissing"
+
+  assert (try serialized_response_text(response)) == expected
+end
+
+test "Response.serialize sets Content-Length when the headers have none"
+  response = Response{
+    body: "héllo".to_binary(),
+    headers: Headers.new().set("Content-Type", "text/plain"),
+    status: Status.ok(),
+  }
+
+  expected = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\nhéllo"
+
+  assert (try serialized_response_text(response)) == expected
+end
+
+test "Response.serialize writes an empty reason for an unknown code"
+  response = Response.new(Status.new(799), "")
+
+  assert (try serialized_response_text(response)) ==
+    "HTTP/1.1 799 \r\nContent-Length: 0\r\n\r\n"
+end
+
+test "Response.serialize ignores the version field"
+  response = Response.new(Status.ok(), "")
+  response.version = Version.HTTP2
+
+  assert (try serialized_response_text(response)).starts_with?(
+    "HTTP/1.1 200 OK\r\n",
+  )
+end
+
+test "Response.serialize does not set Connection"
+  response = Response.new(Status.ok(), "hello")
+
+  assert not (try serialized_response_text(response)).contains?("Connection")
+end
+
+test "Response.serialize keeps a body that is not UTF-8"
+  body = <<0, 255, 254, 13, 10>>
+  head = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n"
+
+  assert Response.new(Status.ok(), body).serialize() == head.to_binary() <> body
+end
+
+test "a serialized response parses back to the same response"
+  response = Response.new(Status.created(), <<1, 2, 3, 255>>)
+  response.headers = response.headers.append("Location", "/items/7")
+
+  parsed =
+    match Parser.parse_response(response.serialize(), Method.Post, false)
+      Result.Ok(Parser.Outcome.Complete((message, _))) -> message
+      _ -> fail "expected the serialized response to parse"
+    end
+
+  assert parsed.status == response.status
+  assert parsed.body == response.body
+  assert parsed.headers.get("Location") == Option.Some("/items/7")
+  assert parsed.headers.get("Content-Length") == Option.Some("4")
+end
+
+priv fn serialized_response_text(response: Response) -> String ! Test.Failure
+  try require(response.serialize().to_string())
+end

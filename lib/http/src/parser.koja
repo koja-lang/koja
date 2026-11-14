@@ -1,275 +1,710 @@
+priv const BYTE_CR: Int = 13
+priv const BYTE_LF: Int = 10
+priv const BYTE_LOWER_A: Int = 97
+priv const BYTE_LOWER_F: Int = 102
+priv const BYTE_NINE: Int = 57
+priv const BYTE_SEMICOLON: Int = 59
+priv const BYTE_SPACE: Int = 32
+priv const BYTE_TAB: Int = 9
+priv const BYTE_UPPER_A: Int = 65
+priv const BYTE_UPPER_F: Int = 70
+priv const BYTE_ZERO: Int = 48
+priv const CRLF: Binary = <<13, 10>>
+priv const EMPTY: Binary = <<>>
+priv const HEAD_END: Binary = <<13, 10, 13, 10>>
+
+# A chunk size of 15 hex digits is below 2^60, so it fits an `Int`.
+priv const MAX_CHUNK_SIZE_DIGITS: Int = 15
+
+# How the headers say the body is delimited. `UntilEnd` means no
+# header gives a length, so a response body runs to the end of the
+# stream and a request has no body.
+priv enum Parser.Framing
+  Chunked
+  Length(Int)
+  UntilEnd
+end
+
 @doc """
-Recursive descent HTTP/1.1 parser. Parses raw HTTP messages
-into Request and Response structs. Handles Content-Length
-bodies and chunked transfer encoding.
+HTTP/1.1 message parser. It reads a `Request` or a `Response` from a
+buffer of bytes, and it says when the buffer does not hold a whole
+message yet.
+
+The caller reads from its socket, appends to a buffer, and calls the
+parser with all of it. The parser keeps no state between calls.
+
+```koja
+match try Parser.parse_request(buffer)
+  Parser.Outcome.Complete((request, rest)) -> handle(request, rest)
+  Parser.Outcome.Incomplete -> read_more()
+end
+```
+
+The parser reads `Content-Length` bodies and chunked bodies. It
+drops the trailers of a chunked body. It checks `limits` against the
+declared length, so it rejects a large body before the bytes arrive.
+
+The parser rejects a message whose length two parties can read in
+two ways. A `Content-Length` that is not a number, two
+`Content-Length` headers with different values, and a message with
+both `Content-Length` and `Transfer-Encoding` are all `Malformed`.
 """
 struct Parser
-  input: String
-  pos: Int
-
   @doc """
-  Parses a raw HTTP request string into a Request.
-  Expects the full message including headers and body.
+  Parses one request from the start of `buffer`.
+
+  The path and the query of `uri` come from the request target. The
+  host and the port come from the `Host` header, or from the target
+  when it is an absolute URI. The `*` of `OPTIONS *` is stored as the
+  path. A `CONNECT` target is read as a host and a port.
+
+  An HTTP/1.1 request must have exactly one `Host` header. A method
+  that `Method` does not name fails with `UnsupportedMethod`.
   """
-  fn parse_request(raw: String) -> Request ! Error
-    p = Parser{input: raw, pos: 0}
+  fn parse_request(buffer: Binary, limits: Parser.Limits = Parser.Limits{})
+    -> Parser.Outcome<Request> ! Parser.Error
 
-    (request_line, request_pos) = try p.read_line()
-      .or_err(Error.ParseError("empty request"))
+    parsed = try Parser.read_request(buffer, limits)
 
-    p = Parser{input: raw, pos: request_pos}
-    parts = request_line.split(" ")
-
-    if parts.length() < 3
-      fail Error.ParseError("malformed request line: " <> request_line)
+    match parsed
+      Option.Some(complete) -> return Parser.Outcome.Complete(complete)
+      Option.None -> ()
     end
 
-    method_str = parts.get(0).unwrap()
-    path = parts.get(1).unwrap()
-    version = parts.get(2).unwrap()
+    Parser.Outcome.Incomplete
+  end
 
-    method = Method.from_string(method_str)
-      rescue msg -> fail Error.ParseError(msg)
+  @doc """
+  Parses one response from the start of `buffer`.
 
-    (headers, body) = try p.parse_headers_and_body()
+  `method` is the method of the request that the response answers.
+  The response to a `HEAD` has no body, and neither does a 2xx
+  response to a `CONNECT`.
 
-    Request{
-      body: body,
-      headers: headers,
-      method: method,
+  `ended` says that the stream has ended, so no more bytes can
+  arrive. A response with no `Content-Length` and no chunked encoding
+  runs to the end of the stream, and it is complete only when `ended`
+  is `true`. With `ended` set, the parser never returns `Incomplete`.
+  It fails with `Malformed` when the buffer holds less than a whole
+  response.
+
+  A response with a 1xx, 204, or 304 status has no body, so it is
+  complete at the end of its head. The bytes after a 101 come back as
+  the leftover bytes. The reason phrase is dropped.
+  """
+  fn parse_response(
+    buffer: Binary,
+    method: Method,
+    ended: Bool,
+    limits: Parser.Limits = Parser.Limits{},
+  ) -> Parser.Outcome<Response> ! Parser.Error
+
+    parsed = try Parser.read_response(buffer, method, ended, limits)
+
+    match parsed
+      Option.Some(complete) -> return Parser.Outcome.Complete(complete)
+      Option.None -> ()
+    end
+
+    if ended
+      fail Parser.Error.Malformed("the stream ended before the response was complete")
+    end
+
+    Parser.Outcome.Incomplete
+  end
+
+  priv fn bodiless?(method: Method, status: Status) -> Bool
+    code = status.code
+
+    method == Method.Head or (code >= 100 and code < 200) or code == 204
+      or code == 304 or (method == Method.Connect and status.ok?())
+  end
+
+  # Callers guarantee `index` is in bounds.
+  priv fn byte_at(buffer: Binary, index: Int) -> Int
+    buffer.at(index).unwrap()
+  end
+
+  # Returns `count` bytes of `buffer` from `start`, or no bytes when
+  # `count` is not positive.
+  priv fn bytes(buffer: Binary, start: Int, count: Int) -> Binary
+    if count <= 0
+      return EMPTY
+    end
+
+    buffer.slice(Range{start: start, stop: start + count - 1})
+  end
+
+  # Reads the hex size at the start of a chunk size line, which is
+  # the bytes `[start, stop)`. A chunk extension after `;` is ignored.
+  priv fn chunk_size(buffer: Binary, start: Int, stop: Int)
+    -> Int ! Parser.Error
+
+    digits = 0
+    position = start
+    size = 0
+
+    while position < stop
+      match Parser.hex_value(Parser.byte_at(buffer, position))
+        Option.Some(value) ->
+          if digits == MAX_CHUNK_SIZE_DIGITS
+            fail Parser.Error.BodyTooLarge
+          end
+
+          size = size * 16 + value
+
+        Option.None ->
+          break
+      end
+
+      digits += 1
+      position += 1
+    end
+
+    while position < stop and Parser.space?(Parser.byte_at(buffer, position))
+      position += 1
+    end
+
+    extension = position < stop
+      and Parser.byte_at(buffer, position) == BYTE_SEMICOLON
+
+    if digits == 0 or (position < stop and not extension)
+      fail Parser.Error.Malformed("invalid chunk size")
+    end
+
+    size
+  end
+
+  # Walks a chunked body that starts at `start`. Returns the offset
+  # and the size of the data in each chunk, and the offset after the
+  # trailers. Returns `Option.None` when the body is not all there.
+  priv fn chunk_spans(buffer: Binary, start: Int, limits: Parser.Limits)
+    -> Option<(List<(Int, Int)>, Int)> ! Parser.Error
+
+    position = start
+    spans: List<(Int, Int)> = List.new()
+    total = 0
+
+    while position < buffer.byte_size()
+      line_end =
+        match buffer.find(CRLF, position)
+          Option.Some(index) -> index
+          Option.None -> buffer.byte_size()
+        end
+
+      if line_end - position > limits.max_header_bytes
+        fail Parser.Error.Malformed("chunk size line is too long")
+      end
+
+      if line_end == buffer.byte_size()
+        return Option.None
+      end
+
+      size = try Parser.chunk_size(buffer, position, line_end)
+      data = line_end + 2
+
+      if size == 0
+        body_end = try Parser.trailers_end(buffer, data, limits)
+        return body_end.map(offset -> (spans, offset))
+      end
+
+      total += size
+
+      if total > limits.max_body_bytes
+        fail Parser.Error.BodyTooLarge
+      end
+
+      if buffer.byte_size() < data + size + 2
+        return Option.None
+      end
+
+      if Parser.byte_at(buffer, data + size) != BYTE_CR
+        or Parser.byte_at(buffer, data + size + 1) != BYTE_LF
+
+        fail Parser.Error.Malformed("chunk data does not end with CRLF")
+      end
+
+      spans = spans.append((data, size))
+      position = data + size + 2
+    end
+
+    Option.None
+  end
+
+  # Returns the offset of the empty line that ends the head, or
+  # `Option.None` when the buffer does not hold the whole head.
+  priv fn find_head_end(buffer: Binary, limits: Parser.Limits)
+    -> Option<Int> ! Parser.Error
+
+    found = buffer.find(HEAD_END, 0)
+
+    size =
+      match found
+        Option.Some(index) -> index + 4
+        Option.None -> buffer.byte_size()
+      end
+
+    if size > limits.max_header_bytes
+      fail Parser.Error.HeadersTooLarge
+    end
+
+    found
+  end
+
+  # Reads how the headers delimit the body, and checks a declared
+  # length against the limit.
+  priv fn framing(headers: Headers, limits: Parser.Limits)
+    -> Parser.Framing ! Parser.Error
+
+    codings = headers.get_all("Transfer-Encoding")
+    lengths = headers.get_all("Content-Length")
+
+    if not codings.empty?()
+      if not lengths.empty?()
+        fail Parser.Error.Malformed("Content-Length and Transfer-Encoding are both present")
+      end
+
+      if codings.length() != 1
+        or codings.get(0).unwrap().downcase() != "chunked"
+
+        fail Parser.Error.Malformed("unsupported Transfer-Encoding")
+      end
+
+      return Parser.Framing.Chunked
+    end
+
+    if lengths.empty?()
+      return Parser.Framing.UntilEnd
+    end
+
+    first = lengths.get(0).unwrap()
+
+    for value in lengths
+      if value.empty?() or not value.digit?()
+        fail Parser.Error.Malformed("Content-Length is not a number")
+      end
+
+      if value != first
+        fail Parser.Error.Malformed("Content-Length headers have different values")
+      end
+    end
+
+    # The value is all digits, so only a number too large for an `Int`
+    # fails to convert.
+    length = first.to_int() rescue _ -> fail Parser.Error.BodyTooLarge
+
+    if length > limits.max_body_bytes
+      fail Parser.Error.BodyTooLarge
+    end
+
+    Parser.Framing.Length(length)
+  end
+
+  # Decodes the head, which is the bytes before `head_end`, and
+  # returns its lines. The first line is the start line.
+  priv fn head_lines(buffer: Binary, head_end: Int)
+    -> List<String> ! Parser.Error
+
+    text = Parser.bytes(buffer, 0, head_end).to_string()
+      rescue _ -> fail Parser.Error.Malformed("the head is not valid UTF-8")
+
+    lines = text.split("\r\n")
+
+    for line in lines
+      if line.contains?("\r") or line.contains?("\n")
+        fail Parser.Error.Malformed("a line in the head has a bare CR or LF")
+      end
+    end
+
+    lines
+  end
+
+  priv fn hex_value(byte: Int) -> Option<Int>
+    if byte >= BYTE_ZERO and byte <= BYTE_NINE
+      return Option.Some(byte - BYTE_ZERO)
+    end
+
+    if byte >= BYTE_UPPER_A and byte <= BYTE_UPPER_F
+      return Option.Some(byte - BYTE_UPPER_A + 10)
+    end
+
+    if byte >= BYTE_LOWER_A and byte <= BYTE_LOWER_F
+      return Option.Some(byte - BYTE_LOWER_A + 10)
+    end
+
+    Option.None
+  end
+
+  # Reads `host` or `host:port`, which is the form of a `Host` header
+  # and of a `CONNECT` target.
+  priv fn parse_authority(text: String) -> URI ! Parser.Error
+    parsed = URI.parse("//" <> text)
+      rescue _ -> fail Parser.Error.Malformed("invalid host")
+
+    host_only = parsed.path.empty?() and parsed.query.none?()
+      and parsed.fragment.none?() and parsed.userinfo.none?()
+
+    if not host_only or not Parser.present?(parsed.host)
+      fail Parser.Error.Malformed("invalid host")
+    end
+
+    parsed
+  end
+
+  # Reads the header lines, which are all the lines after the first.
+  priv fn parse_headers(lines: List<String>) -> Headers ! Parser.Error
+    headers = Headers.new()
+
+    for line in lines.slice(1, lines.length() - 1)
+      parts = line.split(":")
+      name = parts.get(0).unwrap()
+
+      if parts.length() < 2 or name.empty?() or name.contains?(" ")
+        or name.contains?("\t")
+
+        fail Parser.Error.Malformed("malformed header line")
+      end
+
+      value = String.join(parts.slice(1, parts.length() - 1), ":").trim()
+      headers = headers.append(name, value)
+    end
+
+    headers
+  end
+
+  priv fn parse_status_line(line: String) -> (Version, Status) ! Parser.Error
+    parts = line.split(" ")
+
+    if parts.length() < 2
+      fail Parser.Error.Malformed("malformed status line")
+    end
+
+    version = try Parser.parse_version(parts.get(0).unwrap())
+    code_text = parts.get(1).unwrap()
+
+    if code_text.length() != 3 or not code_text.digit?()
+      fail Parser.Error.Malformed("invalid status code")
+    end
+
+    code = code_text.to_int()
+      rescue _ -> fail Parser.Error.Malformed("invalid status code")
+
+    (version, Status.new(code))
+  end
+
+  priv fn parse_version(text: String) -> Version ! Parser.Error
+    match text
+      "HTTP/1.0" -> Version.HTTP1_0
+      "HTTP/1.1" -> Version.HTTP1_1
+      _ -> fail Parser.Error.Malformed("unsupported HTTP version")
+    end
+  end
+
+  priv fn path_uri(path: String, query: Option<String>) -> URI
+    URI{
+      fragment: Option.None,
+      host: Option.None,
       path: path,
-      version: version,
+      port: Option.None,
+      query: query,
+      scheme: Option.None,
+      userinfo: Option.None,
     }
   end
 
-  @doc """
-  Parses a raw HTTP response string into a Response.
-  Expects the full message including headers and body.
-  """
-  fn parse_response(raw: String) -> Response ! Error
-    p = Parser{input: raw, pos: 0}
-
-    (status_line, response_pos) = try p.read_line()
-      .or_err(Error.ParseError("empty response"))
-
-    p = Parser{input: raw, pos: response_pos}
-    (version, status) = try Parser.parse_status_line(status_line)
-    (headers, body) = try p.parse_headers_and_body()
-
-    Response{body: body, headers: headers, status: status, version: version}
-  end
-
-  # Parses the header block and message body from a parser positioned at
-  # the start of the headers (just past the request/status line). Returns
-  # the parsed headers paired with the body string. Shared by
-  # `parse_request` and `parse_response`.
-  priv fn parse_headers_and_body(self) -> (Headers, String) ! Error
-    (headers, header_pos) = try self.parse_headers()
-    after_headers = Parser{input: self.input, pos: header_pos}
-    body = try after_headers.parse_body(headers)
-    (headers, body)
-  end
-
-  priv fn parse_status_line(line: String) -> (String, Status) ! Error
-    sp1 = try Parser.find_char(line, " ", 0)
-      .or_err(Error.ParseError("malformed status line: " <> line))
-
-    version = line.slice(Range{start: 0, stop: sp1 - 1})
-    rest = line.slice(Range{start: sp1 + 1, stop: line.length() - 1})
-
-    sp2 = try Parser.find_char(rest, " ", 0)
-      .or_err(Error.ParseError("malformed status line: " <> line))
-
-    code_str = rest.slice(Range{start: 0, stop: sp2 - 1})
-    reason = rest.slice(Range{start: sp2 + 1, stop: rest.length() - 1})
-
-    code = code_str.to_int()
-      rescue _ -> fail Error.ParseError("invalid status code: " <> code_str)
-
-    (version, Status{code: code, reason: reason})
-  end
-
-  priv fn parse_headers(self) -> (Headers, Int) ! Error
-    headers = Headers.new()
-    try Parser.parse_headers_loop(self.input, self.pos, headers)
-  end
-
-  priv fn parse_headers_loop(input: String, pos: Int, headers: Headers)
-    -> (Headers, Int) ! Error
-
-    p = Parser{input: input, pos: pos}
-
-    line_tuple =
-      match p.read_line()
-        Option.Some(tuple) -> tuple
-        Option.None -> return (headers, pos)
-      end
-
-    (line, new_pos) = line_tuple
-
-    if line.empty?()
-      return (headers, new_pos)
-    end
-
-    colon = try Parser.find_char(line, ":", 0)
-      .or_err(Error.ParseError("malformed header line: " <> line))
-
-    name = line.slice(Range{start: 0, stop: colon - 1})
-    value = line.slice(Range{start: colon + 1, stop: line.length() - 1})
-      .trim_start()
-    headers = headers.append(name, value)
-    try Parser.parse_headers_loop(input, new_pos, headers)
-  end
-
-  priv fn parse_body(self, headers: Headers) -> String ! Error
-    if Parser.is_chunked(headers)
-      return try self.parse_chunked_body()
-    end
-
-    match headers.content_length()
-      Option.Some(len) ->
-        end_pos = self.pos + len > self.input.length()
-          ? self.input.length() - 1
-          : self.pos + len - 1
-        self.input.slice(Range{start: self.pos, stop: end_pos})
-
-      Option.None ->
-        self.pos < self.input.length()
-          ? self.input.slice(
-            Range{start: self.pos, stop: self.input.length() - 1},
-          )
-          : ""
-    end
-  end
-
-  priv fn is_chunked(headers: Headers) -> Bool
-    match headers.get("Transfer-Encoding")
-      Option.Some(te) -> te.downcase() == "chunked"
+  priv fn present?(text: Option<String>) -> Bool
+    match text
+      Option.Some(value) -> not value.empty?()
       Option.None -> false
     end
   end
 
-  priv fn parse_chunked_body(self) -> String ! Error
-    try Parser.parse_chunks(self.input, self.pos, "")
+  # Cuts the body that starts at `start` from the buffer. Returns the
+  # body and the bytes after it, or `Option.None` when the body is not
+  # all there.
+  priv fn read_body(
+    buffer: Binary,
+    start: Int,
+    framing: Parser.Framing,
+    limits: Parser.Limits,
+    ended: Bool,
+  ) -> Option<(Binary, Binary)> ! Parser.Error
+
+    match framing
+      Parser.Framing.Chunked ->
+        try Parser.read_chunked(buffer, start, limits)
+
+      Parser.Framing.Length(length) ->
+        if buffer.byte_size() < start + length
+          return Option.None
+        end
+
+        body = Parser.bytes(buffer, start, length)
+        Option.Some((body, Parser.tail(buffer, start + length)))
+
+      Parser.Framing.UntilEnd ->
+        if buffer.byte_size() - start > limits.max_body_bytes
+          fail Parser.Error.BodyTooLarge
+        end
+
+        if not ended
+          return Option.None
+        end
+
+        Option.Some((Parser.tail(buffer, start), EMPTY))
+    end
   end
 
-  priv fn parse_chunks(input: String, pos: Int, acc: String) -> String ! Error
-    p = Parser{input: input, pos: pos}
+  priv fn read_chunked(buffer: Binary, start: Int, limits: Parser.Limits)
+    -> Option<(Binary, Binary)> ! Parser.Error
 
-    size_tuple =
-      match p.read_line()
-        Option.Some(tuple) -> tuple
-        Option.None -> return acc
+    walked = try Parser.chunk_spans(buffer, start, limits)
+
+    (spans, body_end) =
+      match walked
+        Option.Some(found) -> found
+        Option.None -> return Option.None
       end
 
-    (size_line, new_pos) = size_tuple
-    size_str = size_line.trim()
+    body = EMPTY
 
-    chunk_size = Parser.parse_hex(size_str)
-      rescue _ -> fail Error.ParseError("invalid chunk size: " <> size_str)
-
-    if chunk_size == 0
-      return acc
+    for span in spans
+      (offset, size) = span
+      body = body <> Parser.bytes(buffer, offset, size)
     end
 
-    if new_pos + chunk_size > input.length()
-      fail Error.ParseError("chunk extends past end of input")
-    end
-
-    chunk = input.slice(Range{start: new_pos, stop: new_pos + chunk_size - 1})
-    acc = acc <> chunk
-
-    after_chunk = new_pos + chunk_size
-    next_pos = after_chunk + 2 <= input.length() ? after_chunk + 2 : after_chunk
-    try Parser.parse_chunks(input, next_pos, acc)
+    Option.Some((body, Parser.tail(buffer, body_end)))
   end
 
-  priv fn read_line(self) -> Option<(String, Int)>
-    if self.pos >= self.input.length()
-      return Option.None
+  priv fn read_request(buffer: Binary, limits: Parser.Limits)
+    -> Option<(Request, Binary)> ! Parser.Error
+
+    found = try Parser.find_head_end(buffer, limits)
+
+    head_end =
+      match found
+        Option.Some(index) -> index
+        Option.None -> return Option.None
+      end
+
+    lines = try Parser.head_lines(buffer, head_end)
+    parts = lines.get(0).unwrap().split(" ")
+
+    if parts.length() != 3
+      fail Parser.Error.Malformed("malformed request line")
     end
 
-    match Parser.find_crlf(self.input, self.pos)
-      Option.Some(crlf_pos) ->
-        line = self.input.slice(Range{start: self.pos, stop: crlf_pos - 1})
-        Option.Some((line, crlf_pos + 2))
+    name = parts.get(0).unwrap()
+    version = try Parser.parse_version(parts.get(2).unwrap())
+
+    method = Method.from_string(name)
+      rescue _ -> fail Parser.Error.UnsupportedMethod(name)
+
+    headers = try Parser.parse_headers(lines)
+    uri = try Parser.request_uri(
+      method,
+      parts.get(1).unwrap(),
+      headers,
+      version,
+    )
+    declared = try Parser.framing(headers, limits)
+
+    # A request with no declared length has no body.
+    framing = declared == Parser.Framing.UntilEnd
+      ? Parser.Framing.Length(0)
+      : declared
+
+    read = try Parser.read_body(buffer, head_end + 4, framing, limits, false)
+
+    match read
+      Option.Some((body, rest)) ->
+        request = Request{
+          body: body,
+          headers: headers,
+          method: method,
+          uri: uri,
+          version: version,
+        }
+        Option.Some((request, rest))
 
       Option.None ->
-        line = self.input.slice(
-          Range{start: self.pos, stop: self.input.length() - 1},
-        )
-        Option.Some((line, self.input.length()))
+        Option.None
     end
   end
 
-  priv fn find_crlf(input: String, pos: Int) -> Option<Int>
-    if pos >= input.length()
-      return Option.None
-    end
+  priv fn read_response(
+    buffer: Binary,
+    method: Method,
+    ended: Bool,
+    limits: Parser.Limits,
+  ) -> Option<(Response, Binary)> ! Parser.Error
 
-    ch = input.get(pos).unwrap()
+    found = try Parser.find_head_end(buffer, limits)
 
-    if ch == "\r" and pos + 1 < input.length()
-      and input.get(pos + 1).unwrap() == "\n"
-
-      return Option.Some(pos)
-    end
-
-    Parser.find_crlf(input, pos + 1)
-  end
-
-  priv fn find_char(input: String, target: String, pos: Int) -> Option<Int>
-    if pos >= input.length()
-      return Option.None
-    end
-
-    input.get(pos).unwrap() == target
-      ? Option.Some(pos)
-      : Parser.find_char(input, target, pos + 1)
-  end
-
-  priv fn parse_hex(s: String) -> Int ! String
-    if s.empty?()
-      fail "empty hex string"
-    end
-
-    try Parser.parse_hex_digits(s, 0, 0)
-  end
-
-  priv fn parse_hex_digits(s: String, i: Int, acc: Int) -> Int ! String
-    if i >= s.length()
-      return acc
-    end
-
-    ch = s.get(i).unwrap()
-
-    digit =
-      match ch
-        "0" -> 0
-        "1" -> 1
-        "2" -> 2
-        "3" -> 3
-        "4" -> 4
-        "5" -> 5
-        "6" -> 6
-        "7" -> 7
-        "8" -> 8
-        "9" -> 9
-        "a" -> 10
-        "A" -> 10
-        "b" -> 11
-        "B" -> 11
-        "c" -> 12
-        "C" -> 12
-        "d" -> 13
-        "D" -> 13
-        "e" -> 14
-        "E" -> 14
-        "f" -> 15
-        "F" -> 15
-        _ -> fail "invalid hex digit: #{ch}"
+    head_end =
+      match found
+        Option.Some(index) -> index
+        Option.None -> return Option.None
       end
 
-    try Parser.parse_hex_digits(s, i + 1, acc * 16 + digit)
+    lines = try Parser.head_lines(buffer, head_end)
+    (version, status) = try Parser.parse_status_line(lines.get(0).unwrap())
+    headers = try Parser.parse_headers(lines)
+    start = head_end + 4
+
+    if Parser.bodiless?(method, status)
+      response = Response{
+        body: EMPTY,
+        headers: headers,
+        status: status,
+        version: version,
+      }
+      return Option.Some((response, Parser.tail(buffer, start)))
+    end
+
+    framing = try Parser.framing(headers, limits)
+    read = try Parser.read_body(buffer, start, framing, limits, ended)
+
+    match read
+      Option.Some((body, rest)) ->
+        response = Response{
+          body: body,
+          headers: headers,
+          status: status,
+          version: version,
+        }
+        Option.Some((response, rest))
+
+      Option.None ->
+        Option.None
+    end
+  end
+
+  # Builds the `uri` of a request from its target and its `Host`
+  # header.
+  priv fn request_uri(
+    method: Method,
+    target: String,
+    headers: Headers,
+    version: Version,
+  ) -> URI ! Parser.Error
+
+    hosts = headers.get_all("Host")
+
+    if hosts.length() > 1
+      fail Parser.Error.Malformed("more than one Host header")
+    end
+
+    if hosts.empty?() and version == Version.HTTP1_1
+      fail Parser.Error.Malformed("missing Host header")
+    end
+
+    if method == Method.Connect
+      authority = try Parser.parse_authority(target)
+
+      if authority.port.none?()
+        fail Parser.Error.Malformed("a CONNECT target needs a port")
+      end
+
+      return authority
+    end
+
+    uri = try Parser.target_uri(method, target)
+
+    # An absolute target names the host, and the header does not
+    # replace it.
+    if uri.host.some?()
+      return uri
+    end
+
+    match hosts.first()
+      Option.Some(value) when not value.empty?() ->
+        authority = try Parser.parse_authority(value)
+        uri.host = authority.host
+        uri.port = authority.port
+
+      _ ->
+        ()
+    end
+
+    uri
+  end
+
+  priv fn space?(byte: Int) -> Bool
+    byte == BYTE_SPACE or byte == BYTE_TAB
+  end
+
+  # Returns the bytes of `buffer` from `start` to its end.
+  priv fn tail(buffer: Binary, start: Int) -> Binary
+    Parser.bytes(buffer, start, buffer.byte_size() - start)
+  end
+
+  # Reads a request target that is not a `CONNECT` target. It is `*`,
+  # a path with an optional query, or an absolute URI.
+  priv fn target_uri(method: Method, target: String) -> URI ! Parser.Error
+    if target == "*"
+      if method != Method.Options
+        fail Parser.Error.Malformed("invalid request target")
+      end
+
+      return Parser.path_uri("*", Option.None)
+    end
+
+    if target.starts_with?("/")
+      # A target that starts with `//` reads as a host on its own, so
+      # parse the target behind a placeholder host.
+      origin = URI.parse("http://localhost" <> target)
+        rescue _ -> fail Parser.Error.Malformed("invalid request target")
+
+      if origin.fragment.some?()
+        fail Parser.Error.Malformed("invalid request target")
+      end
+
+      return Parser.path_uri(origin.path, origin.query)
+    end
+
+    absolute = URI.parse(target)
+      rescue _ -> fail Parser.Error.Malformed("invalid request target")
+
+    if absolute.scheme.none?() or not Parser.present?(absolute.host)
+      or absolute.fragment.some?()
+
+      fail Parser.Error.Malformed("invalid request target")
+    end
+
+    absolute.userinfo = Option.None
+    absolute
+  end
+
+  # Returns the offset after the trailers of a chunked body, which
+  # start at `start`. Returns `Option.None` when they are not all
+  # there.
+  priv fn trailers_end(buffer: Binary, start: Int, limits: Parser.Limits)
+    -> Option<Int> ! Parser.Error
+
+    if buffer.byte_size() < start + 2
+      return Option.None
+    end
+
+    # With no trailers, one empty line follows the last chunk.
+    if Parser.byte_at(buffer, start) == BYTE_CR
+      and Parser.byte_at(buffer, start + 1) == BYTE_LF
+
+      return Option.Some(start + 2)
+    end
+
+    found = buffer.find(HEAD_END, start)
+
+    stop =
+      match found
+        Option.Some(index) -> index + 4
+        Option.None -> buffer.byte_size()
+      end
+
+    if stop - start > limits.max_header_bytes
+      fail Parser.Error.HeadersTooLarge
+    end
+
+    found.map(index -> index + 4)
   end
 end

@@ -1,3 +1,12 @@
+alias IO.Error as IOError
+alias Net.IPAddress
+alias Net.Socket.Address as SocketAddress
+alias Net.Socket.Error as SocketError
+alias Net.TCPListener
+alias Net.TCPSocket
+alias Net.TLSError
+alias Test.require
+
 test "request rejects an invalid URI before networking"
   try expect_invalid_url("http://exa mple.com/", "invalid URI component")
 end
@@ -10,10 +19,281 @@ test "request rejects a missing host before networking"
   try expect_invalid_url("http:///path", "missing host")
 end
 
+test "request sends a binary body and reads a binary body"
+  reply = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n".to_binary() <>
+    <<255, 0, 254>>
+  (listener, server) = try start_server(43131, Option.Some(reply))
+  sent = <<0, 255, 1, 2>>
+  headers = Headers.new().set("X-Test", "yes")
+  result = post("http://127.0.0.1:43131/echo?a=1", sent, headers, patience())
+  seen = try finish_server(listener, server)
+  response = try expect_response(result)
+
+  assert response.status == Status.ok()
+  assert response.body == <<255, 0, 254>>
+  assert seen.method == Method.Post
+  assert seen.uri.path == "/echo"
+  assert seen.uri.query == Option.Some("a=1")
+  assert seen.uri.host == Option.Some("127.0.0.1")
+  assert seen.uri.port == Option.Some(43131)
+  assert seen.headers.get("Connection") == Option.Some("close")
+  assert seen.headers.get("Content-Length") == Option.Some("4")
+  assert seen.headers.get("X-Test") == Option.Some("yes")
+  assert seen.body == sent
+end
+
+test "request sends a String body as its UTF-8 bytes"
+  reply = "HTTP/1.1 204 No Content\r\n\r\n".to_binary()
+  (listener, server) = try start_server(43132, Option.Some(reply))
+  result = put(
+    "http://127.0.0.1:43132/name",
+    "héllo",
+    Headers.new(),
+    patience(),
+  )
+  seen = try finish_server(listener, server)
+  response = try expect_response(result)
+
+  assert response.status == Status.no_content()
+  assert seen.method == Method.Put
+  assert seen.headers.get("Content-Length") == Option.Some("6")
+  assert seen.text() == Result.Ok("héllo")
+end
+
+test "request reads a chunked body"
+  reply = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+  (listener, server) = try start_server(43133, Option.Some(reply.to_binary()))
+  result = get("http://127.0.0.1:43133/", patience())
+  seen = try finish_server(listener, server)
+  response = try expect_response(result)
+
+  assert response.text() == Result.Ok("hello world")
+  assert seen.method == Method.Get
+  assert seen.headers.get("Content-Length") == Option.None
+end
+
+test "request reads a body with no length to the end of the stream"
+  reply = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nstreamed"
+  (listener, server) = try start_server(43134, Option.Some(reply.to_binary()))
+  result = get("http://127.0.0.1:43134/", patience())
+  _ = try finish_server(listener, server)
+  response = try expect_response(result)
+
+  assert response.text() == Result.Ok("streamed")
+end
+
+test "request drops a 1xx response and returns the one after it"
+  reply = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nok"
+  (listener, server) = try start_server(43135, Option.Some(reply.to_binary()))
+  result = post("http://127.0.0.1:43135/", "data", Headers.new(), patience())
+  _ = try finish_server(listener, server)
+  response = try expect_response(result)
+
+  assert response.status == Status.created()
+  assert response.text() == Result.Ok("ok")
+end
+
+test "head returns a response with no body"
+  reply = "HTTP/1.1 200 OK\r\nContent-Length: 500\r\n\r\n"
+  (listener, server) = try start_server(43136, Option.Some(reply.to_binary()))
+  result = head("http://127.0.0.1:43136/", patience())
+  seen = try finish_server(listener, server)
+  response = try expect_response(result)
+
+  assert seen.method == Method.Head
+  assert response.body.byte_size() == 0
+  assert response.headers.get("Content-Length") == Option.Some("500")
+end
+
+test "request fails with Timeout when the server sends no response"
+  (listener, server) = try start_server(43137, Option.None)
+  limit = Duration.new(100, Duration.Unit.Milliseconds)
+  result = get("http://127.0.0.1:43137/", Option.Some(limit))
+  _ = try finish_server(listener, server)
+
+  match result
+    Result.Err(http_error: Error) -> assert http_error == Error.Timeout
+    Result.Err(other) -> fail "expected Timeout, got '#{failure_text(other)}'"
+    Result.Ok(_) -> fail "expected Timeout, got a response"
+  end
+end
+
+test "request fails with Parse when the server closes with no response"
+  (listener, server) = try start_server(43138, Option.Some(<<>>))
+  result = get("http://127.0.0.1:43138/", patience())
+  _ = try finish_server(listener, server)
+
+  match result
+    Result.Err(http_error: Error) ->
+      match http_error
+        Error.Parse(Parser.Error.Malformed(_)) -> ()
+        _ -> fail "expected Parse, got '#{http_error.message()}'"
+      end
+
+    Result.Err(other) ->
+      fail "expected Parse, got '#{failure_text(other)}'"
+
+    Result.Ok(_) ->
+      fail "expected Parse, got a response"
+  end
+end
+
+test "request fails with Parse when the response body passes the limit"
+  reply = "HTTP/1.1 200 OK\r\nContent-Length: 16777217\r\n\r\n"
+  (listener, server) = try start_server(43139, Option.Some(reply.to_binary()))
+  result = get("http://127.0.0.1:43139/", patience())
+  _ = try finish_server(listener, server)
+
+  match result
+    Result.Err(http_error: Error) ->
+      assert http_error == Error.Parse(Parser.Error.BodyTooLarge)
+    Result.Err(other) -> fail "expected Parse, got '#{failure_text(other)}'"
+    Result.Ok(_) -> fail "expected Parse, got a response"
+  end
+end
+
+test "request keeps the Socket.Error of a refused connection"
+  match get("http://127.0.0.1:43140/", patience())
+    Result.Err(socket_error: SocketError) ->
+      assert socket_error == SocketError.ConnectionRefused
+    Result.Err(other) ->
+      fail "expected ConnectionRefused, got '#{failure_text(other)}'"
+    Result.Ok(_) -> fail "expected ConnectionRefused, got a response"
+  end
+end
+
+test "Error.message describes each cause"
+  assert Error.InvalidUrl("no host").message() == "invalid URL: no host"
+  assert Error.Parse(Parser.Error.BodyTooLarge)
+    .message()
+    .starts_with?("invalid response: ")
+  assert Error.Timeout.message() == "request timed out"
+end
+
 priv fn expect_invalid_url(url: String, expected: String) ! Test.Failure
   match request(Method.Get, url, Headers.new(), "")
-    Result.Err(Error.InvalidUrl(message)) -> assert message.contains?(expected)
-    Result.Err(error) -> fail "expected InvalidUrl, got '#{error.message()}'"
-    Result.Ok(_) -> fail "expected InvalidUrl for '#{url}'"
+    Result.Err(http_error: Error) ->
+      match http_error
+        Error.InvalidUrl(message) -> assert message.contains?(expected)
+        _ -> fail "expected InvalidUrl, got '#{http_error.message()}'"
+      end
+
+    Result.Err(other) ->
+      fail "expected InvalidUrl, got '#{failure_text(other)}'"
+
+    Result.Ok(_) ->
+      fail "expected InvalidUrl for '#{url}'"
   end
+end
+
+priv fn expect_response(
+  result: Result<Response, Error | SocketError | IOError | TLSError>,
+) -> Response ! Test.Failure
+
+  match result
+    Result.Ok(response) -> response
+    Result.Err(error) -> fail "request failed: #{failure_text(error)}"
+  end
+end
+
+priv fn failure_text(error: Error | SocketError | IOError | TLSError) -> String
+  match error
+    http_error: Error -> http_error.message()
+    socket_error: SocketError -> socket_error.message()
+    io_error: IOError -> io_error.message()
+    tls_error: TLSError -> tls_error.message()
+  end
+end
+
+priv fn finish_server(
+  listener: TCPListener,
+  server: Ref<(), Result<Request, String>>,
+) -> Request ! Test.Failure
+
+  outcome = Task.await(server)
+
+  match listener.close()
+    _ -> ()
+  end
+
+  match outcome
+    Result.Ok(Result.Ok(request)) -> request
+    Result.Ok(Result.Err(reason)) -> fail "server: #{reason}"
+    Result.Err(_) -> fail "server task did not finish"
+  end
+end
+
+# A limit long enough that only a broken test reaches it.
+priv fn patience -> Option<Duration>
+  Option.Some(Duration.new(5, Duration.Unit.Seconds))
+end
+
+priv fn read_request(socket: TCPSocket, buffer: Binary)
+  -> Result<Request, String>
+
+  match Parser.parse_request(buffer)
+    Result.Ok(Parser.Outcome.Complete((request, _))) ->
+      return Result.Ok(request)
+
+    Result.Ok(Parser.Outcome.Incomplete) ->
+      match socket.read(4096)
+        Result.Ok(chunk) ->
+          if chunk.byte_size() == 0
+            return Result.Err("the client closed inside its request")
+          end
+
+          return read_request(socket, buffer <> chunk)
+
+        Result.Err(_) ->
+          return Result.Err("server read failed")
+      end
+
+    Result.Err(error) ->
+      return Result.Err("server parse: " <> error.message())
+  end
+end
+
+# Accepts one connection and reads one request. With a reply, writes
+# it and closes. With no reply, waits until the client closes.
+priv fn serve_once(listener: TCPListener, reply: Option<Binary>)
+  -> Result<Request, String>
+
+  socket =
+    match listener.accept()
+      Result.Ok(accepted) -> accepted
+      Result.Err(error) -> return Result.Err("accept: " <> error.message())
+    end
+
+  request = read_request(socket, <<>>)
+
+  match reply
+    Option.Some(bytes) ->
+      match socket.write_all(bytes)
+        _ -> ()
+      end
+
+    Option.None ->
+      match socket.read(16)
+        _ -> ()
+      end
+  end
+
+  match socket.close()
+    _ -> ()
+  end
+
+  request
+end
+
+priv fn start_server(port: Int, reply: Option<Binary>)
+  -> (TCPListener, Ref<(), Result<Request, String>>) ! Test.Failure
+
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
+  listener = try require(TCPListener.bind_addr(addr))
+
+  server = Task.async(fn () -> Result<Request, String>
+    serve_once(listener, reply)
+  end)
+
+  (listener, server)
 end
