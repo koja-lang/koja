@@ -46,11 +46,21 @@ pass_through_externs! {
         dir: CPtr,
     ) -> Int32;
     ssl_ctx_new => fn SSL_CTX_new(method: CPtr) -> CPtr;
+    ssl_ctx_set_alpn_protos => fn SSL_CTX_set_alpn_protos(
+        ctx: CPtr,
+        protocols: CPtr,
+        len: Int64,
+    ) -> Int32;
     ssl_ctx_set_default_verify_paths => fn SSL_CTX_set_default_verify_paths(ctx: CPtr) -> Int32;
     ssl_ctx_set_verify => fn SSL_CTX_set_verify(ctx: CPtr, mode: Int64, callback: CPtr) -> ();
     ssl_ctx_use_certificate => fn SSL_CTX_use_certificate(ctx: CPtr, cert: CPtr) -> Int32;
     ssl_ctx_use_private_key => fn SSL_CTX_use_PrivateKey(ctx: CPtr, key: CPtr) -> Int32;
     ssl_free => fn SSL_free(ssl: CPtr) -> ();
+    ssl_get0_alpn_selected => fn SSL_get0_alpn_selected(
+        ssl: CPtr,
+        out_data: CPtr,
+        out_len: CPtr,
+    ) -> ();
     ssl_get_error => fn SSL_get_error(ssl: CPtr, ret: Int64) -> Int32;
     ssl_get_verify_result => fn SSL_get_verify_result(ssl: CPtr) -> Int64;
     ssl_new => fn SSL_new(ctx: CPtr) -> CPtr;

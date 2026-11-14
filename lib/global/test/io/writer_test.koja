@@ -1,0 +1,106 @@
+alias File.Mode as FileMode
+alias IO.Error as IOError
+alias IO.Writer.Options as WriterOptions
+alias Test.require
+
+# `IO.Writer.write_all` over a writer that accepts only a few bytes for
+# each call. A file descriptor takes a whole small write at once, so
+# the loop in `write_all` needs a short writer to run more than once.
+
+# Passes at most `limit` bytes to `descriptor` for each `write`.
+priv struct ShortWriter
+  descriptor: IO.Descriptor
+  limit: Int
+end
+
+impl IO.Writer<IOError> for ShortWriter
+  fn write(self, data: Binary | String, options: WriterOptions) -> Int ! IOError
+    bytes =
+      match data
+        b: Binary -> b
+        s: String -> s.to_binary()
+      end
+
+    head = bytes.slice(Range{start: 0, stop: self.limit - 1})
+    try self.descriptor.write(head, options)
+  end
+end
+
+test "the short writer accepts no more than its limit"
+  path = "/tmp/koja_io_writer_short.txt"
+  fd = try require(File.open(path, FileMode.Write))
+  result = ShortWriter{descriptor: fd, limit: 2}.write("hello")
+  _ = fd.close()
+  File.delete(path)
+
+  assert try require(result) == 2
+end
+
+test "write_all writes a string across short writes"
+  assert try written("writer_string", "koja write test", 4) ==
+    "koja write test".to_binary()
+end
+
+test "write_all writes a binary across short writes"
+  data = <<0, 255, 10, 13, 128, 7, 1>>
+
+  assert try written("writer_binary", data, 3) == data
+end
+
+test "write_all keeps a multi-byte character that a short write cuts"
+  assert try written("writer_utf8", "héllo wörld", 2) ==
+    "héllo wörld".to_binary()
+end
+
+test "write_all writes data that fits in one write"
+  assert try written("writer_whole", "hello", 64) == "hello".to_binary()
+end
+
+test "write_all with empty data writes nothing"
+  assert try written("writer_empty_string", "", 4) == <<>>
+  assert try written("writer_empty_binary", <<>>, 4) == <<>>
+end
+
+test "write_all on a descriptor writes the whole input"
+  path = "/tmp/koja_io_writer_descriptor.txt"
+  fd = try require(File.open(path, FileMode.Write))
+  result = fd.write_all("koja write test")
+  _ = fd.close()
+  read = File.read(path)
+  File.delete(path)
+
+  try require(result)
+  assert try require(read) == "koja write test"
+end
+
+test "write_all fails with the error from write"
+  path = "/tmp/koja_io_writer_closed.txt"
+  fd = try require(File.open(path, FileMode.Write))
+  try require(fd.close())
+  File.delete(path)
+
+  match ShortWriter{descriptor: fd, limit: 2}.write_all("hello")
+    Result.Ok(_) -> fail "expected the write to fail"
+    Result.Err(IOError.Closed) -> ()
+    Result.Err(e) -> fail "expected Closed, got: #{e.message()}"
+  end
+end
+
+# Writes `data` with `write_all` through a writer that accepts `limit`
+# bytes for each call, and returns the bytes that reached the file.
+priv fn written(name: String, data: Binary | String, limit: Int)
+  -> Binary ! Test.Failure
+
+  path = "/tmp/koja_io_#{name}.txt"
+  fd = try require(File.open(path, FileMode.Write))
+  result = ShortWriter{descriptor: fd, limit: limit}.write_all(data)
+  _ = fd.close()
+
+  reader = try require(File.open(path, FileMode.Read))
+  try require(File.delete(path))
+  bytes = reader.read(1024)
+  _ = reader.close()
+
+  try require(result)
+  try require(bytes)
+end

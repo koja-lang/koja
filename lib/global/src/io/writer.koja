@@ -25,11 +25,38 @@ own, as `IO.Reader` does. A descriptor writes with
 protocol IO.Writer<E>
   @doc """
   Writes `data` and returns the number of bytes written, which can be
-  fewer than the size of `data`.
+  fewer than the size of `data`. A call with data writes at least one
+  byte or fails. `write_all` relies on that.
   """
   fn write(
     self,
     data: Binary | String,
     options: WriterOptions = WriterOptions{},
   ) -> Int ! E
+
+  @doc """
+  Writes all of `data`. Calls `write` until the destination has
+  accepted every byte.
+
+  `options.timeout` bounds each `write`, not the whole call. A failure
+  can come after some bytes are written, and the error does not say
+  how many.
+  """
+  fn write_all(
+    self,
+    data: Binary | String,
+    options: WriterOptions = WriterOptions{},
+  ) ! E
+    remaining =
+      match data
+        b: Binary -> b
+        s: String -> s.to_binary()
+      end
+
+    while remaining.byte_size() > 0
+      written = try self.write(remaining, options)
+      last = remaining.byte_size() - 1
+      remaining = remaining.slice(Range{start: written, stop: last})
+    end
+  end
 end

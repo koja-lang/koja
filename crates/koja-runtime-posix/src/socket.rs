@@ -13,10 +13,10 @@ use std::time::Instant;
 use koja_runtime_core::{IoWait, deadline_from_user_millis};
 
 use crate::ffi::{
-    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, EINTR, EINVAL, ENOTCONN, SO_ERROR, SO_REUSEADDR,
-    SOL_SOCKET, SockaddrIn, get_errno, libc_accept, libc_bind, libc_connect, libc_freeaddrinfo,
-    libc_getaddrinfo, libc_getpeername, libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto,
-    libc_setsockopt, libc_socket, set_nonblocking,
+    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, EINTR, EINVAL, ENOTCONN, IPPROTO_TCP, SO_ERROR,
+    SO_REUSEADDR, SOL_SOCKET, SockaddrIn, TCP_NODELAY, get_errno, libc_accept, libc_bind,
+    libc_connect, libc_freeaddrinfo, libc_getaddrinfo, libc_getpeername, libc_getsockopt,
+    libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket, set_nonblocking,
 };
 use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
@@ -351,6 +351,27 @@ pub unsafe extern "C" fn koja_socket_send_to(
             -1
         }
     }
+}
+
+/// Sets `TCP_NODELAY` on a TCP socket, on when `enabled` is nonzero and
+/// off when it is zero. Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_socket_setsockopt_nodelay(fd: i32, enabled: i64) -> i64 {
+    let optval: i32 = i32::from(enabled != 0);
+    let ret = unsafe {
+        libc_setsockopt(
+            fd,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            &optval as *const i32 as *const u8,
+            mem::size_of::<i32>() as u32,
+        )
+    };
+    if ret < 0 {
+        set_last_error(io::Error::last_os_error());
+        return -1;
+    }
+    0
 }
 
 /// Enables `SO_REUSEADDR` on a socket. Returns 0 on success, -1 on error.

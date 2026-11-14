@@ -4,6 +4,10 @@ use std::ffi::c_char;
 
 /// IPv4 address family.
 pub const AF_INET: i32 = 2;
+/// Socket option level for TCP options.
+pub const IPPROTO_TCP: i32 = 6;
+/// TCP option that turns off Nagle's algorithm.
+pub const TCP_NODELAY: i32 = 1;
 
 #[cfg(target_os = "macos")]
 mod platform {

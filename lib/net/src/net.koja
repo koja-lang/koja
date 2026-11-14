@@ -171,6 +171,23 @@ struct Socket
   end
 
   @doc """
+  Turns the `TCP_NODELAY` option on or off for a stream socket. See
+  `TCPSocket.set_nodelay` for when to set it.
+  """
+  fn set_nodelay(self, enabled: Bool) -> Socket ! SocketError
+    result = koja_socket_setsockopt_nodelay(
+      self.descriptor.raw,
+      enabled ? 1 : 0,
+    )
+
+    if result == -1
+      fail SocketError.last()
+    end
+
+    self
+  end
+
+  @doc """
   Sets the SO_REUSEADDR option on the socket.
   """
   fn set_reuse_addr(self) -> Socket ! SocketError
@@ -234,6 +251,9 @@ struct Socket
     ip_length: Int64,
     port: Int64,
   ) -> Int64
+
+  @extern "C"
+  priv fn koja_socket_setsockopt_nodelay(fd: Int32, enabled: Int64) -> Int64
 
   @extern "C"
   priv fn koja_socket_setsockopt_reuse(fd: Int32) -> Int64

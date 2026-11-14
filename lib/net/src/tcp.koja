@@ -46,7 +46,7 @@ struct TCPSocket
   establishing a TCP connection to the first resolved address.
   Returns the connected socket or an error if resolution or
   connection fails. `timeout` bounds the TCP handshake only, not the
-  DNS lookup.
+  DNS lookup. The connection has `TCP_NODELAY` off. See `set_nodelay`.
   """
   fn connect(host: String, port: Int, timeout: Option<Duration> = Option.None)
     -> TCPSocket ! SocketError
@@ -149,6 +149,38 @@ struct TCPSocket
   end
 
   @doc """
+  Returns the application protocol the TLS handshake selected through
+  ALPN, such as `"h2"`. Returns `Option.None` on a connection without
+  TLS and when the handshake selected no protocol. A client offers
+  protocols with `TLSConfig.with_alpn`.
+  """
+  fn alpn(self) -> Option<String>
+    match self.tls
+      Option.Some(session) -> session.alpn()
+      Option.None -> Option.None
+    end
+  end
+
+  @doc """
+  Turns the `TCP_NODELAY` option on or off. A new connection has it
+  off. The system then holds a small write while bytes sent before it
+  wait for an acknowledgment (Nagle's algorithm), which can delay a
+  message by tens of milliseconds.
+
+  Turn it on for a protocol that writes a message and then waits for
+  the reply. Call it after `connect` or `TCPListener.accept`. With the
+  option on, each `write` goes out at once, so build a whole message
+  and write it one time.
+
+  The call can fail on a connection that the peer already reset. Close
+  that connection.
+  """
+  fn set_nodelay(self, enabled: Bool) -> TCPSocket ! SocketError
+    _ = try self.socket.set_nodelay(enabled)
+    self
+  end
+
+  @doc """
   Returns true if the connection has an active TLS session.
   """
   fn tls?(self) -> Bool
@@ -242,7 +274,8 @@ struct TCPListener
   `Option.None` waits without limit, and `Duration.ZERO` polls, so a
   pending connection returns at once and an empty backlog fails with
   `TimedOut` without waiting. Returns a `TCPSocket` for the new
-  connection, or an error if the accept fails.
+  connection, or an error if the accept fails. The connection has
+  `TCP_NODELAY` off. See `TCPSocket.set_nodelay`.
   """
   fn accept(self, timeout: Option<Duration> = Option.None)
     -> TCPSocket ! SocketError

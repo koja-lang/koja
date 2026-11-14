@@ -110,6 +110,130 @@ test "TLS read fails with TimedOut when the peer is silent"
   end
 end
 
+test "alpn_wire puts a length byte before each protocol name"
+  h2 = "h2".to_binary()
+  http1 = "http/1.1".to_binary()
+
+  assert try require(alpn_wire(["h2", "http/1.1"])) ==
+    <<2>> <> h2 <> <<8>> <> http1
+  assert try require(alpn_wire(["h2"])) == <<2>> <> h2
+  assert try require(alpn_wire([])) == <<>>
+end
+
+test "alpn_wire takes a name of 255 bytes and rejects longer and empty names"
+  longest = name_of_size(255)
+  wire = try require(alpn_wire([longest]))
+
+  assert wire.byte_size() == 256
+  assert wire.at(0) == Option.Some(255)
+  assert alpn_wire([name_of_size(256)]) ==
+    Result.Err(TLSError.ProtocolNameInvalid)
+  assert alpn_wire(["h2", ""]) == Result.Err(TLSError.ProtocolNameInvalid)
+end
+
+test "with_alpn and with_ca keep the fields they do not set"
+  ca = try require(read_test_certificate())
+  config = TLSConfig.client().with_alpn(["h2", "http/1.1"]).with_ca(ca)
+
+  assert TLSConfig.client().alpn == []
+  assert config.alpn == ["h2", "http/1.1"]
+  assert config.verify
+  assert not TLSConfig.insecure().with_alpn(["h2"]).verify
+end
+
+test "alpn is None on a connection without TLS"
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: 43121}
+  listener = try require(TCPListener.bind_addr(addr))
+  plain = try require(TCPSocket.connect_addr(addr))
+  selected = plain.alpn()
+
+  match plain.close()
+    _ -> ()
+  end
+
+  match listener.close()
+    _ -> ()
+  end
+
+  assert selected == Option.None
+end
+
+test "a client that offers protocols gets None when the server selects none"
+  server_config = try require(server_test_config())
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: 43122}
+  listener = try require(TCPListener.bind_addr(addr))
+
+  server = Task.async(fn () -> Result<String, String>
+    serve_tls_silent(listener, server_config)
+  end)
+
+  plain = try require(TCPSocket.connect_addr(addr))
+  config = TLSConfig.insecure().with_alpn(["h2", "http/1.1"])
+
+  client =
+    match plain.upgrade_tls("localhost", config)
+      Result.Ok(s) -> s
+      Result.Err(e) -> fail "upgrade_tls: #{net_message(e)}"
+    end
+
+  selected = client.alpn()
+
+  match client.close()
+    _ -> ()
+  end
+
+  match Task.await(server)
+    _ -> ()
+  end
+
+  match listener.close()
+    _ -> ()
+  end
+
+  assert selected == Option.None
+end
+
+test "a client handshake rejects a protocol name it cannot encode"
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: 43123}
+  listener = try require(TCPListener.bind_addr(addr))
+  plain = try require(TCPSocket.connect_addr(addr))
+  config = TLSConfig.insecure().with_alpn(["h2", ""])
+  upgraded = plain.upgrade_tls("localhost", config)
+
+  match plain.close()
+    _ -> ()
+  end
+
+  match listener.close()
+    _ -> ()
+  end
+
+  match upgraded
+    Result.Ok(_) ->
+      fail "expected the handshake to reject the name"
+
+    Result.Err(tls_error: TLSError) ->
+      match tls_error
+        TLSError.ProtocolNameInvalid -> ()
+        _ -> fail "expected ProtocolNameInvalid, got: #{tls_error.message()}"
+      end
+
+    Result.Err(io_error: IOError) ->
+      fail "expected ProtocolNameInvalid, got: #{io_error.message()}"
+  end
+end
+
+# A protocol name of `size` bytes.
+priv fn name_of_size(size: Int) -> String
+  name = ""
+
+  while name.byte_length() < size
+    name = name <> "a"
+  end
+
+  name
+end
+
 priv fn run_echo_roundtrip(
   port: Int,
   server_config: TLSConfig,
