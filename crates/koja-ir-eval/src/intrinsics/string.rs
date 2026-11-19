@@ -133,8 +133,7 @@ fn find<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErr
 
 /// Byte-range copy over `[start, stop)`. Endpoints clamp to the byte
 /// length and must land on codepoint boundaries. Works on raw bytes
-/// with an O(1) boundary check because a full UTF-8 validation per
-/// call would make split-style loops quadratic again.
+/// with an O(1) boundary check, because the offsets count bytes.
 fn slice_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
     let bytes = helpers::arg_string_bytes(args, 0, "String.slice_bytes")?;
     let start = helpers::arg_int(args, 1, "String.slice_bytes")?;

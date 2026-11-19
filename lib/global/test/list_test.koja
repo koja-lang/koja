@@ -188,6 +188,39 @@ test "for-in iterates map, filter, and chained lists"
   assert sum_c == 120
 end
 
+test "next returns the element at the cursor and the next cursor"
+  nums: List<Int> = [10, 20, 30]
+
+  assert nums.cursor() == 0
+  assert nums.next(0) == Option.Some((10, 1))
+  assert nums.next(1) == Option.Some((20, 2))
+  assert nums.next(2) == Option.Some((30, 3))
+end
+
+test "next returns None for a cursor outside the list"
+  nums: List<Int> = [10, 20, 30]
+  empty: List<Int> = []
+
+  assert nums.next(3) == Option.None
+  assert nums.next(4) == Option.None
+  assert nums.next(-1) == Option.None
+  assert empty.next(0) == Option.None
+end
+
+test "next returns an independent copy of a heap element"
+  names: List<String> = ["ada", "grace"]
+  rows: List<List<Int>> = [[1, 2], [3]]
+
+  assert names.next(1) == Option.Some(("grace", 2))
+
+  (row, cursor) = rows.next(0).unwrap()
+  changed = row.append(9)
+
+  assert cursor == 1
+  assert changed == [1, 2, 9]
+  assert rows == [[1, 2], [3]]
+end
+
 test "equality compares elements"
   assert [1, 2, 3] == [1, 2, 3]
   assert [1, 2, 3] != [1, 2, 4]

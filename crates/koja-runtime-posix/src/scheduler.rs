@@ -398,7 +398,7 @@ static ENTRY_EXIT_OVERRIDE: AtomicI32 = AtomicI32::new(-1);
 /// The OS exit code for an entry-process crash. Non-zero so a crashed
 /// program is observably a failure (mechanical check: PID 1 panic exits
 /// non-zero).
-const CRASH_EXIT_CODE: i32 = 1;
+pub(crate) const CRASH_EXIT_CODE: i32 = 1;
 
 /// Scheduling priority levels, mirroring `koja_runtime_core::Priority`
 /// (`Low`, `Normal`, `High`). One ready deque/injector per level.

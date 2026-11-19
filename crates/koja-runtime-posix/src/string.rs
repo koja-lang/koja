@@ -9,13 +9,16 @@ use crate::util::{
     BITS_PER_BYTE, alloc_binary, alloc_koja_string, read_bit_length, string_payload_bytes,
 };
 
-/// Borrows the complete UTF-8 payload of a Koja `String`.
+/// Borrows the complete UTF-8 payload of a Koja `String`. Does not
+/// validate the bytes, so a call costs the same for any length.
 ///
 /// # Safety
-/// `ptr` must point to a valid Koja `String` payload.
+/// `ptr` must point to a valid Koja `String` payload, and the payload
+/// must be valid UTF-8.
 unsafe fn payload_str<'a>(ptr: *const u8) -> &'a str {
     let bytes = unsafe { string_payload_bytes(ptr) };
-    str::from_utf8(bytes).expect("Koja String payload must be valid UTF-8")
+    // SAFETY: every `String` constructor validates its bytes.
+    unsafe { str::from_utf8_unchecked(bytes) }
 }
 
 /// Byte offset of the first occurrence of `needle` in `haystack` at or
@@ -53,8 +56,8 @@ fn find_bytes_sentinel(haystack: &[u8], needle: &[u8], from: i64) -> i64 {
 /// Whether `offset` lands on a UTF-8 codepoint boundary of `bytes`,
 /// assuming `bytes` is valid UTF-8. O(1), since a boundary is the end
 /// of the buffer or any byte that is not a continuation byte. Shared
-/// with `koja-ir-eval` so `slice_bytes` never re-validates the whole
-/// payload per call, which would make callers quadratic again.
+/// with `koja-ir-eval` so `slice_bytes` checks its offsets the same
+/// way on both backends.
 pub fn is_utf8_boundary(bytes: &[u8], offset: usize) -> bool {
     offset >= bytes.len() || (bytes[offset] & 0xC0) != 0x80
 }
@@ -273,8 +276,8 @@ pub unsafe extern "C" fn koja_string_slice_bytes(
     start: i64,
     stop: i64,
 ) -> *const u8 {
-    // Raw bytes rather than `payload_str`, whose full UTF-8 validation
-    // per call would make split-style loops quadratic again.
+    // Raw bytes rather than `payload_str`, because the offsets count
+    // bytes and the boundary check below reads single bytes.
     let bytes = unsafe { string_payload_bytes(ptr) };
     let start = (start.max(0) as usize).min(bytes.len());
     let stop = (stop.max(0) as usize).min(bytes.len()).max(start);

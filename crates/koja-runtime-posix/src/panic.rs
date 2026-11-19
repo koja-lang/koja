@@ -11,6 +11,8 @@ use std::path::Path;
 
 use koja_runtime_core::CrashInfo;
 
+use crate::scheduler::CRASH_EXIT_CODE;
+
 unsafe extern "C" {
     static __koja_app_name: [c_char; 0];
 }
@@ -187,6 +189,21 @@ fn capture(origin: PanicOrigin) -> Vec<Frame> {
 pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
     render_diagnostic(origin, message);
     std::process::abort();
+}
+
+/// Prints `message` to stderr in the koja panic format with no backtrace,
+/// then exits with the crash exit code. The terminal path for a failure
+/// before the entry process starts, when no Koja frame exists yet.
+pub(crate) fn exit_before_entry(message: &str) -> ! {
+    let c = if use_color() { &COLORS_ON } else { &COLORS_OFF };
+
+    eprint!("{}", c.red);
+    eprintln!("** (panic) {message}");
+    eprint!("{}", c.reset);
+    eprintln!();
+    let _ = std::io::stderr().flush();
+
+    std::process::exit(CRASH_EXIT_CODE);
 }
 
 /// Renders `message` plus a filtered, symbolicated backtrace to stderr in the
