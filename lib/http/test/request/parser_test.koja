@@ -293,6 +293,41 @@ test "Request.Parser reads each form of the request target"
   assert slashes.uri.host == Option.Some("example.com")
 end
 
+test "Request.Parser stores the query as it arrived"
+  (brackets, _) = try complete_request(
+    "GET /search?tag[]=a&q={x}|%zz HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert brackets.uri.path == "/search"
+  assert brackets.uri.query == Option.Some("tag[]=a&q={x}|%zz")
+
+  (marks, _) = try complete_request(
+    "GET /a?b?c HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert marks.uri.path == "/a"
+  assert marks.uri.query == Option.Some("b?c")
+
+  (empty, _) = try complete_request(
+    "GET /a? HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert empty.uri.query == Option.Some("")
+
+  (absent, _) = try complete_request(
+    "GET /a HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert absent.uri.query == Option.None
+
+  (absolute, _) = try complete_request(
+    "GET http://other.example/a?tag[]=a HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert absolute.uri.path == "/a"
+  assert absolute.uri.query == Option.Some("tag[]=a")
+end
+
 test "Request.Parser rejects a request target it cannot read"
   try expect_malformed_request("GET * HTTP/1.1\r\nHost: example.com\r\n\r\n")
   try expect_malformed_request(
@@ -300,6 +335,13 @@ test "Request.Parser rejects a request target it cannot read"
   )
   try expect_malformed_request("GET /a{b HTTP/1.1\r\nHost: example.com\r\n\r\n")
   try expect_malformed_request("GET /a#b HTTP/1.1\r\nHost: example.com\r\n\r\n")
+  try expect_malformed_request(
+    "GET /a?b#c HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+  try expect_malformed_request(
+    "GET /a{b?c=1 HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+  try expect_malformed_request("GET ?a=1 HTTP/1.1\r\nHost: example.com\r\n\r\n")
   try expect_malformed_request(
     "CONNECT example.com HTTP/1.1\r\nHost: example.com\r\n\r\n",
   )

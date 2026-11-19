@@ -70,6 +70,10 @@ struct Request.Parser
   when it is an absolute URI. The `*` of `OPTIONS *` is stored as the
   path. A `CONNECT` target is read as a host and a port.
 
+  The query is the text after the first `?`, as it arrived. The
+  parser does not check it, so it can hold text that `URI.parse`
+  rejects, such as the brackets of `tag[]=a`.
+
   An HTTP/1.1 request must have exactly one `Host` header. A method
   that `Method` does not name fails with `UnsupportedMethod`. After a
   failure, do not use the parser again.
@@ -241,8 +245,27 @@ struct Request.Parser
     uri
   end
 
+  # Splits a request target at its first `?` into the text before the
+  # query and the query.
+  priv fn split_query(target: String) -> (String, Option<String>)
+    parts = target.split("?")
+    location = parts.get(0).unwrap()
+
+    if parts.length() == 1
+      return (location, Option.None)
+    end
+
+    query = String.join(parts.slice(1, parts.length() - 1), "?")
+    (location, Option.Some(query))
+  end
+
   # Reads a request target that is not a `CONNECT` target. It is `*`,
   # a path with an optional query, or an absolute URI.
+  #
+  # The text before the query must be a valid URI. The query is kept
+  # as it arrived, because clients send characters there that a URI
+  # does not allow, such as the brackets of `tag[]=a`. The code that
+  # decodes the query decides what they mean.
   priv fn target_uri(method: Method, target: String) -> URI ! Parser.Error
     if target == "*"
       if method != Method.Options
@@ -252,28 +275,30 @@ struct Request.Parser
       return Request.Parser.path_uri("*", Option.None)
     end
 
-    if target.starts_with?("/")
-      # A target that starts with `//` reads as a host on its own, so
-      # parse the target behind a placeholder host.
-      origin = URI.parse("http://localhost" <> target)
-        rescue _ -> fail Parser.Error.Malformed("invalid request target")
-
-      if origin.fragment.some?()
-        fail Parser.Error.Malformed("invalid request target")
-      end
-
-      return Request.Parser.path_uri(origin.path, origin.query)
-    end
-
-    absolute = URI.parse(target)
-      rescue _ -> fail Parser.Error.Malformed("invalid request target")
-
-    if absolute.scheme.none?() or not Request.Parser.present?(absolute.host)
-      or absolute.fragment.some?()
-
+    # A fragment never goes on the wire.
+    if target.contains?("#")
       fail Parser.Error.Malformed("invalid request target")
     end
 
+    (location, query) = Request.Parser.split_query(target)
+
+    if location.starts_with?("/")
+      # A target that starts with `//` reads as a host on its own, so
+      # parse the path behind a placeholder host.
+      origin = URI.parse("http://localhost" <> location)
+        rescue _ -> fail Parser.Error.Malformed("invalid request target")
+
+      return Request.Parser.path_uri(origin.path, query)
+    end
+
+    absolute = URI.parse(location)
+      rescue _ -> fail Parser.Error.Malformed("invalid request target")
+
+    if absolute.scheme.none?() or not Request.Parser.present?(absolute.host)
+      fail Parser.Error.Malformed("invalid request target")
+    end
+
+    absolute.query = query
     absolute.userinfo = Option.None
     absolute
   end

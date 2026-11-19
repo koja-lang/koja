@@ -211,6 +211,16 @@ Two request targets are not URIs. The parser stores the `*` of
 and a port. `fragment` and `userinfo` never go on the wire, and a
 writer ignores them.
 
+The parser checks the path against RFC 3986 and keeps the query as
+it arrived. RFC 3986 does not allow `[` and `]` in a query, and
+`URI.parse` follows it. Browsers follow the WHATWG URL Standard,
+which sends them raw, so `?tag[]=a` is a request that real clients
+send. A server that answers it with 400 is correct and of no use.
+Bandit makes the same split. It cuts the target at the first `?` and
+leaves the query to Plug. So `URI.parse` stays strict, and a
+`request.uri` can hold a query that `URI.parse` rejects. The code
+that decodes the query answers for a bad escape.
+
 #### `Method` has ten variants
 
 ```koja
