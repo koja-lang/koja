@@ -664,19 +664,27 @@ pub enum FunctionOrigin {
 }
 
 /// The function name a `test` block desugars to,
-/// `__test_<file stem>_<line>`. The stem keeps top-level tests in two
-/// files of one package from colliding on a line number. Typecheck and
-/// test discovery both call this so the harness names match.
+/// `__<file path>_<line>`. The path is the one the file was loaded
+/// with, less its extension. `__` replaces each path separator, and
+/// `_` replaces each other character that an identifier cannot hold.
+/// The leading `__` marks the name as one the compiler made, and it
+/// keeps the name an identifier when the path is absent or starts
+/// with a digit. The directories keep top-level tests in
+/// two files of one package from colliding on a line number, also
+/// when the files share a stem, as `request/parser_test.koja` and
+/// `response/parser_test.koja` do. Typecheck and test discovery both
+/// call this so the harness names match.
 pub fn synthesized_test_name(path: Option<&Path>, line: u32) -> String {
-    let stem = path
-        .and_then(Path::file_stem)
-        .map(|stem| stem.to_string_lossy())
-        .unwrap_or_default();
-    let stem: String = stem
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    format!("__test_{stem}_{line}")
+    let path = path.map(|path| path.with_extension("")).unwrap_or_default();
+    let mut key = String::new();
+    for c in path.to_string_lossy().chars() {
+        match c {
+            c if std::path::is_separator(c) => key.push_str("__"),
+            c if c.is_ascii_alphanumeric() => key.push(c),
+            _ => key.push('_'),
+        }
+    }
+    format!("__{key}_{line}")
 }
 
 /// An `impl Protocol for Type` block. Inherent methods live in
@@ -1712,5 +1720,49 @@ mod annotation_tests {
         assert!(!is_intrinsic(&[ann("intrinsic", str_value("foo"))]));
         assert!(!is_intrinsic(&[ann("extern", str_value("C"))]));
         assert!(!is_intrinsic(&[]));
+    }
+}
+
+#[cfg(test)]
+mod synthesized_test_name_tests {
+    use super::*;
+
+    #[test]
+    fn name_holds_the_file_stem_and_the_line() {
+        let path = PathBuf::from("stack_test.koja");
+        assert_eq!(synthesized_test_name(Some(&path), 12), "__stack_test_12");
+    }
+
+    #[test]
+    fn files_with_one_stem_in_two_directories_get_different_names() {
+        let request = PathBuf::from("test/request/parser_test.koja");
+        let response = PathBuf::from("test/response/parser_test.koja");
+        assert_eq!(
+            synthesized_test_name(Some(&request), 20),
+            "__test__request__parser_test_20"
+        );
+        assert_eq!(
+            synthesized_test_name(Some(&response), 20),
+            "__test__response__parser_test_20"
+        );
+    }
+
+    #[test]
+    fn a_separator_and_an_underscore_give_different_names() {
+        let nested = PathBuf::from("test/a/b_c_test.koja");
+        let flat = PathBuf::from("test/a_b/c_test.koja");
+        assert_eq!(
+            synthesized_test_name(Some(&nested), 3),
+            "__test__a__b_c_test_3"
+        );
+        assert_eq!(
+            synthesized_test_name(Some(&flat), 3),
+            "__test__a_b__c_test_3"
+        );
+    }
+
+    #[test]
+    fn name_without_a_path_holds_only_the_line() {
+        assert_eq!(synthesized_test_name(None, 7), "___7");
     }
 }

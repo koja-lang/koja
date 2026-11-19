@@ -11,8 +11,8 @@ test "a handler reads the path and the body of a parsed request"
   raw = "POST /items HTTP/1.1\r\nHost: example.com\r\nContent-Length: 4\r\n\r\ntest"
 
   req =
-    match Parser.parse_request(raw.to_binary())
-      Result.Ok(Parser.Outcome.Complete((request, _))) -> request
+    match whole_request(raw.to_binary())
+      Result.Ok(Option.Some((request, _))) -> request
       _ -> fail "expected a complete request"
     end
 

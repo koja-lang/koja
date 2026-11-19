@@ -1,12 +1,14 @@
 @doc """
-Why the parser rejected a message. Each cause is one response a
-server sends: `BodyTooLarge` is 413, `HeadersTooLarge` is 431,
-`Malformed` is 400, and `UnsupportedMethod` is 501. `Malformed`
-carries what was wrong, and `UnsupportedMethod` carries the method
-name.
+Why a parser rejected a message. Each cause is one response a server
+sends: `HeadersTooLarge` is 431, `Malformed` is 400, and
+`UnsupportedMethod` is 501. `Malformed` carries what was wrong, and
+`UnsupportedMethod` carries the method name.
+
+A parser has no limit for a body, so a body that is too large is not
+a `Parser.Error`. A `Content-Length` or a chunk size that does not
+fit an `Int` is `Malformed`.
 """
 enum Parser.Error
-  BodyTooLarge
   HeadersTooLarge
   Malformed(String)
   UnsupportedMethod(String)
@@ -16,7 +18,6 @@ enum Parser.Error
   """
   fn message(self) -> String
     match self
-      Parser.Error.BodyTooLarge -> "the body is larger than the limit"
       Parser.Error.HeadersTooLarge -> "the head is larger than the limit"
       Parser.Error.Malformed(detail) -> "malformed message: " <> detail
       Parser.Error.UnsupportedMethod(name) -> "unsupported method: " <> name

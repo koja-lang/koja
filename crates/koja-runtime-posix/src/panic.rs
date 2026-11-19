@@ -159,11 +159,15 @@ fn capture(origin: PanicOrigin) -> Vec<Frame> {
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "<unknown>".to_string());
 
-            if should_skip_frame(&name, origin) {
+            let file = symbol.filename().and_then(|p| p.to_str()).unwrap_or("");
+
+            // A frame from Koja source is always worth showing, whatever
+            // its name is. The name rules sort out the frames of the
+            // runtime, of Rust, and of the C library.
+            if !is_koja_source(file) && should_skip_frame(&name, origin) {
                 return;
             }
 
-            let file = symbol.filename().and_then(|p| p.to_str()).unwrap_or("");
             frames.push(Frame {
                 name: demangle_koja_name(&name),
                 file: file.to_string(),
@@ -302,6 +306,14 @@ fn should_skip_frame(name: &str, origin: PanicOrigin) -> bool {
     false
 }
 
+/// True when `file_path` names Koja source. That is a `.koja` or
+/// `.kojs` file, or a virtual stdlib path such as `<Global.option>`.
+fn is_koja_source(file_path: &str) -> bool {
+    // DWARF gives a parentless path a `./` directory prefix.
+    let path = file_path.strip_prefix("./").unwrap_or(file_path);
+    path.starts_with('<') || path.ends_with(".koja") || path.ends_with(".kojs")
+}
+
 fn is_stdlib_frame(file_path: &str) -> bool {
     // DWARF reconstructs parentless virtual paths (e.g. the stdlib's
     // `<Global.option>`) with a `./` directory prefix. Strip it so the
@@ -335,27 +347,17 @@ fn format_file_path(file_path: &str, cwd: Option<&Path>, is_stdlib: bool) -> Str
     file_path.to_string()
 }
 
-/// Converts mangled Koja names into a readable form:
-/// - `__koja_user_main` -> `main`
-/// - `Option_$Int$_unwrap` -> `Option.unwrap`
-/// - `Point_distance` -> `Point.distance`
+/// Converts a frame name into the form a backtrace shows.
+/// `__koja_user_main` becomes `main`, and `$TypeParam$` segments go.
+/// The debug info already holds a readable `Type.method` name, so
+/// every other character stays as it is. A `_` in a name is part of
+/// the name, as in `Stack.pop_item`.
 fn demangle_koja_name(name: &str) -> String {
     if name == "__koja_user_main" {
         return "main".to_string();
     }
 
-    let stripped = strip_generic_params(name);
-
-    if let Some(first) = stripped.chars().next()
-        && first.is_uppercase()
-        && let Some(idx) = stripped.find('_')
-    {
-        let type_name = &stripped[..idx];
-        let method = &stripped[idx + 1..];
-        return format!("{type_name}.{method}");
-    }
-
-    stripped
+    strip_generic_params(name)
 }
 
 /// Strips `$TypeParam$` segments from mangled names.
@@ -442,5 +444,35 @@ mod tests {
             assert!(!should_skip_frame("__koja_user_main", origin));
             assert!(!should_skip_frame("greet", origin));
         }
+    }
+
+    #[test]
+    fn koja_source_is_a_koja_file_or_a_virtual_stdlib_path() {
+        for file in [
+            "test/request/parser_test.koja",
+            "./panic.kojs",
+            "<Global.option>",
+            "./<Test.spec_process>",
+        ] {
+            assert!(is_koja_source(file), "{file}");
+        }
+
+        for file in ["", "src/panic.rs", "./__test_harness__"] {
+            assert!(!is_koja_source(file), "{file}");
+        }
+    }
+
+    #[test]
+    fn demangle_keeps_the_underscores_of_a_name() {
+        assert_eq!(demangle_koja_name("__koja_user_main"), "main");
+        assert_eq!(demangle_koja_name("Stack.pop_item"), "Stack.pop_item");
+        assert_eq!(
+            demangle_koja_name("Stack.__src__stack_4"),
+            "Stack.__src__stack_4"
+        );
+        assert_eq!(
+            demangle_koja_name("__test__request__parser_test_20"),
+            "__test__request__parser_test_20"
+        );
     }
 }

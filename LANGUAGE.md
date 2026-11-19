@@ -1,5 +1,7 @@
 # Koja Language Reference
 
+> This reference follows the `main` branch. It can describe changes that are not in a published version of Koja. For the newest published version, read the [language reference](https://kojalang.org/language/) on kojalang.org.
+
 Koja is a statically typed, compiled language targeting native binaries via LLVM, with no garbage collector. It combines a Rust-inspired type system, Swift-style value semantics, an Erlang-style concurrency model, and Ruby-inspired syntax. The compiler itself is implemented as a Rust workspace.
 
 ---
@@ -1725,7 +1727,7 @@ decoder = &parse/1
 port = DEFAULT_PORT
 ```
 
-The local name keeps the case of its target. A function alias is lowercase and a type or constant alias is uppercase, so `alias JSON.decode as Parse` is an error. Only package-level declarations can be aliased. To reach a method or a nested type, alias the owning type and call through it.
+The local name keeps the case of its target. A function alias is lowercase and a type or constant alias is uppercase, so `alias JSON.decode as Parse` is an error. A type alias can name a nested type at any depth, as in `alias IO.Reader.Options as ReaderOptions`. A function or constant alias can name only a package-level declaration. To reach a method or a constant that a type owns, alias the type and call through it. An alias of an owner also reaches its nested types, so `alias Net.TCPServer` makes `TCPServer.Config` available.
 
 Qualified syntax still works with no alias:
 

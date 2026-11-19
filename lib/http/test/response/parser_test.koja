@@ -1,0 +1,409 @@
+alias Test.require
+
+const CHUNKED_RESPONSE: String = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+const LENGTH_RESPONSE: String = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+
+test "Response.Parser reads the status, the version, and the body"
+  (response, rest) = try complete_response(
+    "HTTP/1.1 404 Not Here\r\nContent-Length: 9\r\n\r\nnot found",
+    Method.Get,
+    false,
+  )
+
+  assert response.status == Status.not_found()
+  assert response.status.reason() == "Not Found"
+  assert response.version == Version.HTTP1_1
+  assert response.text() == Result.Ok("not found")
+  assert rest.byte_size() == 0
+end
+
+test "Response.Parser reads a status line with no reason phrase"
+  (response, _) = try complete_response(
+    "HTTP/1.0 200\r\nContent-Length: 2\r\n\r\nok",
+    Method.Get,
+    false,
+  )
+
+  assert response.status == Status.ok()
+  assert response.version == Version.HTTP1_0
+end
+
+test "Response.Parser returns one event for each call to next"
+  parser = Response.Parser.new(Method.Get).feed(LENGTH_RESPONSE.to_binary())
+
+  (parser, head) = try require(parser.next())
+
+  match head
+    Option.Some(Response.Parser.Event.Response(response)) ->
+      assert response.status == Status.ok()
+      assert response.body.byte_size() == 0
+
+    _ ->
+      fail "expected a Response event first"
+  end
+
+  (parser, data) = try require(parser.next())
+
+  assert data == Option.Some(Response.Parser.Event.Data("hello".to_binary()))
+
+  (parser, ending) = try require(parser.next())
+
+  assert ending == Option.Some(Response.Parser.Event.End)
+
+  (parser, nothing) = try require(parser.next())
+
+  assert nothing == Option.None
+  assert parser.rest().byte_size() == 0
+end
+
+test "Response.Parser reads no more after End"
+  second = "HTTP/1.1 204 No Content\r\n\r\n"
+  parser = Response.Parser.new(Method.Get)
+    .feed((LENGTH_RESPONSE <> second).to_binary())
+  events: List<Response.Parser.Event> = []
+
+  loop
+    (parser, event) = try require(parser.next())
+
+    match event
+      Option.Some(found) -> events = events.append(found)
+      Option.None -> break
+    end
+  end
+
+  assert events.length() == 3
+  assert events.last() == Option.Some(Response.Parser.Event.End)
+  assert parser.rest() == second.to_binary()
+
+  (parser, after_finish) = try require(parser.finish().next())
+
+  assert after_finish == Option.None
+  assert parser.rest() == second.to_binary()
+end
+
+test "Response.Parser needs more bytes for every prefix of a message"
+  for raw in [LENGTH_RESPONSE, CHUNKED_RESPONSE]
+    buffer = raw.to_binary()
+    size = 0
+
+    while size < buffer.byte_size()
+      prefix = size == 0 ? <<>> : buffer.slice(Range{start: 0, stop: size - 1})
+
+      match whole_response(prefix, Method.Get, false)
+        Result.Ok(Option.None) -> ()
+        _ -> fail "a prefix of #{size} bytes did not need more bytes"
+      end
+
+      size += 1
+    end
+  end
+end
+
+test "Response.Parser returns the same events for bytes that arrive one at a time"
+  for raw in [LENGTH_RESPONSE, CHUNKED_RESPONSE]
+    buffer = raw.to_binary()
+    whole = try require(response_events([buffer], Method.Get, false))
+    single = try require(response_events(each_byte(buffer), Method.Get, false))
+
+    assert single == whole
+  end
+end
+
+test "Response.Parser returns the same events for a message split at any byte"
+  for raw in [LENGTH_RESPONSE, CHUNKED_RESPONSE]
+    buffer = raw.to_binary()
+    whole = try require(response_events([buffer], Method.Get, false))
+    count = 1
+
+    while count < buffer.byte_size()
+      split = try require(
+        response_events(split_at(buffer, count), Method.Get, false),
+      )
+
+      if split != whole
+        fail "a split after #{count} bytes changed the events"
+      end
+
+      count += 1
+    end
+  end
+end
+
+test "Response.Parser decodes a chunked body"
+  (response, rest) = try complete_response(CHUNKED_RESPONSE, Method.Get, false)
+
+  assert response.text() == Result.Ok("hello world")
+  assert rest.byte_size() == 0
+end
+
+test "Response.Parser gives the response to a HEAD no body"
+  (response, rest) = try complete_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 5000000000\r\n\r\n",
+    Method.Head,
+    false,
+  )
+
+  assert response.body.byte_size() == 0
+  assert response.headers.get("Content-Length") == Option.Some("5000000000")
+  assert rest.byte_size() == 0
+end
+
+test "Response.Parser gives a 204 and a 304 no body"
+  for raw in [
+    "HTTP/1.1 204 No Content\r\n\r\n",
+    "HTTP/1.1 304 Not Modified\r\nContent-Length: 12\r\n\r\n"
+  ]
+    (response, rest) = try complete_response(raw, Method.Get, false)
+
+    assert response.body.byte_size() == 0
+    assert rest.byte_size() == 0
+  end
+end
+
+test "Response.Parser returns a 1xx as a Response with no End"
+  raw = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+  events = try require(response_events([raw.to_binary()], Method.Post, false))
+
+  assert events.length() == 4
+  assert events.get(2) ==
+    Option.Some(Response.Parser.Event.Data("ok".to_binary()))
+  assert events.get(3) == Option.Some(Response.Parser.Event.End)
+
+  interim = try response_at(events, 0)
+  final = try response_at(events, 1)
+
+  assert interim.status.code == 100
+  assert final.status == Status.ok()
+
+  (response, _) = try complete_response(raw, Method.Post, false)
+
+  assert response.status == Status.ok()
+  assert response.text() == Result.Ok("ok")
+end
+
+test "Response.Parser ends at a 101 and keeps the bytes after it"
+  frame = <<129, 2, 104, 105>>
+  head = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+
+  match whole_response(head.to_binary() <> frame, Method.Get, false)
+    Result.Ok(Option.Some((response, rest))) ->
+      assert response.status.code == 101
+      assert response.headers.get("Upgrade") == Option.Some("websocket")
+      assert response.body.byte_size() == 0
+      assert rest == frame
+
+    _ ->
+      fail "expected a complete 101 response"
+  end
+end
+
+test "Response.Parser gives a 2xx response to a CONNECT no body"
+  (response, rest) = try complete_response(
+    "HTTP/1.1 200 Connection Established\r\n\r\ntunnel",
+    Method.Connect,
+    false,
+  )
+
+  assert response.body.byte_size() == 0
+  assert rest == "tunnel".to_binary()
+end
+
+test "Response.Parser reads a body with no length to the end of the stream"
+  raw = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello"
+
+  match whole_response(raw.to_binary(), Method.Get, false)
+    Result.Ok(Option.None) -> ()
+    _ -> fail "expected a need for bytes before the stream ended"
+  end
+
+  (response, rest) = try complete_response(raw, Method.Get, true)
+
+  assert response.text() == Result.Ok("hello")
+  assert rest.byte_size() == 0
+end
+
+test "Response.Parser returns the same events for a body with no length split at any byte"
+  raw = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello"
+  buffer = raw.to_binary()
+  whole = try require(response_events([buffer], Method.Get, true))
+  count = 1
+
+  assert whole.length() == 3
+  assert whole.last() == Option.Some(Response.Parser.Event.End)
+
+  while count < buffer.byte_size()
+    split = try require(
+      response_events(split_at(buffer, count), Method.Get, true),
+    )
+
+    if split != whole
+      fail "a split after #{count} bytes changed the events"
+    end
+
+    count += 1
+  end
+end
+
+test "Response.Parser.finish ends a body with no length after its bytes"
+  head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+  parser = Response.Parser.new(Method.Get).feed(head.to_binary())
+
+  (parser, _) = try require(parser.next())
+  (parser, waiting) = try require(parser.next())
+
+  assert waiting == Option.None
+
+  parser = parser.feed("hello".to_binary())
+  (parser, data) = try require(parser.next())
+
+  assert data == Option.Some(Response.Parser.Event.Data("hello".to_binary()))
+
+  (parser, still_open) = try require(parser.next())
+
+  assert still_open == Option.None
+
+  (_, ending) = try require(parser.finish().next())
+
+  assert ending == Option.Some(Response.Parser.Event.End)
+end
+
+test "Response.Parser fails when the stream ended inside a response"
+  try expect_malformed_response("", true)
+  try expect_malformed_response("HTTP/1.1 200 OK\r\nContent-Le", true)
+  try expect_malformed_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhel",
+    true,
+  )
+  try expect_malformed_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n",
+    true,
+  )
+  try expect_malformed_response("HTTP/1.1 100 Continue\r\n\r\n", true)
+end
+
+test "Response.Parser rejects a malformed status line"
+  try expect_malformed_response("HTTP/1.1\r\n\r\n", false)
+  try expect_malformed_response("HTTP/1.1 abc OK\r\n\r\n", false)
+  try expect_malformed_response("HTTP/1.1 20 OK\r\n\r\n", false)
+  try expect_malformed_response("HTTP/3 200 OK\r\n\r\n", false)
+  try expect_malformed_response("ICY 200 OK\r\n\r\n", false)
+end
+
+test "Response.Parser applies the strict length rules"
+  try expect_malformed_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n",
+    false,
+  )
+  try expect_malformed_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab",
+    false,
+  )
+  try expect_malformed_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n",
+    false,
+  )
+end
+
+test "Response.Parser fails with Malformed for a length that does not fit an Int"
+  huge = "HTTP/1.1 200 OK\r\nContent-Length: 99999999999999999999999999\r\n\r\n"
+  wide = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n"
+
+  assert whole_response(huge.to_binary(), Method.Get, false) ==
+    Result.Err(Parser.Error.Malformed("Content-Length is too large"))
+  assert whole_response(wide.to_binary(), Method.Get, false) ==
+    Result.Err(Parser.Error.Malformed("chunk size is too large"))
+end
+
+test "Response.Parser fails with HeadersTooLarge past max_header_bytes"
+  raw = "HTTP/1.1 200 OK\r\nX-Pad: 0123456789012345678901234567890123456789\r\n\r\n"
+  parser = Response.Parser.new(Method.Get, Parser.Options{max_header_bytes: 32})
+    .feed(raw.to_binary())
+
+  match parser.next()
+    Result.Err(error) -> assert error == Parser.Error.HeadersTooLarge
+    Result.Ok(_) -> fail "expected HeadersTooLarge"
+  end
+end
+
+priv fn complete_response(raw: String, method: Method, ended: Bool)
+  -> (Response, Binary) ! Test.Failure
+
+  match whole_response(raw.to_binary(), method, ended)
+    Result.Ok(Option.Some(found)) -> found
+    Result.Ok(Option.None) -> fail "expected a response, got a need for bytes"
+    Result.Err(error) -> fail "expected a response, got '#{error.message()}'"
+  end
+end
+
+priv fn expect_malformed_response(raw: String, ended: Bool) ! Test.Failure
+  match whole_response(raw.to_binary(), Method.Get, ended)
+    Result.Err(Parser.Error.Malformed(_)) -> ()
+    Result.Err(error) -> fail "expected Malformed, got '#{error.message()}'"
+    Result.Ok(_) -> fail "expected Malformed for '#{raw}'"
+  end
+end
+
+# Adds `event` to `events`. Joins it to the last event when both are
+# `Data`, so the result does not depend on how the bytes were split.
+priv fn join_response_event(
+  events: List<Response.Parser.Event>,
+  event: Response.Parser.Event,
+) -> List<Response.Parser.Event>
+
+  match event
+    Response.Parser.Event.Data(right) ->
+      match events.last()
+        Option.Some(Response.Parser.Event.Data(left)) ->
+          (_, kept) = events.pop()
+          return kept.append(Response.Parser.Event.Data(left <> right))
+
+        _ ->
+          ()
+      end
+
+    _ ->
+      ()
+  end
+
+  events.append(event)
+end
+
+# Returns the response that the `Response` event at `index` carries.
+priv fn response_at(events: List<Response.Parser.Event>, index: Int)
+  -> Response ! Test.Failure
+
+  match events.get(index)
+    Option.Some(Response.Parser.Event.Response(response)) -> response
+    _ -> fail "expected a Response event at index #{index}"
+  end
+end
+
+# Feeds each piece to one parser and takes every event after each
+# piece. `ended` says that the stream ended after the last piece.
+priv fn response_events(pieces: List<Binary>, method: Method, ended: Bool)
+  -> List<Response.Parser.Event> ! Parser.Error
+
+  events: List<Response.Parser.Event> = []
+  index = 0
+  parser = Response.Parser.new(method)
+
+  for piece in pieces
+    index += 1
+    parser = parser.feed(piece)
+
+    if ended and index == pieces.length()
+      parser = parser.finish()
+    end
+
+    loop
+      (parser, event) = try parser.next()
+
+      match event
+        Option.Some(found) -> events = join_response_event(events, found)
+        Option.None -> break
+      end
+    end
+  end
+
+  events
+end

@@ -1,0 +1,21 @@
+# Where a parser is in a message. Public only because `Parser.State`
+# carries it. Not for callers to use.
+#
+# `Head` waits for a head. `Body` holds how many bytes of a body with
+# a declared length are still to come. `ChunkSize`, `ChunkData`,
+# `ChunkEnd`, and `Trailers` are the parts of a chunked body.
+# `UntilEnd` is a body that runs to the end of the stream. `Ending`
+# means the message is complete and its `End` event is next. `Done`
+# means the parser reads no more.
+@doc false
+enum Parser.Phase
+  Body{remaining: Int}
+  ChunkData{remaining: Int}
+  ChunkEnd
+  ChunkSize
+  Done
+  Ending
+  Head
+  Trailers
+  UntilEnd
+end

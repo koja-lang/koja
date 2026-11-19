@@ -1,0 +1,377 @@
+priv const BYTE_CR: Int = 13
+priv const BYTE_LF: Int = 10
+priv const BYTE_LOWER_A: Int = 97
+priv const BYTE_LOWER_F: Int = 102
+priv const BYTE_NINE: Int = 57
+priv const BYTE_SEMICOLON: Int = 59
+priv const BYTE_SPACE: Int = 32
+priv const BYTE_TAB: Int = 9
+priv const BYTE_UPPER_A: Int = 65
+priv const BYTE_UPPER_F: Int = 70
+priv const BYTE_ZERO: Int = 48
+priv const CRLF: Binary = <<13, 10>>
+priv const EMPTY: Binary = <<>>
+priv const HEAD_END: Binary = <<13, 10, 13, 10>>
+
+# A chunk size of 15 hex digits is below 2^60, so it fits an `Int`.
+priv const MAX_CHUNK_SIZE_DIGITS: Int = 15
+
+# The bytes that a parser has not read, its options, and where it is
+# in a message. `Request.Parser` and `Response.Parser` each hold one,
+# and the code here is what the two share. Public only because the
+# two parsers carry it. Not for callers to use.
+@doc false
+struct Parser.State
+  buffer: Binary
+  options: Parser.Options
+  phase: Parser.Phase
+
+  # Adds bytes to the end of the buffer.
+  fn feed(self, bytes: Binary) -> Parser.State
+    self.buffer = self.buffer.byte_size() == 0 ? bytes : self.buffer <> bytes
+    self
+  end
+
+  # Returns a state with no bytes, at the start of a message.
+  fn new(options: Parser.Options) -> Parser.State
+    Parser.State{buffer: EMPTY, options: options, phase: Parser.Phase.Head}
+  end
+
+  # Reads how the headers delimit the body, and enters the phase that
+  # reads it. `until_end` says what a message with no declared length
+  # has. With `true` its body runs to the end of the stream, and with
+  # `false` it has no body.
+  fn start_body(self, headers: Headers, until_end: Bool)
+    -> Parser.State ! Parser.Error
+
+    codings = headers.get_all("Transfer-Encoding")
+    lengths = headers.get_all("Content-Length")
+
+    if not codings.empty?()
+      if not lengths.empty?()
+        fail Parser.Error.Malformed("Content-Length and Transfer-Encoding are both present")
+      end
+
+      if codings.length() != 1
+        or codings.get(0).unwrap().downcase() != "chunked"
+
+        fail Parser.Error.Malformed("unsupported Transfer-Encoding")
+      end
+
+      self.phase = Parser.Phase.ChunkSize
+      return self
+    end
+
+    if lengths.empty?()
+      self.phase = until_end ? Parser.Phase.UntilEnd : Parser.Phase.Ending
+      return self
+    end
+
+    first = lengths.get(0).unwrap()
+
+    for value in lengths
+      if value.empty?() or not value.digit?()
+        fail Parser.Error.Malformed("Content-Length is not a number")
+      end
+
+      if value != first
+        fail Parser.Error.Malformed("Content-Length headers have different values")
+      end
+    end
+
+    # The value is all digits, so only a number too large for an `Int`
+    # fails to convert.
+    length = first.to_int()
+      rescue _ -> fail Parser.Error.Malformed("Content-Length is too large")
+
+    self.phase = length == 0
+      ? Parser.Phase.Ending
+      : Parser.Phase.Body{remaining: length}
+    self
+  end
+
+  # Decodes as much of the body as the buffer holds. Returns the state
+  # after those bytes, and the bytes, which can be none. `ended` says
+  # that the stream has ended, which completes a body that runs to the
+  # end of the stream.
+  fn take_body(self, ended: Bool) -> (Parser.State, Binary) ! Parser.Error
+    buffer = self.buffer
+    data = EMPTY
+    limit = self.options.max_header_bytes
+    phase = self.phase
+    position = 0
+    size = buffer.byte_size()
+
+    loop
+      match phase
+        Parser.Phase.Body{remaining: remaining} ->
+          count = Parser.State.smaller(size - position, remaining)
+          data = data <> Parser.State.span(buffer, position, count)
+          position += count
+          phase = count == remaining
+            ? Parser.Phase.Ending
+            : Parser.Phase.Body{remaining: remaining - count}
+          break
+
+        Parser.Phase.ChunkData{remaining: remaining} ->
+          count = Parser.State.smaller(size - position, remaining)
+
+          if count == 0
+            break
+          end
+
+          data = data <> Parser.State.span(buffer, position, count)
+          position += count
+          phase = count == remaining
+            ? Parser.Phase.ChunkEnd
+            : Parser.Phase.ChunkData{remaining: remaining - count}
+
+        Parser.Phase.ChunkEnd ->
+          if size - position < 2
+            break
+          end
+
+          if Parser.State.byte_at(buffer, position) != BYTE_CR
+            or Parser.State.byte_at(buffer, position + 1) != BYTE_LF
+
+            fail Parser.Error.Malformed("chunk data does not end with CRLF")
+          end
+
+          position += 2
+          phase = Parser.Phase.ChunkSize
+
+        Parser.Phase.ChunkSize ->
+          line_end =
+            match buffer.find(CRLF, position)
+              Option.Some(index) -> index
+              Option.None -> size
+            end
+
+          if line_end - position > limit
+            fail Parser.Error.Malformed("chunk size line is too long")
+          end
+
+          if line_end == size
+            break
+          end
+
+          chunk = try Parser.State.chunk_size(buffer, position, line_end)
+          position = line_end + 2
+          phase = chunk == 0
+            ? Parser.Phase.Trailers
+            : Parser.Phase.ChunkData{remaining: chunk}
+
+        Parser.Phase.Trailers ->
+          if size - position < 2
+            break
+          end
+
+          # With no trailers, one empty line follows the last chunk.
+          if Parser.State.byte_at(buffer, position) == BYTE_CR
+            and Parser.State.byte_at(buffer, position + 1) == BYTE_LF
+
+            position += 2
+            phase = Parser.Phase.Ending
+            break
+          end
+
+          found = buffer.find(HEAD_END, position)
+
+          stop =
+            match found
+              Option.Some(index) -> index + 4
+              Option.None -> size
+            end
+
+          if stop - position > limit
+            fail Parser.Error.HeadersTooLarge
+          end
+
+          if found.some?()
+            position = stop
+            phase = Parser.Phase.Ending
+          end
+
+          break
+
+        Parser.Phase.UntilEnd ->
+          data = data <> Parser.State.tail(buffer, position)
+          position = size
+
+          if ended
+            phase = Parser.Phase.Ending
+          end
+
+          break
+
+        _ ->
+          break
+      end
+    end
+
+    state = Parser.State{
+      buffer: Parser.State.tail(buffer, position),
+      options: self.options,
+      phase: phase,
+    }
+    (state, data)
+  end
+
+  # Cuts the head from the start of the buffer. Returns the state
+  # after the head, and the lines of the head, where the first line is
+  # the start line. Returns `Option.None` when the buffer does not
+  # hold the whole head.
+  fn take_head(self) -> Option<(Parser.State, List<String>)> ! Parser.Error
+    found = self.buffer.find(HEAD_END, 0)
+
+    size =
+      match found
+        Option.Some(index) -> index + 4
+        Option.None -> self.buffer.byte_size()
+      end
+
+    if size > self.options.max_header_bytes
+      fail Parser.Error.HeadersTooLarge
+    end
+
+    head_end =
+      match found
+        Option.Some(index) -> index
+        Option.None -> return Option.None
+      end
+
+    text = Parser.State.span(self.buffer, 0, head_end).to_string()
+      rescue _ -> fail Parser.Error.Malformed("the head is not valid UTF-8")
+
+    lines = text.split("\r\n")
+
+    for line in lines
+      if line.contains?("\r") or line.contains?("\n")
+        fail Parser.Error.Malformed("a line in the head has a bare CR or LF")
+      end
+    end
+
+    self.buffer = Parser.State.tail(self.buffer, size)
+    Option.Some((self, lines))
+  end
+
+  # Callers guarantee `index` is in bounds.
+  priv fn byte_at(buffer: Binary, index: Int) -> Int
+    buffer.at(index).unwrap()
+  end
+
+  # Reads the hex size at the start of a chunk size line, which is
+  # the bytes `[start, stop)`. A chunk extension after `;` is ignored.
+  priv fn chunk_size(buffer: Binary, start: Int, stop: Int)
+    -> Int ! Parser.Error
+
+    digits = 0
+    position = start
+    size = 0
+
+    while position < stop
+      match Parser.State.hex_value(Parser.State.byte_at(buffer, position))
+        Option.Some(value) ->
+          if digits == MAX_CHUNK_SIZE_DIGITS
+            fail Parser.Error.Malformed("chunk size is too large")
+          end
+
+          size = size * 16 + value
+
+        Option.None ->
+          break
+      end
+
+      digits += 1
+      position += 1
+    end
+
+    while position < stop
+      and Parser.State.space?(Parser.State.byte_at(buffer, position))
+
+      position += 1
+    end
+
+    extension = position < stop
+      and Parser.State.byte_at(buffer, position) == BYTE_SEMICOLON
+
+    if digits == 0 or (position < stop and not extension)
+      fail Parser.Error.Malformed("invalid chunk size")
+    end
+
+    size
+  end
+
+  priv fn hex_value(byte: Int) -> Option<Int>
+    if byte >= BYTE_ZERO and byte <= BYTE_NINE
+      return Option.Some(byte - BYTE_ZERO)
+    end
+
+    if byte >= BYTE_UPPER_A and byte <= BYTE_UPPER_F
+      return Option.Some(byte - BYTE_UPPER_A + 10)
+    end
+
+    if byte >= BYTE_LOWER_A and byte <= BYTE_LOWER_F
+      return Option.Some(byte - BYTE_LOWER_A + 10)
+    end
+
+    Option.None
+  end
+
+  priv fn smaller(left: Int, right: Int) -> Int
+    left < right ? left : right
+  end
+
+  priv fn space?(byte: Int) -> Bool
+    byte == BYTE_SPACE or byte == BYTE_TAB
+  end
+
+  # Returns `count` bytes of `buffer` from `start`, or no bytes when
+  # `count` is not positive.
+  priv fn span(buffer: Binary, start: Int, count: Int) -> Binary
+    if count <= 0
+      return EMPTY
+    end
+
+    if start == 0 and count == buffer.byte_size()
+      return buffer
+    end
+
+    buffer.slice(Range{start: start, stop: start + count - 1})
+  end
+
+  # Returns the bytes of `buffer` from `start` to its end.
+  priv fn tail(buffer: Binary, start: Int) -> Binary
+    Parser.State.span(buffer, start, buffer.byte_size() - start)
+  end
+end
+
+# Reads the header lines of a head, which are all the lines after the
+# first.
+priv fn parse_headers(lines: List<String>) -> Headers ! Parser.Error
+  headers = Headers.new()
+
+  for line in lines.slice(1, lines.length() - 1)
+    parts = line.split(":")
+    name = parts.get(0).unwrap()
+
+    if parts.length() < 2 or name.empty?() or name.contains?(" ")
+      or name.contains?("\t")
+
+      fail Parser.Error.Malformed("malformed header line")
+    end
+
+    value = String.join(parts.slice(1, parts.length() - 1), ":").trim()
+    headers = headers.append(name, value)
+  end
+
+  headers
+end
+
+priv fn parse_version(text: String) -> Version ! Parser.Error
+  match text
+    "HTTP/1.0" -> Version.HTTP1_0
+    "HTTP/1.1" -> Version.HTTP1_1
+    _ -> fail Parser.Error.Malformed("unsupported HTTP version")
+  end
+end

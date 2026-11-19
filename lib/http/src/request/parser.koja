@@ -1,0 +1,280 @@
+@doc """
+An HTTP/1.1 request parser. It reads requests from a stream of bytes
+and returns them as events. It opens no socket. Its owner gives it
+the bytes that arrived and asks it for the next event.
+
+```koja
+alias HTTP.Request.Parser as RequestParser
+
+parser = RequestParser.new()
+
+while open
+  (parser, event) = try parser.next()
+
+  match event
+    Option.Some(RequestParser.Event.Request(received)) -> request = received
+    Option.Some(RequestParser.Event.Data(piece)) -> body = body <> piece
+    Option.Some(RequestParser.Event.End) -> respond(request, body)
+    Option.None -> parser = parser.feed(try socket.read(8192))
+  end
+end
+```
+
+`Request` carries the head with an empty body, `Data` carries body
+bytes, and `End` closes every request. After `End`, the next call to
+`next` starts the next request, so the bytes of a pipelined request
+wait in the parser.
+
+The parser never holds a body, so it has no limit for one. The owner
+counts the bytes of the `Data` events. `max_header_bytes` in the
+options caps the head.
+
+The parser reads `Content-Length` bodies and chunked bodies. It
+drops the trailers of a chunked body. A request with no declared
+length has no body.
+
+The parser rejects a message whose length two parties can read in
+two ways. A `Content-Length` that is not a number, two
+`Content-Length` headers with different values, and a message with
+both `Content-Length` and `Transfer-Encoding` are all `Malformed`.
+
+`state` belongs to the parser. Do not read it and do not set it.
+"""
+struct Request.Parser
+  state: Parser.State
+
+  @doc """
+  Adds bytes that arrived from the stream.
+  """
+  fn feed(self, bytes: Binary) -> Request.Parser
+    self.state = self.state.feed(bytes)
+    self
+  end
+
+  @doc """
+  Creates a parser at the start of a stream.
+  """
+  fn new(options: Parser.Options = Parser.Options{}) -> Request.Parser
+    Request.Parser{state: Parser.State.new(options)}
+  end
+
+  @doc """
+  Returns the next event, or `Option.None` when the parser needs more
+  bytes. Rebind the parser to the one that comes back.
+
+  A `Data` event holds every body byte that the parser can decode
+  from the bytes it has. The chunks of a chunked body do not show.
+
+  The path and the query of `uri` come from the request target. The
+  host and the port come from the `Host` header, or from the target
+  when it is an absolute URI. The `*` of `OPTIONS *` is stored as the
+  path. A `CONNECT` target is read as a host and a port.
+
+  An HTTP/1.1 request must have exactly one `Host` header. A method
+  that `Method` does not name fails with `UnsupportedMethod`. After a
+  failure, do not use the parser again.
+  """
+  fn next(self) -> (Request.Parser, Option<Request.Parser.Event>) ! Parser.Error
+    match self.state.phase
+      Parser.Phase.Ending ->
+        self.state.phase = Parser.Phase.Head
+        return (self, Option.Some(Request.Parser.Event.End))
+
+      Parser.Phase.Head ->
+        taken = try self.state.take_head()
+
+        match taken
+          Option.Some((state, lines)) ->
+            (request, following) = try Request.Parser.read_head(state, lines)
+            self.state = following
+            return (self, Option.Some(Request.Parser.Event.Request(request)))
+
+          Option.None ->
+            ()
+        end
+
+      _ ->
+        (state, piece) = try self.state.take_body(false)
+        self.state = state
+
+        if piece.byte_size() > 0
+          return (self, Option.Some(Request.Parser.Event.Data(piece)))
+        end
+
+        if self.state.phase == Parser.Phase.Ending
+          self.state.phase = Parser.Phase.Head
+          return (self, Option.Some(Request.Parser.Event.End))
+        end
+    end
+
+    (self, Option.None)
+  end
+
+  @doc """
+  Returns the bytes that the parser has not read. An owner that gives
+  the connection to another protocol passes them on.
+  """
+  fn rest(self) -> Binary
+    self.state.buffer
+  end
+
+  # Reads `host` or `host:port`, which is the form of a `Host` header
+  # and of a `CONNECT` target.
+  priv fn parse_authority(text: String) -> URI ! Parser.Error
+    parsed = URI.parse("//" <> text)
+      rescue _ -> fail Parser.Error.Malformed("invalid host")
+
+    host_only = parsed.path.empty?() and parsed.query.none?()
+      and parsed.fragment.none?() and parsed.userinfo.none?()
+
+    if not host_only or not Request.Parser.present?(parsed.host)
+      fail Parser.Error.Malformed("invalid host")
+    end
+
+    parsed
+  end
+
+  priv fn path_uri(path: String, query: Option<String>) -> URI
+    URI{
+      fragment: Option.None,
+      host: Option.None,
+      path: path,
+      port: Option.None,
+      query: query,
+      scheme: Option.None,
+      userinfo: Option.None,
+    }
+  end
+
+  priv fn present?(text: Option<String>) -> Bool
+    match text
+      Option.Some(value) -> not value.empty?()
+      Option.None -> false
+    end
+  end
+
+  # Builds the request from the lines of its head, and enters the
+  # phase that reads its body. `state` holds the bytes after the head.
+  priv fn read_head(state: Parser.State, lines: List<String>)
+    -> (Request, Parser.State) ! Parser.Error
+
+    parts = lines.get(0).unwrap().split(" ")
+
+    if parts.length() != 3
+      fail Parser.Error.Malformed("malformed request line")
+    end
+
+    name = parts.get(0).unwrap()
+    version = try parse_version(parts.get(2).unwrap())
+
+    method = Method.from_string(name)
+      rescue _ -> fail Parser.Error.UnsupportedMethod(name)
+
+    headers = try parse_headers(lines)
+    uri = try Request.Parser.request_uri(
+      method,
+      parts.get(1).unwrap(),
+      headers,
+      version,
+    )
+
+    # A request with no declared length has no body.
+    following = try state.start_body(headers, false)
+
+    request = Request{
+      body: EMPTY,
+      headers: headers,
+      method: method,
+      uri: uri,
+      version: version,
+    }
+    (request, following)
+  end
+
+  # Builds the `uri` of a request from its target and its `Host`
+  # header.
+  priv fn request_uri(
+    method: Method,
+    target: String,
+    headers: Headers,
+    version: Version,
+  ) -> URI ! Parser.Error
+
+    hosts = headers.get_all("Host")
+
+    if hosts.length() > 1
+      fail Parser.Error.Malformed("more than one Host header")
+    end
+
+    if hosts.empty?() and version == Version.HTTP1_1
+      fail Parser.Error.Malformed("missing Host header")
+    end
+
+    if method == Method.Connect
+      authority = try Request.Parser.parse_authority(target)
+
+      if authority.port.none?()
+        fail Parser.Error.Malformed("a CONNECT target needs a port")
+      end
+
+      return authority
+    end
+
+    uri = try Request.Parser.target_uri(method, target)
+
+    # An absolute target names the host, and the header does not
+    # replace it.
+    if uri.host.some?()
+      return uri
+    end
+
+    match hosts.first()
+      Option.Some(value) when not value.empty?() ->
+        authority = try Request.Parser.parse_authority(value)
+        uri.host = authority.host
+        uri.port = authority.port
+
+      _ ->
+        ()
+    end
+
+    uri
+  end
+
+  # Reads a request target that is not a `CONNECT` target. It is `*`,
+  # a path with an optional query, or an absolute URI.
+  priv fn target_uri(method: Method, target: String) -> URI ! Parser.Error
+    if target == "*"
+      if method != Method.Options
+        fail Parser.Error.Malformed("invalid request target")
+      end
+
+      return Request.Parser.path_uri("*", Option.None)
+    end
+
+    if target.starts_with?("/")
+      # A target that starts with `//` reads as a host on its own, so
+      # parse the target behind a placeholder host.
+      origin = URI.parse("http://localhost" <> target)
+        rescue _ -> fail Parser.Error.Malformed("invalid request target")
+
+      if origin.fragment.some?()
+        fail Parser.Error.Malformed("invalid request target")
+      end
+
+      return Request.Parser.path_uri(origin.path, origin.query)
+    end
+
+    absolute = URI.parse(target)
+      rescue _ -> fail Parser.Error.Malformed("invalid request target")
+
+    if absolute.scheme.none?() or not Request.Parser.present?(absolute.host)
+      or absolute.fragment.some?()
+
+      fail Parser.Error.Malformed("invalid request target")
+    end
+
+    absolute.userinfo = Option.None
+    absolute
+  end
+end

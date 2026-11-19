@@ -108,9 +108,9 @@ waits with no limit. A request that passes the limit fails with
 `HTTP.Error.Timeout`.
 
 A response body larger than 16 MiB fails with
-`HTTP.Error.Parse(Parser.Error.BodyTooLarge)`. The client drops a 1xx
-response and returns the response that follows it. A 101 is the
-exception, and the client returns it.
+`HTTP.Error.BodyTooLarge`. The client drops a 1xx response and
+returns the response that follows it. A 101 is the exception, and the
+client returns it.
 
 A URL that cannot be requested fails with `HTTP.Error.InvalidUrl`
 before any network call. A network failure keeps its own type, which
@@ -169,6 +169,20 @@ fn request(
   try exchange(plain, host, scheme == "https", message, deadline)
 end
 
+# Fails when a response declares a body that is larger than the
+# limit, so the client rejects the body before its bytes arrive.
+priv fn check_declared_length(method: Method, response: Response) ! Error
+  if bodiless?(method, response.status)
+    return
+  end
+
+  match response.headers.content_length()
+    Option.Some(length) when length > MAX_RESPONSE_BODY_BYTES ->
+      fail Error.BodyTooLarge
+    _ -> ()
+  end
+end
+
 # Closes a socket whose request is over. The request already has its
 # result, so a failed close changes nothing.
 priv fn discard(socket: TCPSocket)
@@ -200,12 +214,6 @@ priv fn exchange(
   result = transfer(socket, message, deadline)
   discard(socket)
   try result
-end
-
-# A 1xx response that is not the last response to its request. A 101
-# is the last one, because the connection changes protocol after it.
-priv fn interim?(status: Status) -> Bool
-  status.code >= 100 and status.code < 200 and status.code != 101
 end
 
 # Turns `TCP_NODELAY` on, then starts TLS when the URL asks for it.
@@ -272,8 +280,9 @@ priv fn stream_cause(e: IOError | TLSError) -> Error | IOError | TLSError
   end
 end
 
-# Writes the request, then reads until the parser has a whole
-# response.
+# Writes the request, then reads the response through a parser until
+# the response is complete. Joins the pieces of the body, and fails
+# when the body passes the limit.
 priv fn transfer(socket: TCPSocket, message: Request, deadline: Option<Instant>)
   -> Response ! Error | IOError | TLSError
 
@@ -282,39 +291,44 @@ priv fn transfer(socket: TCPSocket, message: Request, deadline: Option<Instant>)
   socket.write_all(message.serialize(), WriterOptions{timeout: limit})
     rescue e -> fail stream_cause(e)
 
-  buffer: Binary = <<>>
-  ended = false
-  limits = Parser.Limits{max_body_bytes: MAX_RESPONSE_BODY_BYTES}
+  body: Binary = <<>>
+  complete = false
+  parser = Response.Parser.new(message.method)
   response: Option<Response> = Option.None
 
-  while response.none?()
-    outcome = Parser.parse_response(buffer, message.method, ended, limits)
-      rescue e -> fail Error.Parse(e)
+  while not complete
+    (parser, event) = parser.next() rescue e -> fail Error.Parse(e)
 
-    match outcome
-      Parser.Outcome.Complete((received, rest)) ->
-        if interim?(received.status)
-          buffer = rest
-        else
-          response = Option.Some(received)
+    match event
+      # A response after an interim response replaces it.
+      Option.Some(Response.Parser.Event.Response(received)) ->
+        try check_declared_length(message.method, received)
+        response = Option.Some(received)
+
+      Option.Some(Response.Parser.Event.Data(piece)) ->
+        if body.byte_size() + piece.byte_size() > MAX_RESPONSE_BODY_BYTES
+          fail Error.BodyTooLarge
         end
 
-      Parser.Outcome.Incomplete ->
+        body = body <> piece
+
+      Option.Some(Response.Parser.Event.End) ->
+        complete = true
+
+      Option.None ->
         limit = try remaining(deadline)
 
         chunk = socket.read(READ_SIZE, ReaderOptions{timeout: limit})
           rescue e -> fail stream_cause(e)
 
-        if chunk.byte_size() == 0
-          ended = true
-        else
-          buffer = buffer <> chunk
-        end
+        parser = chunk.byte_size() == 0 ? parser.finish() : parser.feed(chunk)
     end
   end
 
-  # The loop ends only when `response` holds a value.
-  response.unwrap()
+  # The parser returns `End` only after a `Response`.
+  received = response.unwrap()
+  received.body = body
+  received
 end
 
 priv fn uri_error_message(error: URIError, url: String) -> String

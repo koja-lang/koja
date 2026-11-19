@@ -31,8 +31,9 @@ the standard library changes that must land first.
 - A handler that answers 101 gives its connection to the
   application, and `scout` can ask for the same on the client side.
   A `websocket` package builds on both and gets its own document.
-- Bodies are buffered in this design. The `http2` core handles body
-  data as chunks, so streaming can land above it later.
+- Bodies are buffered in this design. The `http2` core and the
+  HTTP/1.1 parsers handle body data in pieces, so streaming can land
+  above them later.
 - HTTP/2 over TLS on the server waits for an ALPN callback shim.
 - The standard library changes and `http2` can start first. Seven
   positions in the `ranger` and `scout` sections are still open.
@@ -276,64 +277,167 @@ wire, and `http2` lowercases them when it encodes.
 
 ### The HTTP/1.1 codec
 
-`HTTP.Parser` stays the reader and `serialize` stays the writer.
-Both move from text to bytes, and the parser learns to say that it
-needs more.
+The parser stays the reader and `serialize` stays the writer. Both
+move from text to bytes, and the parser becomes a value that reads a
+stream.
 
-#### `Parser` is incremental
+#### A parser is a value
+
+Like an `http2` connection, a parser opens no socket and reads no
+clock. Its owner feeds it the bytes that arrived and asks it for
+events.
 
 ```koja
-struct Parser.Limits
-  max_body_bytes: Int = 1048576
+struct Parser.Options
   max_header_bytes: Int = 16384
 end
 
-enum Parser.Outcome<T>
-  Complete((T, Binary))
-  Incomplete
-end
-
 enum Parser.Error
-  BodyTooLarge
   HeadersTooLarge
   Malformed(String)
   UnsupportedMethod(String)
 end
 
-fn parse_request(buffer: Binary, limits: Parser.Limits)
-  -> Parser.Outcome<Request> ! Parser.Error
+struct Request.Parser
+  fn new(options: Parser.Options = Parser.Options{}) -> Request.Parser
+  fn feed(self, bytes: Binary) -> Request.Parser
+  fn next(self)
+    -> (Request.Parser, Option<Request.Parser.Event>) ! Parser.Error
+  fn rest(self) -> Binary
+end
+
+enum Request.Parser.Event
+  Data(Binary)
+  End
+  Request(Request)
+end
 ```
 
-The caller reads from its socket, appends to a buffer, and calls
-`parse_request` with all of it. `Incomplete` means read more.
-`Complete` carries the message and the bytes that came after it,
-which are the start of the next message on a keep-alive connection.
-This is the contract `ranger`'s `Frame` has today, so `Frame` goes
-away.
+`feed` adds bytes and `next` returns one event. `Option.None` means
+that the parser needs more bytes.
 
-Each error is one response a server sends. `BodyTooLarge` is 413,
+- **`Request`** carries the head of a message with an empty body, as
+  the `http2` event does.
+- **`Data`** carries body bytes. It holds every body byte that the
+  parser can decode from the bytes it has, so the chunks of a
+  chunked body never show.
+- **`End`** says that the message is complete. Every message ends
+  with one, a message with no body included.
+
+An owner that wants a whole message joins the pieces. An alias
+keeps the names short.
+
+```koja
+alias HTTP.Request.Parser as RequestParser
+
+parser = RequestParser.new()
+
+while open
+  (parser, event) = try parser.next()
+
+  match event
+    Option.Some(RequestParser.Event.Request(received)) -> request = received
+    Option.Some(RequestParser.Event.Data(piece)) -> body = body <> piece
+    Option.Some(RequestParser.Event.End) -> respond(request, body)
+    Option.None -> parser = parser.feed(try socket.read(8192))
+  end
+end
+```
+
+After `End`, the next call to `next` starts the next message.
+Pipelined bytes wait inside the parser until the owner asks for
+them. `ranger`'s `Frame` did this work, so `Frame` goes away.
+
+The owner acts between events. A server that gets a `Request` can
+answer `100 Continue`, reject the request, or give the connection to
+another protocol, all before it asks for the body. An owner that
+gives the connection away stops calling `next`, and `rest()` returns
+the bytes that the parser has not read.
+
+The parser never holds a body. It holds a head while the head
+arrives, and after that only the bytes of the last `feed` that it
+has not returned. It keeps its position, so the cost of a message
+grows with its bytes and not with the number of reads or chunks.
+
+`Parser` itself is not a parser. It is the home for `Options` and
+`Error`, and for the state that the two parsers share.
+
+`next` fails with a `Parser.Error`, and the parser is of no use
+after that. Each error is one response a server sends.
 `HeadersTooLarge` is 431, `Malformed` is 400, and
-`UnsupportedMethod` is 501. The parser checks the limits against the
-declared length, so it rejects a large body before the bytes arrive.
+`UnsupportedMethod` is 501.
 
-`parse_response` has the same shape with two more inputs. It takes
-the request method, because the response to a `HEAD` has no body. It
-also takes a flag that says the stream ended, because a response
-with no length runs to the end of the stream.
+The parser has no limit for a body, because it holds none. The owner
+that joins the pieces enforces `max_body_bytes`, as `Collector` does
+in `http2`. It checks the declared length when it gets the head, so
+it rejects a large body before the bytes arrive. For a body that
+declares no length, it counts the bytes as the pieces arrive.
+`Plug.Parsers` holds the same limit in Elixir, where the web server
+below it caps only the head.
 
-A response with a 1xx status has no body, so it is complete at the
-end of its head. The parser returns it like any other response. The
-bytes after a 101 belong to the next protocol, and they come back as
-the leftover bytes. A client drops any other 1xx and parses the next
-response from the leftover bytes.
+A client reads a response with the second parser.
+
+```koja
+struct Response.Parser
+  fn new(method: Method, options: Parser.Options = Parser.Options{})
+    -> Response.Parser
+  fn feed(self, bytes: Binary) -> Response.Parser
+  fn finish(self) -> Response.Parser
+  fn next(self)
+    -> (Response.Parser, Option<Response.Parser.Event>) ! Parser.Error
+  fn rest(self) -> Binary
+end
+
+enum Response.Parser.Event
+  Data(Binary)
+  End
+  Response(Response)
+end
+```
+
+A `Response.Parser` reads the answer to one request, so a client
+makes one for each exchange. It takes the request method, because
+the response to a `HEAD` has no body, and neither does a 2xx
+response to a `CONNECT`. `finish` says that the stream ended,
+because a response with no length runs to the end of the stream.
+After `finish`, `next` fails with `Malformed` when the response is
+not complete.
+
+A 1xx response other than 101 is an interim response. The parser
+returns its head as a `Response` event and reads on, so `End` comes
+one time, after the final response. A client with no use for an
+interim response keeps the last `Response` that it got.
+
+After `End` the parser reads no more, and `rest()` returns the bytes
+that came after the response. After a 101, or a 2xx response to a
+`CONNECT`, those bytes belong to the next protocol. On a connection
+that stays open for HTTP there are none, and a client that finds
+some discards the connection.
+
+The two parsers are separate public types over one shared core,
+for the reason that the two `http2` connection types are. A request
+parser takes no method and has no `finish`.
+
+The core is `Parser.State`. It holds the bytes that are not yet
+read, the options, and the phase of the message, and it has the
+code that reads a head and decodes a body. Each parser has one as a
+field. Koja has no private field, and a public struct cannot have a
+field of a private type, so `Parser.State` is public. It carries
+`@doc false`, which keeps it out of the generated documentation, as
+`Lease.Token` does in `pooler`. A caller has no use for it.
+
+`http2` returns a list of events from one `receive` call. The
+parsers return one event at a time, because HTTP/1.1 carries one
+message at a time and the owner acts between events. `h11` works the
+same way, and it serves both ends of a connection.
 
 The parser works on bytes from end to end.
 
 - It finds the end of the head by byte search and decodes the head
   as UTF-8. A head that does not decode is `Malformed`.
 - It cuts a `Content-Length` body and each chunk by byte count.
-- It decodes a chunked body into one `Binary` and counts the total
-  against `max_body_bytes`. It reads trailers and drops them.
+- It decodes a chunked body as the chunks arrive. It reads trailers
+  and drops them.
 
 The parser is strict where a loose reading lets two parties disagree
 about where a message ends.
@@ -344,12 +448,9 @@ about where a message ends.
   `Malformed`.
 - A message with both `Content-Length` and `Transfer-Encoding` is
   `Malformed`.
-
-The parser keeps no state between calls, so each call scans the head
-again. The head is at most `max_header_bytes`, which bounds the
-cost. A parser that holds its position across calls is faster for a
-body that arrives in many reads. It can replace this one behind the
-same functions if a benchmark asks for it.
+- A `Content-Length` or a chunk size that does not fit an `Int` is
+  `Malformed`. The parser has no body limit to compare it with, and
+  no owner accepts a body of that size.
 
 #### `serialize` returns bytes
 
@@ -372,12 +473,13 @@ more than a few requests uses `scout`.
 
 The client is rebuilt on the pieces above.
 
-- It writes with `write_all` and reads bytes into the incremental
-  parser, so a binary body and a multibyte character both survive.
+- It writes with `write_all` and reads bytes into a
+  `Response.Parser`, so a binary body and a multibyte character both
+  survive.
 - It turns `TCP_NODELAY` on after it connects.
 - It sets `Connection: close`.
 - It accepts a response body of at most 16 MiB, which is the `scout`
-  default.
+  default. A larger body fails with `HTTP.Error.BodyTooLarge`.
 - The body parameters take `Binary | String`.
 - Every function takes a trailing
   `timeout: Option<Duration> = Option.None`. It bounds the whole
@@ -390,6 +492,7 @@ network failure keeps its own type on the error channel, the way
 
 ```koja
 enum Error
+  BodyTooLarge
   InvalidUrl(String)
   Parse(Parser.Error)
   Timeout
@@ -502,9 +605,9 @@ stops trusting one `write` to send a whole request.
 
 #### No buffered reader
 
-HTTP does not need one. The parser above takes the bytes a caller
-has so far and hands back what it did not use. The buffering
-question in IO.md stays open on its own terms.
+HTTP does not need one. A parser above takes the bytes as they
+arrive and keeps what it has not used. The buffering question in
+IO.md stays open on its own terms.
 
 ## The `http2` package
 
@@ -864,14 +967,14 @@ accepts that a panic drops the connection.
 
 ### The HTTP/1.1 worker
 
-The worker keeps a buffer and loops.
+The worker keeps a `Request.Parser` and loops.
 
-1. Read into the buffer until `Parser.parse_request` returns
-   `Complete`.
+1. Feed the parser from the socket and join the `Data` events until
+   `End`.
 2. Spawn the handler and wait for its response.
 3. Write the response with `write_all`.
-4. If the connection stays open, keep the leftover bytes and go to
-   step 1.
+4. If the connection stays open, go to step 1. The parser keeps the
+   bytes that came after the request.
 
 Three deadlines bound a slow client.
 
@@ -881,14 +984,15 @@ Three deadlines bound a slow client.
 | `read_timeout`  | 30 s    | The first byte of a request to its last  |
 | `write_timeout` | 30 s    | Each write of a response                 |
 
-A request that passes `read_timeout` gets a 408. A `Parser.Error`
-gets the status that the codec section lists. Both go through
-`error_response` and `on_reject`, and both close the connection.
+A request that passes `read_timeout` gets a 408. A body that passes
+`max_body_bytes` gets a 413. A `Parser.Error` gets the status that
+the codec section lists. All three go through `error_response` and
+`on_reject`, and all three close the connection.
 
 The rules that `ranger` has today stay. `Connection: close` and
 HTTP/1.0 end the connection, a connection serves at most
 `max_requests_per_connection` requests, and pipelined bytes wait in
-the buffer. A response to a `HEAD` request goes out with no body.
+the parser. A response to a `HEAD` request goes out with no body.
 
 ### Upgrade
 
@@ -1084,10 +1188,10 @@ have today is a first value to tune.
 | `tls`                         | none       |
 | `write_timeout`               | 30 s       |
 
-The two size caps apply to both protocols. `ranger` passes them to
-`Parser.Limits` on HTTP/1.1, and to `Collector` and
-`Settings.max_header_list_size` on HTTP/2. An application sets a
-limit once.
+The two size caps apply to both protocols. On HTTP/1.1 the head cap
+goes to `Parser.Options`, and the worker enforces the body cap. On
+HTTP/2 they go to `Settings.max_header_list_size` and to
+`Collector`. An application sets a limit once.
 
 `max_connections` leaves room under the runtime's process ceiling,
 which RUNTIME-GAPS.md puts near 30000 before tuning. Every
@@ -1185,7 +1289,8 @@ caller's process.
 
 1. Check out a lease, and wait at most `pool_timeout`.
 2. Write `request.serialize()` with `write_all`.
-3. Read until `Parser.parse_response` returns `Complete`.
+3. Feed a `Response.Parser` from the socket and join the `Data`
+   events until `End`.
 4. If the connection stays open, check the lease in. If not, discard
    it.
 
@@ -1316,6 +1421,7 @@ checks the 101.
 
 ```koja
 enum Error
+  BodyTooLarge
   Connection(SocketError | IOError | TLSError)
   InvalidUrl(String)
   NotUpgraded(Response)
@@ -1327,12 +1433,13 @@ enum Error
 end
 ```
 
-`InvalidUrl`, `Parse`, and `Timeout` mean what they mean in the
-one-shot client. `Connection` carries the network failure that the
-one-shot client leaves on the error channel. `PoolTimeout` means every connection to
-the origin stayed busy for `pool_timeout`. `Reset` means the peer
-reset the stream or closed the connection with that code. `Stopped`
-means the client was stopped.
+`BodyTooLarge`, `InvalidUrl`, `Parse`, and `Timeout` mean what they
+mean in the one-shot client. `Connection` carries the network
+failure that the one-shot client leaves on the error channel.
+`PoolTimeout` means every connection to the origin stayed busy for
+`pool_timeout`. `Reset` means the peer reset the stream or closed
+the connection with that code. `Stopped` means the client was
+stopped.
 
 ### Configuration
 
@@ -1389,10 +1496,9 @@ under review.
    of ALPN. The one break is the new variant
    `TLSError.ProtocolNameInvalid`, which an exhaustive `match` must
    cover.
-2. **`HTTP`.** Done. The vocabulary types, the incremental parser,
-   `serialize` to bytes, and the one-shot client on top of them. The
-   client turns `TCP_NODELAY` on after it connects. This is the
-   breaking step.
+2. **`HTTP`.** Done. The vocabulary types, `serialize` to bytes, the
+   two parsers, and the one-shot client. The client turns
+   `TCP_NODELAY` on after it connects. This is the breaking step.
 3. **`http2`.** A new package. `Frame` and `HPACK` come first, then
    the core, then the two connection types and `Collector`. Its
    tests need no socket. A client connection talks to a server
@@ -1460,9 +1566,10 @@ The `http2` core is ready for it. `receive` already returns each
 joins them. Sending needs the functions that send a head, then
 pieces, then an end.
 
-HTTP/1.1 needs more. The parser must report a complete head before
-the body arrives. `ranger` and `scout` each need a way to give a
-body to the application piece by piece.
+The HTTP/1.1 parsers are ready for it too. They return the head
+before the body, and the body in pieces. Sending needs a writer for
+a head alone and for a chunked body. `ranger` and `scout` each need
+a way to give a body to the application piece by piece.
 
 ## Rejected
 
@@ -1498,9 +1605,29 @@ body to the application piece by piece.
   without a network.
 - **`Upgrade: h2c`.** RFC 9113 deprecated this path from HTTP/1.1
   to cleartext HTTP/2. Proxies use prior knowledge.
-- **A parser that keeps its position.** It is faster for a body that
-  arrives in many reads, and it makes the parser a value that every
-  caller must hold. It can come later behind the same functions.
+- **A parser that takes the whole buffer on each call.**
+  `parse_request(buffer)` kept no state, so each call parsed the
+  head again and walked a chunked body from its start. The cost of a
+  chunked body grew with the chunk count times the read count, and
+  the sender controls both.
+- **A position that the caller passes back.** The parser stays a
+  function, and the caller holds its position between calls. A
+  caller that passes a position with the wrong buffer gets a wrong
+  parse and no error.
+- **A head parser and a separate body decoder.** The caller moves
+  bytes from its buffer to the decoder and back for the next
+  message. `ranger`, `scout`, and the one-shot client would each
+  repeat that code.
+- **A list of events from one parser call.** `http2` has this shape,
+  and it fits a connection that carries many streams. On HTTP/1.1 it
+  adds paths. A parse error must carry the events that came before
+  it, or a pipelined request in the same read is lost. The parser
+  must also stop by itself after a request that asks for another
+  protocol.
+- **A body limit in the parser.** The parser holds no body, so a
+  limit protects nothing there. The owner gets the head before it
+  reads the body, so it can reject with the request in hand, and a
+  later version can choose a limit for one request.
 - **`Connection(SocketError | IOError | TLSError)` on `HTTP.Error`.**
   One variant gives a caller one type with a `message()`. It also
   puts a second `match` between the caller and the cause, and `Net`
@@ -1537,7 +1664,8 @@ body to the application piece by piece.
   moved from Kadabra to Mint.
 - **Python.** `h2` and `h11` are protocol libraries with no I/O. The
   owner gives `h2` the bytes that arrived, gets events, and asks for
-  the bytes to send. `http2` has that shape.
+  the bytes to send. `http2` has that shape. `h11` returns one event
+  for each call, and the HTTP/1.1 parsers have that shape.
 - **Rust.** The `http` crate holds the vocabulary types that every
   server and client shares. `httparse` returns partial or complete.
   `h2` is HTTP/2 alone, and `hyper` builds a server and a client on
@@ -1587,10 +1715,9 @@ sections mark **Open**.
     socket. Whether several Koja processes can watch one descriptor
     is not known.
 11. **`Expect: 100-continue`.** A client that sends it waits for a
-    100 before it sends the body. `ranger` cannot answer, because
-    the parser reports only a complete message. A function that
-    parses the head alone fixes this. Streaming needs the same
-    function.
+    100 before it sends the body. The parser returns the head first,
+    so the `ranger` worker can answer before it reads the body. The
+    worker step for this is not in the design yet.
 12. **Header names by protocol.** `Headers` keeps a name as it
     arrived. An HTTP/2 request has lowercase names and an HTTP/1.1
     request has the names that the client wrote. Code that looks a
@@ -1600,5 +1727,5 @@ sections mark **Open**.
 14. **Client certificates.** `TLSSession.connect` does not load an
     identity. No caller needs one until a push library does.
 
-Questions 11 and 12 touch the standard library. Each one adds to the
-surface in this document or changes one small type.
+Question 12 touches the standard library. It changes one small
+type.

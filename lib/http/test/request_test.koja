@@ -200,8 +200,8 @@ test "a serialized request parses back to the same request"
   )
 
   parsed =
-    match Parser.parse_request(request.serialize())
-      Result.Ok(Parser.Outcome.Complete((message, _))) -> message
+    match whole_request(request.serialize())
+      Result.Ok(Option.Some((message, _))) -> message
       _ -> fail "expected the serialized request to parse"
     end
 

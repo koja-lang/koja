@@ -138,18 +138,33 @@ test "request fails with Parse when the server closes with no response"
   end
 end
 
-test "request fails with Parse when the response body passes the limit"
+test "request fails with BodyTooLarge for a declared length past the limit"
   reply = "HTTP/1.1 200 OK\r\nContent-Length: 16777217\r\n\r\n"
   (listener, server) = try start_server(43139, Option.Some(reply.to_binary()))
   result = get("http://127.0.0.1:43139/", patience())
   _ = try finish_server(listener, server)
 
-  match result
-    Result.Err(http_error: Error) ->
-      assert http_error == Error.Parse(Parser.Error.BodyTooLarge)
-    Result.Err(other) -> fail "expected Parse, got '#{failure_text(other)}'"
-    Result.Ok(_) -> fail "expected Parse, got a response"
-  end
+  try expect_body_too_large(result)
+end
+
+test "request fails with BodyTooLarge for a chunked body past the limit"
+  head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1000001\r\n"
+  reply = head.to_binary() <> oversized_body() <> "\r\n0\r\n\r\n".to_binary()
+  (listener, server) = try start_server(43141, Option.Some(reply))
+  result = get("http://127.0.0.1:43141/", long_patience())
+  _ = try finish_server(listener, server)
+
+  try expect_body_too_large(result)
+end
+
+test "request fails with BodyTooLarge for a body with no length past the limit"
+  head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+  reply = head.to_binary() <> oversized_body()
+  (listener, server) = try start_server(43142, Option.Some(reply))
+  result = get("http://127.0.0.1:43142/", long_patience())
+  _ = try finish_server(listener, server)
+
+  try expect_body_too_large(result)
 end
 
 test "request keeps the Socket.Error of a refused connection"
@@ -163,11 +178,25 @@ test "request keeps the Socket.Error of a refused connection"
 end
 
 test "Error.message describes each cause"
+  assert Error.BodyTooLarge.message() ==
+    "the response body is larger than the limit"
   assert Error.InvalidUrl("no host").message() == "invalid URL: no host"
-  assert Error.Parse(Parser.Error.BodyTooLarge)
+  assert Error.Parse(Parser.Error.HeadersTooLarge)
     .message()
     .starts_with?("invalid response: ")
   assert Error.Timeout.message() == "request timed out"
+end
+
+priv fn expect_body_too_large(
+  result: Result<Response, Error | SocketError | IOError | TLSError>,
+) ! Test.Failure
+
+  match result
+    Result.Err(http_error: Error) -> assert http_error == Error.BodyTooLarge
+    Result.Err(other) ->
+      fail "expected BodyTooLarge, got '#{failure_text(other)}'"
+    Result.Ok(_) -> fail "expected BodyTooLarge, got a response"
+  end
 end
 
 priv fn expect_invalid_url(url: String, expected: String) ! Test.Failure
@@ -223,6 +252,26 @@ priv fn finish_server(
   end
 end
 
+# A limit for a test that moves 16 MiB, which takes seconds on the
+# interpreter.
+priv fn long_patience -> Option<Duration>
+  Option.Some(Duration.new(30, Duration.Unit.Seconds))
+end
+
+# Returns a body that is one byte larger than the 16 MiB limit of the
+# client.
+priv fn oversized_body -> Binary
+  body = <<120>>
+  doubled = 0
+
+  while doubled < 24
+    body = body <> body
+    doubled += 1
+  end
+
+  body <> <<120>>
+end
+
 # A limit long enough that only a broken test reaches it.
 priv fn patience -> Option<Duration>
   Option.Some(Duration.new(5, Duration.Unit.Seconds))
@@ -231,11 +280,11 @@ end
 priv fn read_request(socket: TCPSocket, buffer: Binary)
   -> Result<Request, String>
 
-  match Parser.parse_request(buffer)
-    Result.Ok(Parser.Outcome.Complete((request, _))) ->
+  match whole_request(buffer)
+    Result.Ok(Option.Some((request, _))) ->
       return Result.Ok(request)
 
-    Result.Ok(Parser.Outcome.Incomplete) ->
+    Result.Ok(Option.None) ->
       match socket.read(4096)
         Result.Ok(chunk) ->
           if chunk.byte_size() == 0

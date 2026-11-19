@@ -382,7 +382,7 @@ impl Process<(), Process.ExitSignal, ()> for KojaTestHarness
         file: "test/stack_test.koja",
         group: "StackTest",
         line: 14,
-        run: &StackTest.__test_stack_test_14/0,
+        run: &StackTest.__test__stack_test_14/0,
       },
     ]
     runner = Test.run(Test.Plan{specs: specs}, Test.Options.from_env())
@@ -811,9 +811,9 @@ more commits at its boundary, so a bisect can name the phase.
 2. **`test` declaration.** The `test` keyword, `Item::Test` at the top
    level and as a member of `struct`, `enum`, `impl`, `extend`, and
    `builtin` bodies, and a pass before `collect` that desugars each test
-   into a synthesized `fn __test_<file stem>_<line> ! Test.Failure` or
+   into a synthesized `fn __<file path>_<line> ! Test.Failure` or
    strips it when tests are not loaded, so typecheck, IR, and both
-   backends never learn a new item kind. The stem keeps two files with a
+   backends never learn a new item kind. The path keeps two files with a
    test on the same line from colliding. Top-level tests are
    package-private and member tests are public, because `priv` on a
    method is type-private and the harness lives outside the type. The

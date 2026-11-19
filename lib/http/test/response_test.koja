@@ -82,8 +82,8 @@ test "a serialized response parses back to the same response"
   response.headers = response.headers.append("Location", "/items/7")
 
   parsed =
-    match Parser.parse_response(response.serialize(), Method.Post, false)
-      Result.Ok(Parser.Outcome.Complete((message, _))) -> message
+    match whole_response(response.serialize(), Method.Post, false)
+      Result.Ok(Option.Some((message, _))) -> message
       _ -> fail "expected the serialized response to parse"
     end
 
