@@ -1,0 +1,566 @@
+alias Test.require
+
+const GET_REQUEST: String = "GET /index.html?q=1 HTTP/1.1\r\nHost: example.com\r\n\r\n"
+const POST_REQUEST: String = "POST /api/data HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"
+const CHUNKED_REQUEST: String = "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6;name=value\r\n world\r\n0\r\nExpires: never\r\n\r\n"
+const SMALL_HEAD: Parser.Options = Parser.Options{max_header_bytes: 32}
+
+test "Request.Parser reads the method, the target, and the version"
+  (request, rest) = try complete_request(GET_REQUEST)
+
+  assert request.method == Method.Get
+  assert request.uri.path == "/index.html"
+  assert request.uri.query == Option.Some("q=1")
+  assert request.version == Version.HTTP1_1
+  assert request.headers.get("Host") == Option.Some("example.com")
+  assert request.body.byte_size() == 0
+  assert rest.byte_size() == 0
+end
+
+test "Request.Parser fills the host and the port from the Host header"
+  (plain, _) = try complete_request(GET_REQUEST)
+
+  assert plain.uri.host == Option.Some("example.com")
+  assert plain.uri.port == Option.None
+  assert plain.uri.scheme == Option.None
+
+  (with_port, _) = try complete_request(
+    "GET / HTTP/1.1\r\nHost: example.com:8080\r\n\r\n",
+  )
+
+  assert with_port.uri.host == Option.Some("example.com")
+  assert with_port.uri.port == Option.Some(8080)
+
+  (ipv6, _) = try complete_request("GET / HTTP/1.1\r\nHost: [::1]:3000\r\n\r\n")
+
+  assert ipv6.uri.host == Option.Some("::1")
+  assert ipv6.uri.port == Option.Some(3000)
+end
+
+test "Request.Parser reads a body by Content-Length"
+  (request, rest) = try complete_request(POST_REQUEST)
+
+  assert request.method == Method.Post
+  assert request.uri.path == "/api/data"
+  assert request.text() == Result.Ok("Hello, World!")
+  assert rest.byte_size() == 0
+end
+
+test "Request.Parser returns one event for each call to next"
+  parser = Request.Parser.new().feed(POST_REQUEST.to_binary())
+
+  (parser, head) = try require(parser.next())
+
+  match head
+    Option.Some(Request.Parser.Event.Request(request)) ->
+      assert request.method == Method.Post
+      assert request.body.byte_size() == 0
+
+    _ ->
+      fail "expected a Request event first"
+  end
+
+  (parser, data) = try require(parser.next())
+
+  assert data ==
+    Option.Some(Request.Parser.Event.Data("Hello, World!".to_binary()))
+
+  (parser, ending) = try require(parser.next())
+
+  assert ending == Option.Some(Request.Parser.Event.End)
+
+  (parser, nothing) = try require(parser.next())
+
+  assert nothing == Option.None
+  assert parser.rest().byte_size() == 0
+end
+
+test "Request.Parser returns End for a request with no body"
+  events = try require(request_events([GET_REQUEST.to_binary()]))
+
+  assert events.length() == 2
+  assert events.last() == Option.Some(Request.Parser.Event.End)
+end
+
+test "Request.Parser needs more bytes for every prefix of a message"
+  try expect_incomplete_prefixes(GET_REQUEST)
+  try expect_incomplete_prefixes(POST_REQUEST)
+  try expect_incomplete_prefixes(CHUNKED_REQUEST)
+end
+
+test "Request.Parser returns the same events for bytes that arrive one at a time"
+  for raw in [GET_REQUEST, POST_REQUEST, CHUNKED_REQUEST]
+    buffer = raw.to_binary()
+    whole = try require(request_events([buffer]))
+    single = try require(request_events(each_byte(buffer)))
+
+    assert single == whole
+  end
+end
+
+test "Request.Parser returns the same events for a message split at any byte"
+  for raw in [POST_REQUEST, CHUNKED_REQUEST]
+    buffer = raw.to_binary()
+    whole = try require(request_events([buffer]))
+    count = 1
+
+    while count < buffer.byte_size()
+      split = try require(request_events(split_at(buffer, count)))
+
+      if split != whole
+        fail "a split after #{count} bytes changed the events"
+      end
+
+      count += 1
+    end
+  end
+end
+
+test "Request.Parser returns the bytes after the message"
+  (first, rest) = try complete_request(POST_REQUEST <> GET_REQUEST)
+
+  assert first.method == Method.Post
+  assert rest == GET_REQUEST.to_binary()
+
+  second =
+    match whole_request(rest)
+      Result.Ok(Option.Some((request, _))) -> request
+      _ -> fail "expected the leftover bytes to hold a request"
+    end
+
+  assert second.method == Method.Get
+end
+
+test "Request.Parser reads two pipelined requests from one feed"
+  raw = (POST_REQUEST <> GET_REQUEST).to_binary()
+  events = try require(request_events([raw]))
+
+  assert events.length() == 5
+  assert events.get(1) ==
+    Option.Some(Request.Parser.Event.Data("Hello, World!".to_binary()))
+  assert events.get(2) == Option.Some(Request.Parser.Event.End)
+  assert events.get(4) == Option.Some(Request.Parser.Event.End)
+
+  first = try request_at(events, 0)
+  second = try request_at(events, 3)
+
+  assert first.method == Method.Post
+  assert first.uri.path == "/api/data"
+  assert second.method == Method.Get
+  assert second.uri.path == "/index.html"
+end
+
+test "Request.Parser.rest returns the bytes after a head"
+  frame = <<129, 2, 104, 105>>
+  head = "GET /chat HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\n\r\n"
+  parser = Request.Parser.new().feed(head.to_binary() <> frame)
+
+  (parser, event) = try require(parser.next())
+
+  match event
+    Option.Some(Request.Parser.Event.Request(request)) ->
+      assert request.headers.get("Upgrade") == Option.Some("websocket")
+    _ -> fail "expected a Request event"
+  end
+
+  assert parser.rest() == frame
+end
+
+test "Request.Parser keeps a body that is not UTF-8"
+  head = "POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 3\r\n\r\n"
+  body = <<255, 254, 0>>
+
+  request =
+    match whole_request(head.to_binary() <> body)
+      Result.Ok(Option.Some((parsed, _))) -> parsed
+      _ -> fail "expected a complete request"
+    end
+
+  assert request.body == body
+  assert request.text() == Result.Err(String.ConversionError.InvalidUTF8)
+end
+
+test "Request.Parser decodes a chunked body and drops the trailers"
+  (request, rest) = try complete_request(CHUNKED_REQUEST <> "NEXT")
+
+  assert request.text() == Result.Ok("hello world")
+  assert request.headers.get("Expires") == Option.None
+  assert rest == "NEXT".to_binary()
+end
+
+test "Request.Parser joins the chunks that it has into one Data event"
+  events = try require(request_events([CHUNKED_REQUEST.to_binary()]))
+
+  assert events.length() == 3
+  assert events.get(1) ==
+    Option.Some(Request.Parser.Event.Data("hello world".to_binary()))
+  assert events.get(2) == Option.Some(Request.Parser.Event.End)
+end
+
+test "Request.Parser rejects a chunked body it cannot read"
+  head = "POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"
+
+  try expect_malformed_request(head <> "zz\r\nhello\r\n0\r\n\r\n")
+  try expect_malformed_request(head <> "\r\nhello\r\n0\r\n\r\n")
+  try expect_malformed_request(head <> "5 x\r\nhello\r\n0\r\n\r\n")
+  try expect_malformed_request(head <> "5\r\nhelloXX0\r\n\r\n")
+end
+
+test "Request.Parser reads header values"
+  (request, _) = try complete_request(
+    "GET / HTTP/1.1\r\nHost: example.com\r\nReferer:   http://a.example/b  \r\nX-Empty:\r\nAccept: a\r\nAccept: b\r\n\r\n",
+  )
+
+  assert request.headers.get("referer") == Option.Some("http://a.example/b")
+  assert request.headers.get("X-Empty") == Option.Some("")
+  assert request.headers.get_all("Accept") == ["a", "b"]
+end
+
+test "Request.Parser rejects a malformed head"
+  try expect_malformed_request("BADREQUEST\r\n\r\n")
+  try expect_malformed_request("GET /\r\nHost: example.com\r\n\r\n")
+  try expect_malformed_request("GET / HTTP/2.0\r\nHost: example.com\r\n\r\n")
+  try expect_malformed_request("\r\n\r\n")
+  try expect_malformed_request("GET / HTTP/1.1\r\nHost: a\r\nno colon\r\n\r\n")
+  try expect_malformed_request("GET / HTTP/1.1\r\nHost : a\r\n\r\n")
+  try expect_malformed_request("GET / HTTP/1.1\r\nHost: a\r\n folded\r\n\r\n")
+  try expect_malformed_request("GET / HTTP/1.1\r\nHost: a\r\n: no name\r\n\r\n")
+  try expect_malformed_request(
+    "GET / HTTP/1.1\r\nHost: a\nX-Injected: 1\r\n\r\n",
+  )
+end
+
+test "Request.Parser rejects a head that is not UTF-8"
+  start = "GET / HTTP/1.1\r\nHost: a\r\nX-Raw: ".to_binary()
+  buffer = start <> <<255, 254>> <> "\r\n\r\n".to_binary()
+
+  match whole_request(buffer)
+    Result.Err(Parser.Error.Malformed(_)) -> ()
+    _ -> fail "expected Malformed for a head that is not UTF-8"
+  end
+end
+
+test "Request.Parser requires one Host header on HTTP/1.1"
+  try expect_malformed_request("GET / HTTP/1.1\r\n\r\n")
+  try expect_malformed_request("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n")
+  try expect_malformed_request("GET / HTTP/1.1\r\nHost: a/b\r\n\r\n")
+
+  (request, _) = try complete_request("GET / HTTP/1.0\r\n\r\n")
+
+  assert request.version == Version.HTTP1_0
+  assert request.uri.host == Option.None
+end
+
+test "Request.Parser fails with UnsupportedMethod for an unknown method"
+  try expect_request_error(
+    "BREW /pot HTTP/1.1\r\nHost: example.com\r\n\r\n",
+    Parser.Options{},
+    Parser.Error.UnsupportedMethod("BREW"),
+  )
+end
+
+test "Request.Parser reads each form of the request target"
+  (options, _) = try complete_request(
+    "OPTIONS * HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert options.uri.path == "*"
+  assert options.uri.host == Option.Some("example.com")
+
+  (connect, _) = try complete_request(
+    "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n",
+  )
+
+  assert connect.uri.host == Option.Some("example.com")
+  assert connect.uri.port == Option.Some(443)
+  assert connect.uri.path == ""
+
+  (absolute, _) = try complete_request(
+    "GET http://other.example:8080/a?b=1 HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert absolute.uri.scheme == Option.Some("http")
+  assert absolute.uri.host == Option.Some("other.example")
+  assert absolute.uri.port == Option.Some(8080)
+  assert absolute.uri.path == "/a"
+  assert absolute.uri.query == Option.Some("b=1")
+
+  (slashes, _) = try complete_request(
+    "GET //a/b HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert slashes.uri.path == "//a/b"
+  assert slashes.uri.host == Option.Some("example.com")
+end
+
+test "Request.Parser stores the query as it arrived"
+  (brackets, _) = try complete_request(
+    "GET /search?tag[]=a&q={x}|%zz HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert brackets.uri.path == "/search"
+  assert brackets.uri.query == Option.Some("tag[]=a&q={x}|%zz")
+
+  (marks, _) = try complete_request(
+    "GET /a?b?c HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert marks.uri.path == "/a"
+  assert marks.uri.query == Option.Some("b?c")
+
+  (empty, _) = try complete_request(
+    "GET /a? HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert empty.uri.query == Option.Some("")
+
+  (absent, _) = try complete_request(
+    "GET /a HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert absent.uri.query == Option.None
+
+  (absolute, _) = try complete_request(
+    "GET http://other.example/a?tag[]=a HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+
+  assert absolute.uri.path == "/a"
+  assert absolute.uri.query == Option.Some("tag[]=a")
+end
+
+test "Request.Parser rejects a request target it cannot read"
+  try expect_malformed_request("GET * HTTP/1.1\r\nHost: example.com\r\n\r\n")
+  try expect_malformed_request(
+    "GET relative HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+  try expect_malformed_request("GET /a{b HTTP/1.1\r\nHost: example.com\r\n\r\n")
+  try expect_malformed_request("GET /a#b HTTP/1.1\r\nHost: example.com\r\n\r\n")
+  try expect_malformed_request(
+    "GET /a?b#c HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+  try expect_malformed_request(
+    "GET /a{b?c=1 HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+  try expect_malformed_request("GET ?a=1 HTTP/1.1\r\nHost: example.com\r\n\r\n")
+  try expect_malformed_request(
+    "CONNECT example.com HTTP/1.1\r\nHost: example.com\r\n\r\n",
+  )
+end
+
+test "Request.Parser rejects a length that two parties can read in two ways"
+  head = "POST / HTTP/1.1\r\nHost: example.com\r\n"
+
+  try expect_malformed_request(head <> "Content-Length: five\r\n\r\nhello")
+  try expect_malformed_request(head <> "Content-Length: -5\r\n\r\nhello")
+  try expect_malformed_request(head <> "Content-Length:\r\n\r\n")
+  try expect_malformed_request(head <> "Content-Length: 5, 5\r\n\r\nhello")
+  try expect_malformed_request(
+    head <> "Content-Length: 5\r\nContent-Length: 6\r\n\r\nhello!",
+  )
+  try expect_malformed_request(
+    head <> "Content-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+  )
+  try expect_malformed_request(head <> "Transfer-Encoding: gzip\r\n\r\nhello")
+
+  (same, _) = try complete_request(
+    head <> "Content-Length: 5\r\nContent-Length: 5\r\n\r\nhello",
+  )
+
+  assert same.text() == Result.Ok("hello")
+end
+
+test "Request.Parser fails with Malformed for a length that does not fit an Int"
+  head = "POST / HTTP/1.1\r\nHost: example.com\r\n"
+  huge = head <> "Content-Length: 99999999999999999999999999\r\n\r\n"
+  wide = head <> "Transfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n"
+
+  try expect_request_error(
+    huge,
+    Parser.Options{},
+    Parser.Error.Malformed("Content-Length is too large"),
+  )
+  try expect_request_error(
+    wide,
+    Parser.Options{},
+    Parser.Error.Malformed("chunk size is too large"),
+  )
+end
+
+test "Request.Parser fails with HeadersTooLarge past max_header_bytes"
+  whole = "GET / HTTP/1.1\r\nHost: example.com\r\nX-Pad: 0123456789\r\n\r\n"
+  partial = "GET / HTTP/1.1\r\nHost: example.com\r\nX-Pad: 0123456789"
+
+  short = "GET / HTTP/1.1\r\n"
+  too_large = Parser.Error.HeadersTooLarge
+
+  try expect_request_error(whole, SMALL_HEAD, too_large)
+  try expect_request_error(partial, SMALL_HEAD, too_large)
+
+  match whole_request(short.to_binary(), SMALL_HEAD)
+    Result.Ok(Option.None) -> ()
+    _ -> fail "expected a short head to need more bytes"
+  end
+end
+
+test "Request.Parser fails with HeadersTooLarge for trailers past max_header_bytes"
+  head = "POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
+  options = Parser.Options{max_header_bytes: 64}
+  too_large = Parser.Error.HeadersTooLarge
+
+  (fits, _) = try complete_request(head <> "0\r\nX-Pad: 1\r\n\r\n", options)
+
+  assert fits.body.byte_size() == 0
+
+  try expect_request_error(
+    head <> "0\r\nX-Pad: " <> pad(80) <> "\r\n\r\n",
+    options,
+    too_large,
+  )
+  try expect_request_error(
+    head <> "0\r\nX-Pad: " <> pad(80),
+    options,
+    too_large,
+  )
+end
+
+test "Request.Parser has no limit for a body"
+  head = "POST / HTTP/1.1\r\nHost: a\r\n"
+  options = Parser.Options{max_header_bytes: 64}
+
+  (declared, _) = try complete_request(
+    head <> "Content-Length: 80\r\n\r\n" <> pad(80),
+    options,
+  )
+
+  assert declared.body.byte_size() == 80
+
+  (chunked, _) = try complete_request(
+    head <> "Transfer-Encoding: chunked\r\n\r\n50\r\n" <> pad(80) <>
+      "\r\n0\r\n\r\n",
+    options,
+  )
+
+  assert chunked.body.byte_size() == 80
+end
+
+priv fn complete_request(
+  raw: String,
+  options: Parser.Options = Parser.Options{},
+) -> (Request, Binary) ! Test.Failure
+
+  match whole_request(raw.to_binary(), options)
+    Result.Ok(Option.Some(found)) -> found
+    Result.Ok(Option.None) -> fail "expected a request, got a need for bytes"
+    Result.Err(error) -> fail "expected a request, got '#{error.message()}'"
+  end
+end
+
+priv fn expect_incomplete_prefixes(raw: String) ! Test.Failure
+  buffer = raw.to_binary()
+  size = 0
+
+  while size < buffer.byte_size()
+    prefix = size == 0 ? <<>> : buffer.slice(Range{start: 0, stop: size - 1})
+
+    match whole_request(prefix)
+      Result.Ok(Option.None) -> ()
+      Result.Ok(_) -> fail "a prefix of #{size} bytes parsed as a whole request"
+      Result.Err(error) ->
+        fail "a prefix of #{size} bytes failed: #{error.message()}"
+    end
+
+    size += 1
+  end
+
+  _ = try complete_request(raw)
+end
+
+priv fn expect_malformed_request(raw: String) ! Test.Failure
+  match whole_request(raw.to_binary())
+    Result.Err(Parser.Error.Malformed(_)) -> ()
+    Result.Err(error) -> fail "expected Malformed, got '#{error.message()}'"
+    Result.Ok(_) -> fail "expected Malformed for '#{raw}'"
+  end
+end
+
+priv fn expect_request_error(
+  raw: String,
+  options: Parser.Options,
+  expected: Parser.Error,
+) ! Test.Failure
+
+  match whole_request(raw.to_binary(), options)
+    Result.Err(error) -> assert error == expected
+    Result.Ok(_) -> fail "expected '#{expected.message()}' for '#{raw}'"
+  end
+end
+
+# Adds `event` to `events`. Joins it to the last event when both are
+# `Data`, so the result does not depend on how the bytes were split.
+priv fn join_request_event(
+  events: List<Request.Parser.Event>,
+  event: Request.Parser.Event,
+) -> List<Request.Parser.Event>
+
+  match event
+    Request.Parser.Event.Data(right) ->
+      match events.last()
+        Option.Some(Request.Parser.Event.Data(left)) ->
+          (_, kept) = events.pop()
+          return kept.append(Request.Parser.Event.Data(left <> right))
+
+        _ ->
+          ()
+      end
+
+    _ ->
+      ()
+  end
+
+  events.append(event)
+end
+
+# Returns a text of `size` bytes.
+priv fn pad(size: Int) -> String
+  text = ""
+
+  while text.length() < size
+    text = text <> "x"
+  end
+
+  text
+end
+
+# Returns the request that the `Request` event at `index` carries.
+priv fn request_at(events: List<Request.Parser.Event>, index: Int)
+  -> Request ! Test.Failure
+
+  match events.get(index)
+    Option.Some(Request.Parser.Event.Request(request)) -> request
+    _ -> fail "expected a Request event at index #{index}"
+  end
+end
+
+# Feeds each piece to one parser and takes every event after each
+# piece.
+priv fn request_events(pieces: List<Binary>)
+  -> List<Request.Parser.Event> ! Parser.Error
+
+  events: List<Request.Parser.Event> = []
+  parser = Request.Parser.new()
+
+  for piece in pieces
+    parser = parser.feed(piece)
+
+    loop
+      (parser, event) = try parser.next()
+
+      match event
+        Option.Some(found) -> events = join_request_event(events, found)
+        Option.None -> break
+      end
+    end
+  end
+
+  events
+end

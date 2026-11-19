@@ -1,0 +1,15 @@
+@doc """
+One step of a response, as `Response.Parser.next` returns it.
+
+`Response` carries the head of a response, with an empty body. `Data`
+carries body bytes. `End` says that the response is complete.
+
+A 1xx response other than 101 is an interim response. It comes as a
+`Response` with no `End`, and the `Response` of the final response
+follows it.
+"""
+enum Response.Parser.Event
+  Data(Binary)
+  End
+  Response(Response)
+end

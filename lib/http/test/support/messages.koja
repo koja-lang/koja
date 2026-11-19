@@ -1,0 +1,83 @@
+# Returns each byte of `raw` as its own piece.
+priv fn each_byte(raw: Binary) -> List<Binary>
+  index = 0
+  pieces: List<Binary> = []
+
+  while index < raw.byte_size()
+    pieces = pieces.append(raw.slice(Range{start: index, stop: index}))
+    index += 1
+  end
+
+  pieces
+end
+
+# Returns `raw` as two pieces, where the first has `count` bytes.
+# `count` is above zero and below the size of `raw`.
+priv fn split_at(raw: Binary, count: Int) -> List<Binary>
+  [
+    raw.slice(Range{start: 0, stop: count - 1}),
+    raw.slice(Range{start: count, stop: raw.byte_size() - 1})
+  ]
+end
+
+# Reads one request from `raw` through a `Request.Parser`. Returns the
+# request with its body joined and the bytes after the request, or
+# `Option.None` when `raw` does not hold the whole request.
+priv fn whole_request(raw: Binary, options: Parser.Options = Parser.Options{})
+  -> Option<(Request, Binary)> ! Parser.Error
+
+  body: Binary = <<>>
+  parser = Request.Parser.new(options).feed(raw)
+  request: Option<Request> = Option.None
+
+  loop
+    (parser, event) = try parser.next()
+
+    match event
+      Option.Some(Request.Parser.Event.Request(received)) ->
+        request = Option.Some(received)
+      Option.Some(Request.Parser.Event.Data(piece)) -> body = body <> piece
+      Option.Some(Request.Parser.Event.End) -> break
+      Option.None -> return Option.None
+    end
+  end
+
+  # The parser returns `End` only after a `Request`.
+  received = request.unwrap()
+  received.body = body
+  Option.Some((received, parser.rest()))
+end
+
+# Reads the response to a request with `method` from `raw` through a
+# `Response.Parser`. `ended` says that the stream ended after `raw`.
+# Returns the last response with its body joined and the bytes after
+# the response, or `Option.None` when `raw` does not hold the whole
+# response.
+priv fn whole_response(raw: Binary, method: Method, ended: Bool)
+  -> Option<(Response, Binary)> ! Parser.Error
+
+  body: Binary = <<>>
+  parser = Response.Parser.new(method).feed(raw)
+  response: Option<Response> = Option.None
+
+  if ended
+    parser = parser.finish()
+  end
+
+  loop
+    (parser, event) = try parser.next()
+
+    match event
+      Option.Some(Response.Parser.Event.Response(received)) ->
+        response = Option.Some(received)
+      Option.Some(Response.Parser.Event.Data(piece)) -> body = body <> piece
+      Option.Some(Response.Parser.Event.End) -> break
+      Option.None -> return Option.None
+    end
+  end
+
+  # The parser returns `End` only after a `Response`.
+  received = response.unwrap()
+  received.body = body
+  Option.Some((received, parser.rest()))
+end

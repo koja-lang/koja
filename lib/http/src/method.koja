@@ -3,6 +3,7 @@ HTTP request method. Represents the action to be performed
 on the identified resource.
 """
 enum Method
+  Connect
   Delete
   Get
   Head
@@ -10,6 +11,8 @@ enum Method
   Patch
   Post
   Put
+  Query
+  Trace
 
   @doc """
   Parses an uppercase HTTP method string into a Method value.
@@ -17,6 +20,7 @@ enum Method
   """
   fn from_string(s: String) -> Method ! String
     match s
+      "CONNECT" -> Method.Connect
       "DELETE" -> Method.Delete
       "GET" -> Method.Get
       "HEAD" -> Method.Head
@@ -24,6 +28,8 @@ enum Method
       "PATCH" -> Method.Patch
       "POST" -> Method.Post
       "PUT" -> Method.Put
+      "QUERY" -> Method.Query
+      "TRACE" -> Method.Trace
       _ -> fail "unknown HTTP method: #{s}"
     end
   end
@@ -33,6 +39,7 @@ enum Method
   """
   fn to_string(self) -> String
     match self
+      Method.Connect -> "CONNECT"
       Method.Delete -> "DELETE"
       Method.Get -> "GET"
       Method.Head -> "HEAD"
@@ -40,6 +47,8 @@ enum Method
       Method.Patch -> "PATCH"
       Method.Post -> "POST"
       Method.Put -> "PUT"
+      Method.Query -> "QUERY"
+      Method.Trace -> "TRACE"
     end
   end
 end

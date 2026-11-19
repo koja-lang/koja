@@ -1,0 +1,10 @@
+@doc """
+HTTP protocol version. It says which version a received message
+arrived as. A writer ignores it, because the connection decides the
+version on the wire.
+"""
+enum Version
+  HTTP1_0
+  HTTP1_1
+  HTTP2
+end

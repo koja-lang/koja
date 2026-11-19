@@ -1,0 +1,12 @@
+@doc """
+One step of a request, as `Request.Parser.next` returns it.
+
+`Request` carries the head of a request, with an empty body. `Data`
+carries body bytes. `End` says that the request is complete, and
+every request ends with one.
+"""
+enum Request.Parser.Event
+  Data(Binary)
+  End
+  Request(Request)
+end

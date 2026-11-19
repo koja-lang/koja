@@ -2,7 +2,7 @@
 //!
 //! - With `Test` linked, a top-level test becomes a package-private
 //!   function and a struct, enum, impl, or extend test a public method,
-//!   all named `__test_<stem>_<line>` with `FunctionOrigin::Test` and a
+//!   all named `__<path>_<line>` with `FunctionOrigin::Test` and a
 //!   `! Test.Failure` channel.
 //! - Without `Test`, all are dropped and the program still checks.
 //! - A body that breaks the channel reports inside the test block.
@@ -56,7 +56,7 @@ fn assert_test_function(function: &koja_ast::ast::Function, line: u32, visibilit
         function.name.text,
         synthesized_test_name(Some(&PathBuf::from("test.koja")), line)
     );
-    assert_eq!(function.name.as_str(), format!("__test_test_{line}"));
+    assert_eq!(function.name.as_str(), format!("__test_{line}"));
     assert_eq!(function.origin, FunctionOrigin::Test);
     assert_eq!(function.visibility, visibility);
     assert!(function.params.is_empty());
@@ -74,7 +74,7 @@ fn assert_test_function(function: &koja_ast::ast::Function, line: u32, visibilit
 #[test]
 fn top_level_test_becomes_a_private_function() {
     let checked = typecheck_file(&dedent(SOURCE));
-    let function = find_function(&checked, "__test_test_14");
+    let function = find_function(&checked, "__test_14");
     assert_test_function(function, 14, Visibility::Private);
     assert!(
         !test_file(&checked)

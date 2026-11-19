@@ -1,0 +1,217 @@
+@doc """
+An HTTP/1.1 response parser. It reads the answer to one request from
+a stream of bytes and returns it as events. It opens no socket. Its
+owner gives it the bytes that arrived and asks it for the next event.
+
+```koja
+alias HTTP.Response.Parser as ResponseParser
+
+parser = ResponseParser.new(request.method)
+
+while open
+  (parser, event) = try parser.next()
+
+  match event
+    Option.Some(ResponseParser.Event.Response(received)) -> response = received
+    Option.Some(ResponseParser.Event.Data(piece)) -> body = body <> piece
+    Option.Some(ResponseParser.Event.End) -> open = false
+    Option.None -> parser = parser.feed(try socket.read(8192))
+  end
+end
+```
+
+`Response` carries the head with an empty body, `Data` carries body
+bytes, and `End` closes the response. A 1xx response other than 101
+is an interim response. It comes as a `Response` with no `End`, so an
+owner with no use for it keeps the last `Response` that it got.
+
+A parser reads one exchange, so make one for each request. After
+`End` it reads no more, and `rest` returns the bytes that came after
+the response. After a 101, or a 2xx response to a `CONNECT`, those
+bytes belong to the next protocol.
+
+The parser never holds a body, so it has no limit for one. The owner
+counts the bytes of the `Data` events. `max_header_bytes` in the
+options caps the head.
+
+The parser reads `Content-Length` bodies and chunked bodies, and it
+drops the trailers of a chunked body. A response with neither runs
+to the end of the stream, so call `finish` when the stream ends. The
+strict length rules of `Request.Parser` apply.
+
+`finished` and `state` belong to the parser. Do not read them and do
+not set them.
+"""
+struct Response.Parser
+  finished: Bool
+  method: Method
+  state: Parser.State
+
+  @doc """
+  Adds bytes that arrived from the stream.
+  """
+  fn feed(self, bytes: Binary) -> Response.Parser
+    self.state = self.state.feed(bytes)
+    self
+  end
+
+  @doc """
+  Says that the stream has ended, so no more bytes can arrive. A
+  response with no declared length is then complete. For any other
+  response that is not complete, `next` fails with `Malformed`.
+  """
+  fn finish(self) -> Response.Parser
+    self.finished = true
+    self
+  end
+
+  @doc """
+  Creates a parser for the response to one request. `method` is the
+  method of that request. The response to a `HEAD` has no body, and
+  neither does a 2xx response to a `CONNECT`.
+  """
+  fn new(method: Method, options: Parser.Options = Parser.Options{})
+    -> Response.Parser
+
+    Response.Parser{
+      finished: false,
+      method: method,
+      state: Parser.State.new(options),
+    }
+  end
+
+  @doc """
+  Returns the next event, or `Option.None` when the parser needs more
+  bytes. Rebind the parser to the one that comes back.
+
+  A `Data` event holds every body byte that the parser can decode
+  from the bytes it has. The chunks of a chunked body do not show.
+
+  A response with a 1xx, 204, or 304 status has no body. The reason
+  phrase is dropped. After a failure, do not use the parser again.
+  """
+  fn next(self)
+    -> (Response.Parser, Option<Response.Parser.Event>) ! Parser.Error
+
+    match self.state.phase
+      Parser.Phase.Done ->
+        return (self, Option.None)
+
+      Parser.Phase.Ending ->
+        self.state.phase = Parser.Phase.Done
+        return (self, Option.Some(Response.Parser.Event.End))
+
+      Parser.Phase.Head ->
+        taken = try self.state.take_head()
+
+        match taken
+          Option.Some((state, lines)) ->
+            (response, following) = try Response.Parser.read_head(
+              state,
+              lines,
+              self.method,
+            )
+            self.state = following
+            return (self, Option.Some(Response.Parser.Event.Response(response)))
+
+          Option.None ->
+            ()
+        end
+
+      _ ->
+        (state, piece) = try self.state.take_body(self.finished)
+        self.state = state
+
+        if piece.byte_size() > 0
+          return (self, Option.Some(Response.Parser.Event.Data(piece)))
+        end
+
+        if self.state.phase == Parser.Phase.Ending
+          self.state.phase = Parser.Phase.Done
+          return (self, Option.Some(Response.Parser.Event.End))
+        end
+    end
+
+    if self.finished
+      fail Parser.Error.Malformed("the stream ended before the response was complete")
+    end
+
+    (self, Option.None)
+  end
+
+  @doc """
+  Returns the bytes that the parser has not read. After `End`, they
+  are the bytes that came after the response.
+  """
+  fn rest(self) -> Binary
+    self.state.buffer
+  end
+
+  # A 1xx response that is not the last response to its request. A 101
+  # is the last one, because the connection changes protocol after it.
+  priv fn interim?(status: Status) -> Bool
+    status.code >= 100 and status.code < 200 and status.code != 101
+  end
+
+  priv fn parse_status_line(line: String) -> (Version, Status) ! Parser.Error
+    parts = line.split(" ")
+
+    if parts.length() < 2
+      fail Parser.Error.Malformed("malformed status line")
+    end
+
+    version = try parse_version(parts.get(0).unwrap())
+    code_text = parts.get(1).unwrap()
+
+    if code_text.length() != 3 or not code_text.digit?()
+      fail Parser.Error.Malformed("invalid status code")
+    end
+
+    code = code_text.to_int()
+      rescue _ -> fail Parser.Error.Malformed("invalid status code")
+
+    (version, Status.new(code))
+  end
+
+  # Builds the response from the lines of its head, and enters the
+  # phase that reads what follows. `state` holds the bytes after the
+  # head.
+  priv fn read_head(state: Parser.State, lines: List<String>, method: Method)
+    -> (Response, Parser.State) ! Parser.Error
+
+    (version, status) = try Response.Parser.parse_status_line(
+      lines.get(0).unwrap(),
+    )
+    headers = try parse_headers(lines)
+
+    response = Response{
+      body: EMPTY,
+      headers: headers,
+      status: status,
+      version: version,
+    }
+
+    # The head of the next response follows an interim response.
+    if Response.Parser.interim?(status)
+      return (response, state)
+    end
+
+    if bodiless?(method, status)
+      state.phase = Parser.Phase.Ending
+      return (response, state)
+    end
+
+    # A response with no declared length runs to the end of the stream.
+    following = try state.start_body(headers, true)
+    (response, following)
+  end
+end
+
+# Says whether the response to a request with `method` has no body,
+# whatever its headers declare.
+priv fn bodiless?(method: Method, status: Status) -> Bool
+  code = status.code
+
+  method == Method.Head or (code >= 100 and code < 200) or code == 204
+    or code == 304 or (method == Method.Connect and status.ok?())
+end

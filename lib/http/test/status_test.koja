@@ -2,7 +2,7 @@ test "Status.ok returns 200"
   s = Status.ok()
 
   assert s.code == 200
-  assert s.reason == "OK"
+  assert s.reason() == "OK"
 end
 
 test "Status.not_found returns 404"
@@ -13,11 +13,37 @@ test "Status.internal_server_error returns 500"
   assert Status.internal_server_error().code == 500
 end
 
-test "Status.new creates custom status"
-  s = Status.new(418, "I'm a Teapot")
+test "Status.new creates a status from its code"
+  s = Status.new(503)
 
-  assert s.code == 418
-  assert s.reason == "I'm a Teapot"
+  assert s.code == 503
+  assert s.reason() == "Service Unavailable"
+end
+
+test "Status.reason returns an empty string for an unknown code"
+  assert Status.new(418).reason() == ""
+  assert Status.new(799).reason() == ""
+end
+
+test "Status values with the same code are equal"
+  assert Status.new(404) == Status.not_found()
+  assert Status.new(404) != Status.ok()
+end
+
+test "Status.reason matches each named constructor"
+  cases: List<(Status, String)> = [
+    (Status.bad_request(), "Bad Request"), (Status.created(), "Created"),
+    (Status.forbidden(), "Forbidden"),
+    (Status.internal_server_error(), "Internal Server Error"),
+    (Status.method_not_allowed(), "Method Not Allowed"),
+    (Status.no_content(), "No Content"), (Status.not_found(), "Not Found"),
+    (Status.unauthorized(), "Unauthorized")
+  ]
+
+  for test_case in cases
+    (status, expected) = test_case
+    assert status.reason() == expected
+  end
 end
 
 test "Status.ok? checks 2xx range"
@@ -27,7 +53,7 @@ test "Status.ok? checks 2xx range"
 end
 
 test "Status.redirect? checks 3xx range"
-  assert Status.new(301, "Moved").redirect?()
+  assert Status.new(301).redirect?()
   assert not Status.ok().redirect?()
 end
 

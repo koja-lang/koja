@@ -1,0 +1,15 @@
+@doc """
+Settings for a `Request.Parser` or a `Response.Parser`. Every field
+has a default, so a call site names only what it changes, as in
+`Parser.Options{max_header_bytes: 65536}`.
+
+`max_header_bytes` caps the head, which is the start line and the
+headers with the empty line that ends them. It also caps one chunk
+size line and the trailers of a chunked body. The default is 16 KiB.
+
+A parser has no limit for a body, because it holds none. The owner
+that joins the `Data` events counts the bytes.
+"""
+struct Parser.Options
+  max_header_bytes: Int = 16384
+end

@@ -14,10 +14,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IO.Writer.write_all(data, options)` writes all of `data`. It is a default body on the protocol, so `IO.Descriptor`, `TCPSocket`, and every other writer have it. It calls `write` until the destination has accepted every byte. `options.timeout` bounds each `write`, not the whole call, and a failure can come after some bytes are written. The contract of `write` now says that a call with data writes at least one byte or fails.
 - `TCPSocket.set_nodelay(enabled)` and `Socket.set_nodelay(enabled)` turn the `TCP_NODELAY` option on or off, and fail with `Socket.Error`. A new connection keeps the system default, which is off. A package that writes a message and then waits for the reply turns it on after `connect` or `accept`.
 - `TLSConfig.with_alpn(protocols)` names the application protocols a client offers during the TLS handshake, as in `TLSConfig.client().with_alpn(["h2", "http/1.1"])`. `TCPSocket.alpn()` and `TLSSession.alpn()` return the protocol the server selected as an `Option<String>`, with `Option.None` when it selected none and on a connection without TLS. The list is the new field `TLSConfig.alpn`, which is empty by default. A name that is empty or longer than 255 bytes fails the client handshake with the new variant `TLSError.ProtocolNameInvalid`, so an exhaustive `match` on `TLSError` needs one more arm. A server handshake ignores the list.
+- `HTTP.Version` names the HTTP version of a message: `HTTP1_0`, `HTTP1_1`, or `HTTP2`.
+- `HTTP.Method` gains `Connect`, `Query`, and `Trace`, so an exhaustive `match` needs three more arms.
+- `Request.text()` and `Response.text()` decode the body as UTF-8 and fail with `String.ConversionError`.
+- `Request.serialize()` encodes a request as HTTP/1.1 bytes. It adds `Host` and `Content-Length` when the headers have none.
+- `Status.reason()` returns the standard reason phrase for a code, or `""` when there is none.
+- Every `HTTP` client function takes a trailing `timeout: Option<Duration> = Option.None`. It bounds the whole request except the DNS lookup, and a request that passes it fails with `HTTP.Error.Timeout`.
+- `HTTP.patch`, `HTTP.post`, `HTTP.put`, and `HTTP.request` take a `Binary | String` body.
+
+### Changed
+
+- **Breaking change.** `Request.body` and `Response.body` are `Binary`. `response.body` becomes `try response.text()` where the code needs a `String`, and `body_as_binary()` is gone. `Response.new(status, body)` takes `Binary | String` and sets `Content-Length` from the byte size, not the character count.
+- **Breaking change.** `Request.uri`, a `URI`, replaces `Request.path`. `request.path` becomes `request.uri.path`, and the query moves to `request.uri.query`. `Request.Parser` fills `uri.host` and `uri.port` from the `Host` header. It keeps the query as it arrived, so `uri.query` can hold text that `URI.parse` rejects, such as `tag[]=a`.
+- **Breaking change.** `Request.version` and `Response.version` are an `HTTP.Version` that defaults to `Version.HTTP1_1`. `version: "HTTP/1.1"` becomes `version: Version.HTTP1_1`, or leave the field out.
+- **Breaking change.** `Status` holds only its `code`. `Status.new(503, "Service Unavailable")` becomes `Status.new(503)`, and `status.reason` becomes `status.reason()`.
+- **Breaking change.** `Request.Parser` and `Response.Parser` replace `Parser.parse_request` and `Parser.parse_response`. A parser reads a stream in pieces. `feed(bytes)` adds bytes, and `next()` returns the next event, or `Option.None` when it needs more. The events are the message with an empty body, a `Data(Binary)` for each piece of the body, and `End`. A parser has no body limit, so its owner counts the `Data` bytes. `Parser.Options` caps the head at 16 KiB. Both parsers fail with `Parser.Error`, which is `HeadersTooLarge`, `Malformed(String)`, or `UnsupportedMethod(String)`.
+- **Breaking change.** The parsers reject messages that `HTTP.Parser` accepted. These are `Malformed`: a `Content-Length` that is not a number, two `Content-Length` headers that differ, `Content-Length` with `Transfer-Encoding`, an HTTP/1.1 request without exactly one `Host` header, a space before the colon of a header, a bare CR or LF in the head, and a request target with a `#` or an invalid path. The parsers drop the reason phrase of a response and the trailers of a chunked body.
+- **Breaking change.** `Response.serialize()` returns `Binary`. The status line is always `HTTP/1.1` with `status.reason()`.
+- **Breaking change.** The `HTTP` client functions fail with `HTTP.Error | Socket.Error | IO.Error | TLSError`, so a network failure keeps its own type. `HTTP.Error` is now `BodyTooLarge`, `InvalidUrl(String)`, `Parse(Parser.Error)`, or `Timeout`. A union has no `message()`, so `rescue e -> fail e.message()` becomes a `match` on the type of `e`.
+- The `HTTP` client reads the response as bytes, so a binary body arrives whole and a multibyte character split across two reads no longer fails. It turns `TCP_NODELAY` on, skips a 1xx response other than 101, and fails with `HTTP.Error.BodyTooLarge` for a body over 16 MiB.
 
 ### Fixed
 
 - A write to a socket whose peer has closed fails with `IO.Error.BrokenPipe`. Before, the OS ended the whole program with SIGPIPE. A write to stdout or stderr after the reader has gone still ends the program with SIGPIPE, so `app | head` behaves like other tools.
+- Two test files with the same name in different directories of one package no longer collide. Before, `koja test` could fail with `is already defined`.
+- A backtrace from a compiled program shows each function name as written. Before, `Stack.pop_item` showed as `Stack.pop.item`, and a function whose name starts with `_` and the frame of a top-level `test` were missing.
 
 ## [0.20.1] - 2026-11-06
 

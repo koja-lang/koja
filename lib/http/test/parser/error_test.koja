@@ -1,0 +1,8 @@
+test "Parser.Error.message describes each cause"
+  assert Parser.Error.HeadersTooLarge.message() ==
+    "the head is larger than the limit"
+  assert Parser.Error.Malformed("bad line").message() ==
+    "malformed message: bad line"
+  assert Parser.Error.UnsupportedMethod("BREW").message() ==
+    "unsupported method: BREW"
+end

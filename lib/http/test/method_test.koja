@@ -1,8 +1,9 @@
 test "Method.to_string returns uppercase method name"
   cases: List<(Method, String)> = [
-    (Method.Get, "GET"), (Method.Post, "POST"), (Method.Put, "PUT"),
-    (Method.Delete, "DELETE"), (Method.Patch, "PATCH"), (Method.Head, "HEAD"),
-    (Method.Options, "OPTIONS")
+    (Method.Connect, "CONNECT"), (Method.Delete, "DELETE"), (Method.Get, "GET"),
+    (Method.Head, "HEAD"), (Method.Options, "OPTIONS"), (Method.Patch, "PATCH"),
+    (Method.Post, "POST"), (Method.Put, "PUT"), (Method.Query, "QUERY"),
+    (Method.Trace, "TRACE")
   ]
 
   for test_case in cases
@@ -12,7 +13,12 @@ test "Method.to_string returns uppercase method name"
 end
 
 test "Method.from_string parses valid methods"
-  for name in ["GET", "POST", "DELETE"]
+  names = [
+    "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT",
+    "QUERY", "TRACE"
+  ]
+
+  for name in names
     assert Method.from_string(name).unwrap().to_string() == name
   end
 end
