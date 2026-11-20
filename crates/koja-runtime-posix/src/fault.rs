@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::mem;
 use std::ptr;
 
-use crate::scheduler::{CURRENT_PID, STACK_SIZE};
+use crate::scheduler::{STACK_SIZE, current_pid};
 
 thread_local! {
     /// Guard region `(base, len)` of the process stack this worker is
@@ -96,7 +96,7 @@ fn write_overflow_diagnostic() {
     let mut buf = [0u8; 96];
     let mut len = 0;
     len = append(&mut buf, len, b"\n** (stack overflow) process ");
-    len = append_decimal(&mut buf, len, CURRENT_PID.with(|c| c.get()).max(0) as u64);
+    len = append_decimal(&mut buf, len, current_pid().max(0) as u64);
     len = append(&mut buf, len, b" exceeded its ");
     len = append_decimal(&mut buf, len, (STACK_SIZE / 1024) as u64);
     len = append(&mut buf, len, b" KiB stack\n");

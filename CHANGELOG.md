@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A compiled `for` loop over a `List` no longer copies the list on each step. `List.map`, `filter`, and `reduce` are faster for the same reason.
 - A `for` loop over a `String` runs in linear time. Before, each step scanned the whole string. `String.downcase`, `upcase`, `codepoints`, and the other functions that walk a string are faster for the same reason.
 - A compiled program stops at startup with a clear message when a command-line argument is not valid UTF-8. Before, the argument became a `String` with invalid contents.
+- `Socket.connect`, `TCPSocket.connect`, and the `HTTP` client report the real cause of a failed connection, such as `Socket.Error.ConnectionRefused`. Before, a compiled program could get `Socket.Error.Unknown`.
+- A process that receives a message always takes on the `Process.Context` of the sender. Before, a compiled program could give that context to a different process, so a `Trace` span could join the wrong trace.
 
 ## [0.20.1] - 2026-11-06
 

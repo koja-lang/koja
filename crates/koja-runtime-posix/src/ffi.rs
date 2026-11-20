@@ -190,8 +190,23 @@ unsafe extern "C" {
 }
 
 /// Returns the current `errno` value for this thread.
+///
+/// `#[inline(never)]` is load-bearing. `errno` is thread-local, and std
+/// lets the compiler reuse its address for a whole function. Inlined
+/// into a caller that waits in `io_block`, a read after the wait would
+/// use the address of the worker the process ran on before. See the
+/// TLS caching note in [`crate::scheduler`].
+#[expect(clippy::disallowed_methods)]
+#[inline(never)]
 pub fn get_errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+/// Returns the current `errno` of this thread as an `io::Error`. The
+/// runtime calls this in place of `io::Error::last_os_error`, which has
+/// the hazard that [`get_errno`] describes.
+pub fn last_os_error() -> std::io::Error {
+    std::io::Error::from_raw_os_error(get_errno())
 }
 
 /// Sets a file descriptor to non-blocking mode via `fcntl`.

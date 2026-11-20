@@ -23,9 +23,9 @@ use polling::{Event, Events, PollMode, Poller};
 
 use koja_runtime_core::{IoPark, IoWait, Reactor, Readiness, Waker};
 
-use crate::ffi::{EAGAIN, EINTR, get_errno, libc_close};
+use crate::ffi::{EAGAIN, EINTR, get_errno, last_os_error, libc_close};
 use crate::scheduler::{
-    CURRENT_PID, SHUTDOWN, TABLE, TIMERS, notify_all_workers, notify_workers, route_wake,
+    SHUTDOWN, TABLE, TIMERS, current_pid, notify_all_workers, notify_workers, route_wake,
     send_io_event, yield_to_scheduler,
 };
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
@@ -249,7 +249,7 @@ pub extern "C" fn koja_rt_watch_fd(fd: i32, interest: i64) {
     let Some(reactor) = REACTOR.get() else {
         return;
     };
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     let (interest, readiness) = if interest == 1 {
         (Interest::Writable, Readiness::Writable)
     } else {
@@ -321,7 +321,7 @@ pub(crate) fn release_fd_and_close(fd: i32) -> io::Result<()> {
 /// traffic cannot clobber `errno`.
 fn close_raw(fd: i32) -> io::Result<()> {
     if unsafe { libc_close(fd) } < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(last_os_error());
     }
     Ok(())
 }
@@ -339,14 +339,14 @@ fn close_raw(fd: i32) -> io::Result<()> {
 /// time silently drops the event and the process parks forever. Reverse
 /// order means at worst a spurious resume.
 ///
-/// `#[inline(never)]` is load-bearing. Callers retry this in a loop, and
-/// the process can resume on a different worker thread each time, so the
-/// `CURRENT_PID` read must not reuse a TLS base hoisted from before an
-/// earlier iteration's switch. See the TLS caching note in
-/// [`crate::scheduler`].
+/// Callers retry this in a loop, and the process can resume on a different
+/// worker thread each time. The PID read is safe because `current_pid`
+/// reads the thread-local fresh on each call. `#[inline(never)]` stays as
+/// a second guard for a thread-local read at the start of this function.
+/// See the TLS caching note in [`crate::scheduler`].
 #[inline(never)]
 pub fn io_block(fd: i32, interest: Interest, deadline: Option<Instant>) -> IoWait {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
 
     // The system-mail check and the park happen in one slot hold, so a
     // signal can't slip between them and strand behind the wait.
@@ -410,7 +410,7 @@ pub(crate) fn block_until_ready(
             return Ok(n);
         }
         if get_errno() != EAGAIN {
-            return Err(io::Error::last_os_error());
+            return Err(last_os_error());
         }
         if expired(deadline) {
             return Err(io::ErrorKind::TimedOut.into());

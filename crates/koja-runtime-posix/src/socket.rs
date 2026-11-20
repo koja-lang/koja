@@ -14,9 +14,10 @@ use koja_runtime_core::{IoWait, deadline_from_user_millis};
 
 use crate::ffi::{
     AF_INET, Addrinfo, EAGAIN, EINPROGRESS, EINTR, EINVAL, ENOTCONN, IPPROTO_TCP, SO_ERROR,
-    SO_REUSEADDR, SOL_SOCKET, SockaddrIn, TCP_NODELAY, get_errno, libc_accept, libc_bind,
-    libc_connect, libc_freeaddrinfo, libc_getaddrinfo, libc_getpeername, libc_getsockopt,
-    libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket, set_nonblocking,
+    SO_REUSEADDR, SOL_SOCKET, SockaddrIn, TCP_NODELAY, get_errno, last_os_error, libc_accept,
+    libc_bind, libc_connect, libc_freeaddrinfo, libc_getaddrinfo, libc_getpeername,
+    libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket,
+    set_nonblocking,
 };
 use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
@@ -61,7 +62,7 @@ pub extern "C" fn koja_socket_bind(fd: i32, ip_ptr: *const u8, ip_length: i64, p
     };
     let ret = unsafe { libc_bind(fd, &addr as *const SockaddrIn as *const u8, addr_len) };
     if ret < 0 {
-        set_last_error(io::Error::last_os_error());
+        set_last_error(last_os_error());
         return -1;
     }
     0
@@ -140,7 +141,7 @@ pub fn connect_start(
     if errno == EINPROGRESS || errno == EAGAIN {
         return Ok(ConnectProgress::InProgress);
     }
-    Err(io::Error::last_os_error())
+    Err(last_os_error())
 }
 
 /// Checks a connect that was `InProgress` after a writability wake. A
@@ -157,7 +158,7 @@ pub fn connect_finish(fd: i32) -> io::Result<ConnectProgress> {
     }
     let errno = get_errno();
     if errno != ENOTCONN && errno != EINVAL {
-        return Err(io::Error::last_os_error());
+        return Err(last_os_error());
     }
 
     let mut err: i32 = 0;
@@ -172,7 +173,7 @@ pub fn connect_finish(fd: i32) -> io::Result<ConnectProgress> {
         )
     };
     if ret < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(last_os_error());
     }
     if err != 0 {
         return Err(io::Error::from_raw_os_error(err));
@@ -188,7 +189,7 @@ pub fn connect_finish(fd: i32) -> io::Result<ConnectProgress> {
 pub extern "C" fn koja_socket_create(sock_type: i64) -> i32 {
     let fd = unsafe { libc_socket(AF_INET, sock_type as i32, 0) };
     if fd < 0 {
-        set_last_error(io::Error::last_os_error());
+        set_last_error(last_os_error());
         return -1;
     }
     set_nonblocking(fd);
@@ -201,7 +202,7 @@ pub extern "C" fn koja_socket_create(sock_type: i64) -> i32 {
 pub extern "C" fn koja_socket_listen(fd: i32, backlog: i64) -> i64 {
     let ret = unsafe { libc_listen(fd, backlog as i32) };
     if ret < 0 {
-        set_last_error(io::Error::last_os_error());
+        set_last_error(last_os_error());
         return -1;
     }
     0
@@ -368,7 +369,7 @@ pub extern "C" fn koja_socket_setsockopt_nodelay(fd: i32, enabled: i64) -> i64 {
         )
     };
     if ret < 0 {
-        set_last_error(io::Error::last_os_error());
+        set_last_error(last_os_error());
         return -1;
     }
     0
@@ -388,7 +389,7 @@ pub extern "C" fn koja_socket_setsockopt_reuse(fd: i32) -> i64 {
         )
     };
     if ret < 0 {
-        set_last_error(io::Error::last_os_error());
+        set_last_error(last_os_error());
         return -1;
     }
     0

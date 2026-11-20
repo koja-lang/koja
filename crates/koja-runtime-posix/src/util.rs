@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::io;
 use std::ptr;
 
-use crate::ffi::EBADF;
+use crate::ffi::{EBADF, last_os_error};
 use crate::memory;
 use crate::panic::exit_before_entry;
 
@@ -422,7 +422,7 @@ pub extern "C" fn koja_last_error_code() -> i32 {
 /// runtime's own I/O paths, where `LAST_IO_ERROR` was never set.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_errno_code() -> i32 {
-    cause_code(&io::Error::last_os_error())
+    cause_code(&last_os_error())
 }
 
 /// Stores the error of the most recent failed I/O call in the
