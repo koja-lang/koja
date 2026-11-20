@@ -106,24 +106,21 @@ pub(super) fn arg_string_bytes<'a>(
     }
 }
 
-/// Borrow the `index`-th argument as `&str`. Surfaces
-/// [`RuntimeError::Panicked`] when the payload is not valid UTF-8,
-/// since codepoint-walking methods (`length`, `get`, `slice`) need
-/// it. Byte-oriented methods read raw bytes through
-/// [`arg_string_bytes`] instead.
+/// Borrow the `index`-th argument as `&str`, for the
+/// codepoint-walking methods (`length`, `get`, `next`, `slice`).
+/// Does not validate the bytes, because [`Value::string`] validates
+/// each `String` when it builds one. Byte-oriented methods read raw
+/// bytes through [`arg_string_bytes`] instead.
 pub(super) fn arg_string_utf8<'a>(
     args: &'a [Value],
     index: usize,
     label: &str,
 ) -> Result<&'a str, RuntimeError> {
     let bytes = arg_string_bytes(args, index, label)?;
-    str::from_utf8(bytes).map_err(|err| RuntimeError::Panicked {
-        message: format!(
-            "{label} arg #{index}: String contents are not valid UTF-8 \
-             (invalid at byte {}): {err}",
-            err.valid_up_to(),
-        ),
-    })
+    // SAFETY: every `Value::String` holds valid UTF-8. `Value::string`
+    // validates its bytes, and the other paths copy Rust text or join
+    // two valid strings.
+    Ok(unsafe { str::from_utf8_unchecked(bytes) })
 }
 
 /// Find `variant_name` on `symbol`'s decl. Every helper below resolves

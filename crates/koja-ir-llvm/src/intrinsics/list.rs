@@ -24,7 +24,7 @@ use crate::intrinsics::util::{
     nth_struct,
 };
 use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
-use crate::types::{abi_size, ir_basic_type};
+use crate::types::{abi_size, ir_basic_type, tuple_struct_type};
 
 /// Initial buffer capacity for `List.new`.
 const INITIAL_CAPACITY: u64 = 8;
@@ -51,6 +51,7 @@ pub(super) fn emit_list<'ctx>(
         ListMethod::Get => emit_get(ctx, function, llvm_function),
         ListMethod::Length => emit_length(ctx, function, llvm_function),
         ListMethod::New => emit_new(ctx, function),
+        ListMethod::Next => emit_next(ctx, function, llvm_function),
         ListMethod::Pop => emit_pop(ctx, function, llvm_function),
         ListMethod::ReplaceAt => emit_replace_at(ctx, function, llvm_function),
         ListMethod::Slice => emit_slice(ctx, function, llvm_function),
@@ -367,6 +368,75 @@ fn emit_get<'ctx>(
     ctx.builder.build_return(Some(&some)).or_ice().map(|_| ())?;
 
     ctx.builder.position_at_end(oob_bb);
+    let none = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
+    ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())?;
+
+    Ok(())
+}
+
+fn emit_next<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "List.next");
+    let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
+    let end_bb = ctx.context.append_basic_block(llvm_function, "end");
+
+    let self_val = nth_struct(function, llvm_function, 0, "self");
+    let cursor = nth_int(function, llvm_function, 1, "cursor");
+
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
+    let elem_ir_ty = element(ListMethod::Next, function);
+    let elem_size = element_byte_size(ctx, function, ListMethod::Next)?;
+    let elem_ty = ir_basic_type(ctx, elem_ir_ty)?;
+    let tuple_struct = tuple_struct_type(ctx, &[elem_ir_ty.clone(), IRType::Int64])?;
+
+    let in_bounds = ctx
+        .builder
+        .build_int_compare(IntPredicate::ULT, cursor, len, "in_bounds")
+        .or_ice()?;
+    ctx.builder
+        .build_conditional_branch(in_bounds, ok_bb, end_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(ok_bb);
+    let byte_offset = ctx
+        .builder
+        .build_int_mul(cursor, elem_size, "byte_off")
+        .or_ice()?;
+    let elem_ptr = unsafe {
+        ctx.builder
+            .build_gep(i8_ty, buf_ptr, &[byte_offset], "elem_ptr")
+            .or_ice()?
+    };
+    let value = ctx
+        .builder
+        .build_load(elem_ty, elem_ptr, "elem_val")
+        .or_ice()?;
+    let value = acquire_value(ctx, elem_ir_ty, value)?;
+    let next_cursor = ctx
+        .builder
+        .build_int_add(cursor, i64_ty.const_int(1, false), "next_cursor")
+        .or_ice()?;
+    let payload = build_tuple(ctx, tuple_struct, value, next_cursor.into())?;
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[payload],
+    )?;
+    ctx.builder.build_return(Some(&some)).or_ice().map(|_| ())?;
+
+    ctx.builder.position_at_end(end_bb);
     let none = build_enum_value(
         ctx,
         option_symbol,

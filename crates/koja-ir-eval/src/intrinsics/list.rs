@@ -27,6 +27,7 @@ pub(super) fn dispatch<R: CallResolver>(
         ListMethod::Get => get(call),
         ListMethod::Length => length(call.args),
         ListMethod::New => new(),
+        ListMethod::Next => next(call),
         ListMethod::Pop => pop(call),
         ListMethod::ReplaceAt => replace_at(call.args),
         ListMethod::Slice => slice(call.args),
@@ -78,6 +79,18 @@ fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErro
     } else {
         items.get(index as usize).cloned()
     };
+    helpers::option_value(option_symbol, call.resolver, value)
+}
+
+fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let list = helpers::arg_list(call.args, 0, "List.next")?;
+    let cursor = helpers::arg_int(call.args, 1, "List.next")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "List.next")?;
+    let items = list.borrow();
+    let value = usize::try_from(cursor)
+        .ok()
+        .and_then(|index| items.get(index).map(|item| (index, item)))
+        .map(|(index, item)| Value::Tuple(vec![item.clone(), Value::Int((index + 1) as i64)]));
     helpers::option_value(option_symbol, call.resolver, value)
 }
 

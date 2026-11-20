@@ -6,6 +6,7 @@ use std::ptr;
 
 use crate::ffi::EBADF;
 use crate::memory;
+use crate::panic::exit_before_entry;
 
 /// Total bytes of header prepended to every rc-managed leaf heap
 /// payload (`String` / `Binary` / `Bits`): `[i64 rc][i64 bit_length]`
@@ -445,6 +446,9 @@ pub struct KojaList {
 /// string and writing the result into `out`. Uses an output pointer to
 /// avoid struct-return ABI mismatches on AArch64.
 ///
+/// An argument that is not valid UTF-8 cannot become a `String`, so it
+/// ends the program here, before the entry process starts.
+///
 /// # Safety
 /// `argv` must contain at least `argc` valid, NUL-terminated C strings.
 /// `out` must point to writable memory large enough for a `KojaList`.
@@ -457,7 +461,15 @@ pub unsafe extern "C" fn koja_rt_build_argv(argc: i32, argv: *const *const u8, o
     for i in 0..count {
         let c_str =
             unsafe { std::ffi::CStr::from_ptr(*argv.add(i + skip) as *const std::ffi::c_char) };
-        let koja_str = unsafe { alloc_koja_string(c_str.to_bytes()) };
+        let bytes = c_str.to_bytes();
+        if std::str::from_utf8(bytes).is_err() {
+            exit_before_entry(&format!(
+                "command-line argument {} is not valid UTF-8: \"{}\"",
+                i + 1,
+                String::from_utf8_lossy(bytes),
+            ));
+        }
+        let koja_str = unsafe { alloc_koja_string(bytes) };
         unsafe { *buf.add(i) = koja_str };
     }
     unsafe {

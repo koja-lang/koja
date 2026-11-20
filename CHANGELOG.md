@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A write to a socket whose peer has closed fails with `IO.Error.BrokenPipe`. Before, the OS ended the whole program with SIGPIPE. A write to stdout or stderr after the reader has gone still ends the program with SIGPIPE, so `app | head` behaves like other tools.
 - Two test files with the same name in different directories of one package no longer collide. Before, `koja test` could fail with `is already defined`.
 - A backtrace from a compiled program shows each function name as written. Before, `Stack.pop_item` showed as `Stack.pop.item`, and a function whose name starts with `_` and the frame of a top-level `test` were missing.
+- A compiled `for` loop over a `List` no longer copies the list on each step. `List.map`, `filter`, and `reduce` are faster for the same reason.
+- A `for` loop over a `String` runs in linear time. Before, each step scanned the whole string. `String.downcase`, `upcase`, `codepoints`, and the other functions that walk a string are faster for the same reason.
+- A compiled program stops at startup with a clear message when a command-line argument is not valid UTF-8. Before, the argument became a `String` with invalid contents.
 
 ## [0.20.1] - 2026-11-06
 

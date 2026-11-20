@@ -1332,6 +1332,63 @@ fn lang_release_build_test() {
     let _ = std::fs::remove_file(&binary_path);
 }
 
+/// A command-line argument that is not valid UTF-8 cannot become a
+/// `String`, so a compiled program must stop before its entry process
+/// starts. `koja run` rejects such an argument in the driver, so this
+/// test builds the fixture and runs the binary directly.
+#[test]
+fn lang_argv_invalid_utf8_test() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let project_dir = lang_dir().join("process_argv");
+    if !project_dir.exists() {
+        panic!("test fixture tests/lang/process_argv/ not found");
+    }
+
+    let binary_path = std::env::temp_dir().join("koja_test_argv_invalid_utf8");
+    let _ = std::fs::remove_file(&binary_path);
+
+    let mut cmd = Command::new(koja_bin());
+    cmd.arg("build")
+        .arg("-o")
+        .arg(binary_path.to_str().unwrap())
+        .current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    let output = cmd.output().expect("failed to execute koja build");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "koja build failed in process_argv dir\nstderr:\n{stderr}"
+    );
+
+    let run_output = Command::new(&binary_path)
+        .arg("hello")
+        .arg(OsStr::from_bytes(b"caf\xff"))
+        .output()
+        .expect("failed to run process_argv binary");
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    let stderr = String::from_utf8_lossy(&run_output.stderr);
+    assert_eq!(
+        run_output.status.code(),
+        Some(1),
+        "expected exit code 1\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "expected no output before the failure, got: {stdout}"
+    );
+    assert!(
+        stderr.contains("** (panic) command-line argument 2 is not valid UTF-8: \"caf\u{fffd}\""),
+        "stderr missing the argument message\nstderr:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_file(&binary_path);
+    let _ = std::fs::remove_dir_all(binary_path.with_extension("dSYM"));
+}
+
 /// Arithmetic faults must trap in release mode exactly as in debug:
 /// the guards are explicit branches in the emitted IR, not
 /// debug-only checks. The bit-shift fault is the historical repro

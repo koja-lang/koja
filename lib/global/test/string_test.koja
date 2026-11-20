@@ -115,6 +115,36 @@ test "Unicode length vs byte_length and get"
   assert emoji.get(1) == Option.Some("é")
 end
 
+test "for loop iterates multibyte codepoints in order"
+  acc: List<String> = []
+
+  for c in "aé€𝄞"
+    acc = acc.append(c)
+  end
+
+  assert acc == ["a", "é", "€", "𝄞"]
+end
+
+test "next returns the character at the byte cursor and the next cursor"
+  s = "é€a"
+
+  assert s.cursor() == 0
+  assert s.next(0) == Option.Some(("é", 2))
+  assert s.next(2) == Option.Some(("€", 5))
+  assert s.next(5) == Option.Some(("a", 6))
+end
+
+test "next returns None for a cursor inside a character or past the end"
+  s = "é€a"
+
+  assert s.next(1) == Option.None
+  assert s.next(3) == Option.None
+  assert s.next(6) == Option.None
+  assert s.next(7) == Option.None
+  assert s.next(-1) == Option.None
+  assert "".next(0) == Option.None
+end
+
 test "empty?"
   # --- string_stdlib.koja ---
   assert "".empty?()
