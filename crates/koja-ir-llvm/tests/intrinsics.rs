@@ -41,8 +41,8 @@ fn socket_intrinsics_emit_only_raw_result_shapes() {
 
     let recv_from_body = extract_function_body(&ir_text, "Net.Socket.recv_from_raw/2");
     let resolve_body = extract_function_body(&ir_text, "Net.Socket.resolve_raw/1");
-    assert_contains(recv_from_body, "call ptr @koja_socket_recv_from(");
-    assert_contains(resolve_body, "call ptr @koja_socket_resolve(");
+    assert_contains(recv_from_body, "call i64 @koja_socket_recv_from(");
+    assert_contains(resolve_body, "call i64 @koja_socket_resolve(");
     for body in [recv_from_body, resolve_body] {
         assert!(
             !body.contains("IPAddress") && !body.contains("Socket.Address"),

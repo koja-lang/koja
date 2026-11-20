@@ -49,8 +49,10 @@ struct IO.Descriptor
   Closes the file descriptor.
   """
   fn close(self) ! IOError
-    if koja_fd_close(self.raw) != 0
-      fail IOError.last()
+    result = koja_fd_close(self.raw)
+
+    if result < 0
+      fail IOError.from_failure(result)
     end
   end
 
@@ -91,8 +93,12 @@ struct IO.Descriptor
   priv fn koja_fd_close(fd: Int32) -> Int32
 
   @extern "C"
-  priv fn koja_fd_read(fd: Int32, count: Int64, timeout_ms: Int64)
-    -> CPtr<UInt8>
+  priv fn koja_fd_read(
+    fd: Int32,
+    buffer: CPtr<UInt8>,
+    count: Int64,
+    timeout_ms: Int64,
+  ) -> Int64
 
   @extern "C"
   priv fn koja_fd_write(
@@ -119,17 +125,23 @@ impl IO.Reader<IOError> for IO.Descriptor
   with `IO.Error.TimedOut` once that much time passes with no data.
   """
   fn read(self, count: Int, options: ReaderOptions) -> Binary ! IOError
-    ptr = IO.Descriptor.koja_fd_read(
+    buffer: CPtr<UInt8> = CPtr.alloc(count)
+
+    result = IO.Descriptor.koja_fd_read(
       self.raw,
+      buffer,
       count,
       IO.Descriptor.timeout_ms(options.timeout),
     )
 
-    if ptr.null?()
-      fail IOError.last()
+    if result < 0
+      buffer.free()
+      fail IOError.from_failure(result)
     end
 
-    RuntimeBlock.adopt_binary(ptr)
+    bytes = buffer.to_binary(result)
+    buffer.free()
+    bytes
   end
 end
 
@@ -155,7 +167,7 @@ impl IO.Writer<IOError> for IO.Descriptor
     )
 
     if result < 0
-      fail IOError.last()
+      fail IOError.from_failure(result)
     end
 
     result

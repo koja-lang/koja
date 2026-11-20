@@ -1,14 +1,15 @@
 //! `@intrinsic` methods on `Socket` from
 //! `koja/lib/net/src/net.koja`:
 //!
-//! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), String>`:
-//!   raw datagram receive. Suspends until the fd is readable.
-//! * `Socket.resolve_raw(hostname: String) -> Result<List<Binary>, String>`:
-//!   raw synchronous `getaddrinfo` shim.
+//! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), Int>`
+//!   is the raw datagram receive. It suspends until the fd is readable.
+//! * `Socket.resolve_raw(hostname: String) -> Result<List<Binary>, Int>`
+//!   is the raw synchronous `getaddrinfo` shim.
 //!
-//! Both bodies follow the same skeleton: call the runtime helper,
-//! branch on the null sentinel, build either `Result.Err` from
-//! `koja_last_error()` or `Result.Ok` from the runtime's buffer.
+//! Both bodies follow the same skeleton. They call the runtime helper
+//! with an out slot for the buffer, branch on a negative status, and
+//! build either `Result.Err` from the status or `Result.Ok` from the
+//! runtime's buffer. The status is the failure value of the call.
 //! The backend marshals only runtime ABI values. Ordinary Koja code
 //! constructs `IPAddress` and `SocketAddress`, so their layouts never
 //! become part of this boundary.
@@ -28,7 +29,7 @@ use crate::intrinsics::util::{
     build_list_struct, expect_enum_symbol, extract_int, nth_param, nth_struct, ret,
 };
 use crate::runtime::{
-    declare_free_extern, declare_last_error_extern, declare_malloc_extern, declare_memcpy_extern,
+    declare_free_extern, declare_malloc_extern, declare_memcpy_extern,
     declare_socket_recv_from_extern, declare_socket_resolve_extern,
 };
 use crate::types::ir_basic_type;
@@ -50,19 +51,9 @@ pub(super) fn emit_socket<'ctx>(
     method: SocketMethod,
 ) -> Result<(), LlvmError> {
     match method {
-        SocketMethod::LastError => emit_last_error(ctx),
         SocketMethod::RecvFromRaw => emit_recv_from(ctx, function, llvm_function),
         SocketMethod::ResolveRaw => emit_resolve(ctx, function, llvm_function),
     }
-}
-
-fn emit_last_error(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
-    let last_error = declare_last_error_extern(ctx);
-    let message = ctx.call_basic(last_error, &[], "last_error")?;
-    ctx.builder
-        .build_return(Some(&message))
-        .or_ice()
-        .map(|_| ())
 }
 
 fn emit_resolve<'ctx>(
@@ -77,21 +68,32 @@ fn emit_resolve<'ctx>(
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
 
     let hostname = nth_param(function, llvm_function, 0, "hostname");
 
+    let out_slot = ctx.build_entry_alloca(ptr_ty, "resolve_out");
     let resolve_fn = declare_socket_resolve_extern(ctx);
-    let result_ptr = ctx
-        .call_basic(resolve_fn, &[hostname.into()], "resolve_buf")?
-        .into_pointer_value();
+    let status = ctx
+        .call_basic(
+            resolve_fn,
+            &[hostname.into(), out_slot.into()],
+            "resolve_status",
+        )?
+        .into_int_value();
 
-    let (ok_bb, err_bb) = branch_on_null(ctx, llvm_function, result_ptr)?;
+    let (ok_bb, err_bb) = branch_on_failure(ctx, llvm_function, status)?;
 
     ctx.builder.position_at_end(err_bb);
-    let err = build_err(ctx, result_symbol)?;
+    let err = build_err(ctx, result_symbol, status)?;
     ret(ctx, err)?;
 
     ctx.builder.position_at_end(ok_bb);
+    let result_ptr = ctx
+        .builder
+        .build_load(ptr_ty, out_slot, "resolve_buf")
+        .or_ice()?
+        .into_pointer_value();
     let count = build_load_int(ctx, i64_ty, result_ptr, "count")?;
     let alloc_size = ctx
         .builder
@@ -156,18 +158,28 @@ fn emit_recv_from<'ctx>(
     let fd = extract_int(ctx, fd_struct, 0, "fd")?;
     let count_val = nth_param(function, llvm_function, 1, "count");
 
+    let out_slot = ctx.build_entry_alloca(ptr_ty, "recv_out");
     let recv_fn = declare_socket_recv_from_extern(ctx);
-    let result_ptr = ctx
-        .call_basic(recv_fn, &[fd.into(), count_val.into()], "recv_buf")?
-        .into_pointer_value();
+    let status = ctx
+        .call_basic(
+            recv_fn,
+            &[fd.into(), count_val.into(), out_slot.into()],
+            "recv_status",
+        )?
+        .into_int_value();
 
-    let (ok_bb, err_bb) = branch_on_null(ctx, llvm_function, result_ptr)?;
+    let (ok_bb, err_bb) = branch_on_failure(ctx, llvm_function, status)?;
 
     ctx.builder.position_at_end(err_bb);
-    let err = build_err(ctx, result_symbol)?;
+    let err = build_err(ctx, result_symbol, status)?;
     ret(ctx, err)?;
 
     ctx.builder.position_at_end(ok_bb);
+    let result_ptr = ctx
+        .builder
+        .build_load(ptr_ty, out_slot, "recv_buf")
+        .or_ice()?
+        .into_pointer_value();
     let data_ptr = ctx
         .builder
         .build_load(ptr_ty, result_ptr, "data_ptr")
@@ -223,52 +235,40 @@ fn emit_recv_from<'ctx>(
     ret(ctx, ok)
 }
 
-/// Build `Result.Err(koja_last_error())`. The runtime helper
-/// returns a freshly-allocated Koja string payload pointer, which
-/// is exactly the LLVM-level representation of an `IRType::String`,
-/// so the intrinsic can feed it straight into the `Err` payload slot without
-/// any further marshaling.
+/// Build `Result.Err(status)`. The status is the negative `i64` the
+/// runtime helper returned, which is the LLVM-level representation of
+/// an `IRType::Int64`, so it goes into the `Err` payload slot as is.
 fn build_err<'ctx>(
     ctx: &EmitContext<'ctx>,
     result_symbol: &IRSymbol,
+    status: IntValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let last_error = declare_last_error_extern(ctx);
-    let err_msg = ctx.call_basic(last_error, &[], "err_msg")?;
     build_enum_value(
         ctx,
         result_symbol,
         result::err_tag(ctx, result_symbol),
-        &[err_msg],
+        &[status.into()],
     )
 }
 
 /// Append `ok` / `err` blocks to `llvm_function` and conditional-
-/// branch on `ptr == null`. The runtime helpers use null as the
-/// error sentinel. The err branch reads `koja_last_error()`, the ok
-/// branch unpacks the heap buffer.
-fn branch_on_null<'ctx>(
+/// branch on `status < 0`. A negative status is the failure value of
+/// the runtime call. The err branch returns it, and the ok branch
+/// unpacks the heap buffer the helper wrote through its out slot.
+fn branch_on_failure<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
-    ptr: PointerValue<'ctx>,
+    status: IntValue<'ctx>,
 ) -> Result<(BasicBlock<'ctx>, BasicBlock<'ctx>), LlvmError> {
-    let i64_ty = ctx.context.i64_type();
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let ptr_int = ctx
+    let zero = ctx.context.i64_type().const_zero();
+    let failed = ctx
         .builder
-        .build_ptr_to_int(ptr, i64_ty, "ptr_int")
-        .or_ice()?;
-    let null_int = ctx
-        .builder
-        .build_ptr_to_int(ptr_ty.const_null(), i64_ty, "null_int")
-        .or_ice()?;
-    let is_null = ctx
-        .builder
-        .build_int_compare(IntPredicate::EQ, ptr_int, null_int, "is_null")
+        .build_int_compare(IntPredicate::SLT, status, zero, "failed")
         .or_ice()?;
     let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
     let err_bb = ctx.context.append_basic_block(llvm_function, "err");
     ctx.builder
-        .build_conditional_branch(is_null, err_bb, ok_bb)
+        .build_conditional_branch(failed, err_bb, ok_bb)
         .or_ice()?;
     Ok((ok_bb, err_bb))
 }

@@ -14,10 +14,13 @@
 //!   `connect_start` / `connect_finish` around an eval `io_block` on
 //!   writability.
 //! - `create` / `bind` / `listen` / `setsockopt_nodelay` /
-//!   `setsockopt_reuse` and the last-error readers pass straight through.
+//!   `setsockopt_reuse` and the errno reader pass straight through.
+//!
+//! A wait that ends without readiness returns the same failure value
+//! the native symbol returns for that cause.
 
-use koja_runtime::{ConnectProgress, connect_finish, connect_start, set_last_error};
-use koja_runtime_core::{Interest, IoWait, deadline_from_user_millis};
+use koja_runtime::{ConnectProgress, connect_finish, connect_start, failure};
+use koja_runtime_core::{Interest, deadline_from_user_millis};
 
 use crate::error::RuntimeError;
 use crate::externs::marshal::{pass_through_externs, type_mismatch};
@@ -38,8 +41,7 @@ unsafe extern "C" {
 }
 
 pass_through_externs! {
-    errno_code => fn koja_errno_code() -> Int32;
-    last_error_code => fn koja_last_error_code() -> Int32;
+    errno_failure => fn koja_errno_failure() -> Int32;
     socket_bind => fn koja_socket_bind(
         fd: Int32,
         ip: CPtr,
@@ -64,10 +66,11 @@ pub(super) fn socket_create(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(i64::from(fd)))
 }
 
-/// `koja_socket_accept(fd, timeout_ms)`: wait for the listener to be
-/// readable (a pending connection), then delegate to the native blocking
-/// accept, which now completes on its first syscall. Returns -1 on
-/// error, interrupt, or timeout.
+/// Handles `koja_socket_accept(fd, timeout_ms)`. Waits for the listener
+/// to be readable (a pending connection), then delegates to the native
+/// blocking accept, which now completes on its first syscall. Returns
+/// the client fd, or the failure value of an error, interrupt, or
+/// timeout.
 pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(fd), Value::Int(timeout_ms)] = args else {
         return Err(type_mismatch(
@@ -77,24 +80,18 @@ pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError>
         ));
     };
     let deadline = deadline_from_user_millis(*timeout_ms);
-    match reactor::io_block(*fd as i32, Interest::Readable, deadline).await {
-        IoWait::Ready => {}
-        IoWait::Interrupted => {
-            reactor::note_interrupted();
-            return Ok(Value::Int(-1));
-        }
-        IoWait::TimedOut => {
-            reactor::note_timed_out();
-            return Ok(Value::Int(-1));
-        }
+    let wait = reactor::io_block(*fd as i32, Interest::Readable, deadline).await;
+    if let Some(failed) = reactor::wait_failure(wait) {
+        return Ok(Value::Int(failed));
     }
     let client = unsafe { koja_socket_accept(*fd as i32, -1) };
     Ok(Value::Int(i64::from(client)))
 }
 
-/// `koja_socket_connect(fd, ip, ip_length, port, timeout_ms)`: start the
-/// handshake, wait for writability on eval's reactor, then check the
-/// outcome. Returns 0 on success, -1 on error or timeout.
+/// Handles `koja_socket_connect(fd, ip, ip_length, port, timeout_ms)`.
+/// Starts the handshake, waits for writability on eval's reactor, then
+/// checks the outcome. Returns 0, or the failure value of an error,
+/// interrupt, or timeout.
 pub(super) async fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError> {
     let [
         Value::Int(fd),
@@ -114,36 +111,25 @@ pub(super) async fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError
     let deadline = deadline_from_user_millis(*timeout_ms);
     let mut progress = match connect_start(fd, *ip, *ip_length, *port) {
         Ok(progress) => progress,
-        Err(e) => {
-            set_last_error(e);
-            return Ok(Value::Int(-1));
-        }
+        Err(e) => return Ok(Value::Int(failure(&e))),
     };
     while progress == ConnectProgress::InProgress {
-        match reactor::io_block(fd, Interest::Writable, deadline).await {
-            IoWait::Ready => {}
-            IoWait::Interrupted => {
-                reactor::note_interrupted();
-                return Ok(Value::Int(-1));
-            }
-            IoWait::TimedOut => {
-                reactor::note_timed_out();
-                return Ok(Value::Int(-1));
-            }
+        let wait = reactor::io_block(fd, Interest::Writable, deadline).await;
+        if let Some(failed) = reactor::wait_failure(wait) {
+            return Ok(Value::Int(failed));
         }
         progress = match connect_finish(fd) {
             Ok(progress) => progress,
-            Err(e) => {
-                set_last_error(e);
-                return Ok(Value::Int(-1));
-            }
+            Err(e) => return Ok(Value::Int(failure(&e))),
         };
     }
     Ok(Value::Int(0))
 }
 
-/// `koja_socket_send_to(fd, data, data_length, ip, ip_length, port)`: wait for the socket to be
-/// writable, then delegate to the native sender.
+/// Handles `koja_socket_send_to(fd, data, data_length, ip, ip_length,
+/// port)`. Waits for the socket to be writable, then delegates to the
+/// native sender. Returns the number of bytes sent, or the failure
+/// value of an error or interrupt.
 pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError> {
     let [
         Value::Int(fd),
@@ -160,9 +146,9 @@ pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError
             args,
         ));
     };
-    // If interrupted by a signal, return the native -1 sentinel.
-    if reactor::io_block(*fd as i32, Interest::Writable, None).await != IoWait::Ready {
-        return Ok(Value::Int(-1));
+    let wait = reactor::io_block(*fd as i32, Interest::Writable, None).await;
+    if let Some(failed) = reactor::wait_failure(wait) {
+        return Ok(Value::Int(failed));
     }
     let sent =
         unsafe { koja_socket_send_to(*fd as i32, *data, *data_length, *ip, *ip_length, *port) };

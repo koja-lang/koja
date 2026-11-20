@@ -194,19 +194,18 @@ fn expired(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
-/// Records `Interrupted` in the runtime's last-error slot, so a handler
-/// that returns the native failure sentinel reads back as the
-/// `Interrupted` variant of its error enum. Without it the Koja side
-/// reads whatever error the slot held last.
-pub(crate) fn note_interrupted() {
-    koja_runtime::set_last_error(io::Error::from(io::ErrorKind::Interrupted));
-}
-
-/// Records `TimedOut` in the runtime's last-error slot, so a handler that
-/// returns the native failure sentinel reads back as the `TimedOut`
-/// variant of its error enum.
-pub(crate) fn note_timed_out() {
-    koja_runtime::set_last_error(io::Error::from(io::ErrorKind::TimedOut));
+/// Returns the failure value a handler returns in place of the native
+/// call when its wait did not end `Ready`. `None` means the fd is ready
+/// and the handler makes the call. The value is the one the native
+/// function returns for the same cause, so the Koja side reads the
+/// `Interrupted` or `TimedOut` variant of its error enum.
+pub(crate) fn wait_failure(wait: IoWait) -> Option<i64> {
+    let kind = match wait {
+        IoWait::Ready => return None,
+        IoWait::Interrupted => io::ErrorKind::Interrupted,
+        IoWait::TimedOut => io::ErrorKind::TimedOut,
+    };
+    Some(koja_runtime::failure(&io::Error::from(kind)))
 }
 
 /// Insert (or replace) `fd`'s registration. The last `register` for an fd

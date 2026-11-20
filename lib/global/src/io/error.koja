@@ -27,12 +27,16 @@ enum IO.Error
   TimedOut
   Unknown(Int)
 
-  @doc """
-  Maps a runtime cause code to the stream cause it names, or
-  `Option.None` when the code belongs to another domain. Mostly
-  internal. A composite operation such as `File.read` uses it to
-  route a code between `File.Error` and `IO.Error`.
-  """
+  # The runtime adds this base to a raw OS errno that has no cause code
+  # of its own. Mirrors `ERRNO_BASE` in
+  # `crates/koja-runtime-posix/src/util.rs`.
+  priv const ERRNO_BASE: Int = 1000
+
+  # Maps a runtime cause code to the stream cause it names, or
+  # `Option.None` when the code belongs to another domain. Public only
+  # because `File` calls it to route a code between `File.Error` and
+  # `IO.Error`. Not for callers to use.
+  @doc false
   fn from_code(code: Int) -> Option<IOError>
     # Mirrors `error_kind_code` in `crates/koja-runtime-posix/src/util.rs`.
 
@@ -46,21 +50,12 @@ enum IO.Error
     end
   end
 
-  @doc """
-  Builds the error for the current C `errno`. For failures reported
-  by foreign libraries (e.g. BoringSSL) that bypass the runtime's
-  last-error slot. Mostly internal. Prefer matching returned errors.
-  """
-  fn from_errno -> IOError
-    IOError.from_code_or_unknown(koja_errno_code())
-  end
-
-  @doc """
-  Builds the error for the most recent failed runtime I/O call.
-  Mostly internal. Prefer matching returned errors.
-  """
-  fn last -> IOError
-    IOError.from_code_or_unknown(koja_last_error_code())
+  # Builds the error from the negative value a failed runtime call
+  # returns. Public only because `IO.Descriptor` and `TLSSession` call
+  # it. Not for callers to use.
+  @doc false
+  fn from_failure(result: Int) -> IOError
+    IOError.from_code_or_unknown(-result)
   end
 
   @doc """
@@ -78,17 +73,14 @@ enum IO.Error
   end
 
   priv fn from_code_or_unknown(code: Int) -> IOError
-    # Negative codes are raw OS errno values for unmapped causes.
+    # A code above `ERRNO_BASE` is the base plus the raw OS errno of an
+    # unmapped cause. A code equal to the base is a failure with no errno.
+
+    errno = code > IOError.ERRNO_BASE ? code - IOError.ERRNO_BASE : 0
 
     match IOError.from_code(code)
       Option.Some(error) -> error
-      Option.None -> IOError.Unknown(code < 0 ? 0 - code : 0)
+      Option.None -> IOError.Unknown(errno)
     end
   end
-
-  @extern "C"
-  priv fn koja_errno_code -> Int32
-
-  @extern "C"
-  priv fn koja_last_error_code -> Int32
 end

@@ -1,20 +1,22 @@
 //! `@intrinsic` methods on `Socket` from
 //! `koja/lib/net/src/net.koja`:
 //!
-//! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), String>`
-//! * `Socket.resolve_raw(hostname: String) -> Result<List<Binary>, String>`
+//! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), Int>`
+//! * `Socket.resolve_raw(hostname: String) -> Result<List<Binary>, Int>`
 //!
 //! Both call the runtime helpers (`koja_socket_resolve` /
 //! `koja_socket_recv_from`), copy the returned heap buffer into eval
 //! [`Value`]s, and free it through `koja_free`. `recv_from` waits for
-//! readability through [`crate::reactor`] first.
+//! readability through [`crate::reactor`] first. The `Err` payload is
+//! the failure value of the runtime call.
 
 use std::cell::RefCell;
 use std::ffi::CString;
+use std::ptr;
 use std::rc::Rc;
 
 use koja_ir::{IRSymbol, IRType, SocketMethod};
-use koja_runtime_core::{Interest, IoWait};
+use koja_runtime_core::Interest;
 
 use crate::abi;
 use crate::error::RuntimeError;
@@ -33,9 +35,8 @@ const RECV_FROM_IP_OFFSET: usize = 8;
 const RECV_FROM_PORT_OFFSET: usize = 16;
 
 unsafe extern "C" {
-    fn koja_last_error() -> *mut u8;
-    fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8;
-    fn koja_socket_resolve(hostname: *const u8) -> *mut u8;
+    fn koja_socket_recv_from(fd: i32, count: i64, out: *mut *mut u8) -> i64;
+    fn koja_socket_resolve(hostname: *const u8, out: *mut *mut u8) -> i64;
 }
 
 pub(super) async fn dispatch<R: CallResolver>(
@@ -43,7 +44,6 @@ pub(super) async fn dispatch<R: CallResolver>(
     call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        SocketMethod::LastError => Ok(last_error_value()),
         SocketMethod::RecvFromRaw => recv_from(call).await,
         SocketMethod::ResolveRaw => resolve(call),
     }
@@ -64,9 +64,10 @@ fn resolve<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, Runtime
     let c_hostname = CString::new(hostname.as_slice()).map_err(|_| RuntimeError::TypeMismatch {
         detail: "Socket.resolve: hostname contains an interior NUL byte".to_string(),
     })?;
-    let buffer = unsafe { koja_socket_resolve(c_hostname.as_ptr() as *const u8) };
-    if buffer.is_null() {
-        return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
+    let mut buffer: *mut u8 = ptr::null_mut();
+    let status = unsafe { koja_socket_resolve(c_hostname.as_ptr() as *const u8, &mut buffer) };
+    if status < 0 {
+        return helpers::result_value(result_symbol, call.resolver, Err(Value::Int(status)));
     }
 
     let count = unsafe { *(buffer as *const i64) }.max(0) as usize;
@@ -95,13 +96,15 @@ async fn recv_from<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value,
     let result_symbol = helpers::enum_return_symbol(call.function, "Socket.recv_from_raw")?;
     validate_recv_from_payload(&result_symbol, call.resolver)?;
 
-    // If interrupted by a signal, surface an error instead of reading.
-    if reactor::io_block(fd, Interest::Readable, None).await != IoWait::Ready {
-        return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
+    // An interrupted wait fails with its own cause and does not read.
+    let wait = reactor::io_block(fd, Interest::Readable, None).await;
+    if let Some(failed) = reactor::wait_failure(wait) {
+        return helpers::result_value(result_symbol, call.resolver, Err(Value::Int(failed)));
     }
-    let buffer = unsafe { koja_socket_recv_from(fd, *count) };
-    if buffer.is_null() {
-        return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
+    let mut buffer: *mut u8 = ptr::null_mut();
+    let status = unsafe { koja_socket_recv_from(fd, *count, &mut buffer) };
+    if status < 0 {
+        return helpers::result_value(result_symbol, call.resolver, Err(Value::Int(status)));
     }
 
     let data_payload = unsafe { *(buffer as *const *mut u8) };
@@ -113,14 +116,6 @@ async fn recv_from<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value,
 
     let received = Value::Tuple(vec![data, ip, Value::Int(port)]);
     helpers::result_value(result_symbol, call.resolver, Ok(received))
-}
-
-/// `Err` payload for a failed socket call, the runtime's last-error
-/// message as a `Value::String`. Mirrors the LLVM emitters' `Result.Err(
-/// koja_last_error())` shape.
-fn last_error_value() -> Value {
-    let payload = unsafe { koja_last_error() };
-    Value::string(abi::take_block_bytes(payload))
 }
 
 /// Extract the raw fd from a `Socket{descriptor: IO.Descriptor{raw}}`

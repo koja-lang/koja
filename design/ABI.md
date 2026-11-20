@@ -69,16 +69,18 @@ adoption.
 ## Socket result buffers
 
 The socket runtime returns raw buffers for DNS results and datagram receives.
-It returns null on error and stores the error for `koja_last_error`.
+Each function takes an `out` pointer as its last argument. It writes the
+buffer pointer through `out` and returns 0. On an error it returns the
+negated cause code and does not write `out`.
 
-`koja_socket_resolve` returns this buffer:
+`koja_socket_resolve` writes this buffer:
 
 ```text
 offset 0        offset 8
 [ i64 count ][ Binary payload pointer 0 ][ Binary payload pointer 1 ] ...
 ```
 
-`koja_socket_recv_from` returns this buffer:
+`koja_socket_recv_from` writes this buffer:
 
 ```text
 offset 0               offset 8             offset 16

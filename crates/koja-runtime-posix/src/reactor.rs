@@ -397,7 +397,7 @@ fn expired(deadline: Option<Instant>) -> bool {
 /// point of a non-`EAGAIN` failure. With a `deadline`, an `EAGAIN` at
 /// or after it is `TimedOut`. A wake at the deadline still retries the
 /// syscall once, so data that arrived on time is not dropped. Callers
-/// own success handling and error reporting (e.g. `set_last_error`).
+/// own success handling and return the `failure` value of an error.
 pub(crate) fn block_until_ready(
     fd: i32,
     interest: Interest,

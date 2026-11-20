@@ -32,7 +32,6 @@ pub(crate) const FORMAT_U64_SYMBOL: &str = "koja_format_u64";
 pub(crate) const FREE_SYMBOL: &str = "koja_free";
 pub(crate) const HEAP_DEEP_COPY_SYMBOL: &str = "koja_heap_deep_copy";
 pub(crate) const INT_PARSE_SYMBOL: &str = "koja_int_parse";
-pub(crate) const LAST_ERROR_SYMBOL: &str = "koja_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "koja_alloc";
 pub(crate) const MEMCMP_SYMBOL: &str = "memcmp";
 pub(crate) const MEMCPY_SYMBOL: &str = "memcpy";
@@ -245,14 +244,6 @@ pub(crate) fn declare_heap_deep_copy_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fu
 /// untouched).
 pub(crate) fn declare_int_parse_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     declare_with(ctx, INT_PARSE_SYMBOL, &[Ty::Ptr, Ty::Ptr], Ty::I64)
-}
-
-/// Declare (or look up) the `koja_last_error` runtime helper.
-/// Signature: `i8* koja_last_error()`. Returns a fresh Koja string
-/// describing the last I/O error set on the calling thread, or
-/// `"unknown error"` when none is set.
-pub(crate) fn declare_last_error_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    declare_with(ctx, LAST_ERROR_SYMBOL, &[], Ty::Ptr)
 }
 
 /// Declare (or look up) the `koja_alloc` extern, the runtime
@@ -686,22 +677,30 @@ pub(crate) fn declare_runtime_format<'ctx>(
 }
 
 /// Declare (or look up) the `koja_socket_recv_from` runtime
-/// helper. Signature: `i8* koja_socket_recv_from(i32 fd, i64 count)`.
+/// helper. Signature:
+/// `i64 koja_socket_recv_from(i32 fd, i64 count, i8** out)`.
 /// Suspends the calling process until the fd is readable, then
-/// receives one datagram and returns a heap-allocated
-/// `[*u8 data, *u8 ip_bin, i64 port]` triple (or null on error).
+/// receives one datagram, writes a heap-allocated
+/// `[*u8 data, *u8 ip_bin, i64 port]` triple through `out`, and
+/// returns 0. A negative return is the failure value of the error.
 pub(crate) fn declare_socket_recv_from_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
-    declare_with(ctx, SOCKET_RECV_FROM_SYMBOL, &[Ty::I32, Ty::I64], Ty::Ptr)
+    declare_with(
+        ctx,
+        SOCKET_RECV_FROM_SYMBOL,
+        &[Ty::I32, Ty::I64, Ty::Ptr],
+        Ty::I64,
+    )
 }
 
 /// Declare (or look up) the `koja_socket_resolve` runtime helper.
-/// Signature: `i8* koja_socket_resolve(i8* hostname_payload)`.
-/// Wraps `getaddrinfo` and returns a heap-allocated
-/// `[i64 count, *u8 ip0, *u8 ip1, ...]` buffer (or null on error).
+/// Signature: `i64 koja_socket_resolve(i8* hostname_payload, i8** out)`.
+/// Wraps `getaddrinfo`, writes a heap-allocated
+/// `[i64 count, *u8 ip0, *u8 ip1, ...]` buffer through `out`, and
+/// returns 0. A negative return is the failure value of the error.
 pub(crate) fn declare_socket_resolve_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    declare_with(ctx, SOCKET_RESOLVE_SYMBOL, &[Ty::Ptr], Ty::Ptr)
+    declare_with(ctx, SOCKET_RESOLVE_SYMBOL, &[Ty::Ptr, Ty::Ptr], Ty::I64)
 }
 
 /// Declare the Koja string interior-NUL helper.

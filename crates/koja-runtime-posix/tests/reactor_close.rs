@@ -46,7 +46,7 @@ unsafe extern "C" {
     fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64;
     fn koja_rt_self() -> i64;
     fn koja_rt_main_done();
-    fn koja_fd_read(fd: i32, count: i64, timeout_ms: i64) -> *const u8;
+    fn koja_fd_read(fd: i32, buffer: *mut u8, count: i64, timeout_ms: i64) -> i64;
     fn koja_fd_close(fd: i32) -> i32;
 }
 
@@ -98,14 +98,15 @@ fn never_readable_fd() -> i32 {
 
 /// Reader process body: announce readiness, block on a never-readable fd,
 /// and report back. The read is expected to fail (`EBADF`) once the
-/// controller closes the fd, returning a null string pointer.
+/// controller closes the fd, returning a negative failure value.
 extern "C" fn reader_entry(_state: *const u8) {
     let fd = READER_FD.load(Ordering::SeqCst) as i32;
     let controller = CONTROLLER_PID.load(Ordering::SeqCst);
 
     unsafe { koja_rt_send(controller, &ABOUT_TO_BLOCK, 1, None) };
-    let result = unsafe { koja_fd_read(fd, 16, -1) };
-    if result.is_null() {
+    let mut buffer = [0u8; 16];
+    let result = unsafe { koja_fd_read(fd, buffer.as_mut_ptr(), buffer.len() as i64, -1) };
+    if result < 0 {
         READER_ERRORS.fetch_add(1, Ordering::SeqCst);
     }
     unsafe { koja_rt_send(controller, &DONE, 1, None) };

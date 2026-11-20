@@ -319,7 +319,6 @@ intrinsic_methods! {
     /// `koja/lib/net/src/net.koja`. These private raw functions keep
     /// domain struct construction in the standard library.
     SocketMethod {
-        LastError => "last_error",
         RecvFromRaw => "recv_from_raw",
         ResolveRaw => "resolve_raw",
     }
@@ -792,7 +791,6 @@ mod tests {
             ("Set", "new", Id::Set(SetMethod::New)),
             ("Set", "next", Id::Set(SetMethod::Next)),
             ("Set", "remove", Id::Set(SetMethod::Remove)),
-            ("Socket", "last_error", Id::Socket(SocketMethod::LastError)),
             (
                 "Socket",
                 "recv_from_raw",

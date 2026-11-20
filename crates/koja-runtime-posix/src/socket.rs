@@ -21,12 +21,12 @@ use crate::ffi::{
 };
 use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
-use crate::util::{LastError, alloc_binary, set_last_error};
+use crate::util::{FAILURE_NAME_NOT_FOUND, FAILURE_NO_ERRNO, alloc_binary, failure};
 
 /// Accepts a connection on a listening socket. If no connection is
 /// pending, suspends the process until one arrives or `timeout_ms`
 /// passes (negative for no limit). Returns the new client fd (also set
-/// to non-blocking), or -1 on error.
+/// to non-blocking), or the [`failure`] value of the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_accept(fd: i32, timeout_ms: i64) -> i32 {
     let deadline = deadline_from_user_millis(timeout_ms);
@@ -38,40 +38,32 @@ pub extern "C" fn koja_socket_accept(fd: i32, timeout_ms: i64) -> i32 {
             set_nonblocking(client);
             client
         }
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e) as i32,
     }
 }
 
-/// Binds a socket to a local IP address and port. Returns 0 on success,
-/// -1 on error.
+/// Binds a socket to a local IP address and port. Returns 0, or the
+/// [`failure`] value of the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_bind(fd: i32, ip_ptr: *const u8, ip_length: i64, port: i64) -> i64 {
     let Ok(ip_length) = usize::try_from(ip_length) else {
-        set_last_error("invalid IP address length");
-        return -1;
+        return FAILURE_NO_ERRNO;
     };
     let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, ip_length, port) {
         Ok(v) => v,
-        Err(e) => {
-            set_last_error(e);
-            return -1;
-        }
+        Err(e) => return failure(&e),
     };
     let ret = unsafe { libc_bind(fd, &addr as *const SockaddrIn as *const u8, addr_len) };
     if ret < 0 {
-        set_last_error(last_os_error());
-        return -1;
+        return failure(&last_os_error());
     }
     0
 }
 
 /// Connects a socket to a remote IP address and port. For non-blocking
 /// sockets, suspends the process until the TCP handshake completes or
-/// `timeout_ms` passes (negative for no limit). Returns 0 on success,
-/// -1 on error.
+/// `timeout_ms` passes (negative for no limit). Returns 0, or the
+/// [`failure`] value of the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_connect(
     fd: i32,
@@ -103,10 +95,7 @@ pub extern "C" fn koja_socket_connect(
     });
     match result {
         Ok(()) => 0,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
@@ -184,38 +173,38 @@ pub fn connect_finish(fd: i32) -> io::Result<ConnectProgress> {
 /// Creates a new socket in non-blocking mode. `sock_type` is the POSIX
 /// socket type constant (e.g. `SOCK_STREAM`, `SOCK_DGRAM`), resolved by
 /// the codegen from the Koja `SocketKind` enum.
-/// Returns the fd on success, -1 on error.
+/// Returns the fd, or the [`failure`] value of the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_create(sock_type: i64) -> i32 {
     let fd = unsafe { libc_socket(AF_INET, sock_type as i32, 0) };
     if fd < 0 {
-        set_last_error(last_os_error());
-        return -1;
+        return failure(&last_os_error()) as i32;
     }
     set_nonblocking(fd);
     fd
 }
 
 /// Marks a socket as listening for incoming connections with the given
-/// backlog depth. Returns 0 on success, -1 on error.
+/// backlog depth. Returns 0, or the [`failure`] value of the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_listen(fd: i32, backlog: i64) -> i64 {
     let ret = unsafe { libc_listen(fd, backlog as i32) };
     if ret < 0 {
-        set_last_error(last_os_error());
-        return -1;
+        return failure(&last_os_error());
     }
     0
 }
 
 /// Receives data from a socket with sender address information. Suspends
-/// the process if no data is available. Returns a pointer to a
-/// `(data, ip_binary, port)` triple, or null on error.
+/// the process if no data is available. Writes a pointer to a
+/// `(data, ip_binary, port)` triple through `out` and returns 0. On an
+/// error it returns the [`failure`] value and does not write `out`.
 ///
 /// # Safety
-/// `fd` must be a valid open socket file descriptor.
+/// `fd` must be a valid open socket file descriptor, and `out` must
+/// point to a writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
+pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64, out: *mut *mut u8) -> i64 {
     let mut buf = vec![0u8; count as usize];
     let mut sender_addr: SockaddrIn = unsafe { mem::zeroed() };
     let mut addr_len = mem::size_of::<SockaddrIn>() as u32;
@@ -231,10 +220,7 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
         )
     }) {
         Ok(n) => n,
-        Err(e) => {
-            set_last_error(e);
-            return ptr::null_mut();
-        }
+        Err(e) => return failure(&e),
     };
 
     buf.truncate(n as usize);
@@ -249,18 +235,22 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
         *(result as *mut *mut u8) = data;
         *((result as *mut *mut u8).add(1)) = ip_bin;
         *((result as *mut i64).add(2)) = sender_port;
-        result
+        *out = result;
     }
+    0
 }
 
 /// Resolves a hostname to a list of IPv4 addresses via `getaddrinfo`.
-/// This call blocks the worker thread (DNS is not fd-based).
-/// Returns a pointer to a length-prefixed array of Binary pointers, or null on error.
+/// This call blocks the worker thread (DNS is not fd-based). Writes a
+/// pointer to a length-prefixed array of Binary pointers through `out`
+/// and returns 0. On an error it returns the [`failure`] value of the
+/// `NameNotFound` cause and does not write `out`.
 ///
 /// # Safety
-/// `hostname` must be a valid null-terminated C string pointer.
+/// `hostname` must be a valid null-terminated C string pointer, and
+/// `out` must point to a writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
+pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8, out: *mut *mut u8) -> i64 {
     let mut result: *mut Addrinfo = ptr::null_mut();
 
     let ret = unsafe {
@@ -272,8 +262,7 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
         )
     };
     if ret != 0 {
-        set_last_error(LastError::name_not_found("getaddrinfo failed"));
-        return ptr::null_mut();
+        return FAILURE_NAME_NOT_FOUND;
     }
 
     let mut addrs: Vec<*mut u8> = Vec::new();
@@ -291,8 +280,7 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
     unsafe { libc_freeaddrinfo(result) };
 
     if addrs.is_empty() {
-        set_last_error(LastError::name_not_found("no addresses found"));
-        return ptr::null_mut();
+        return FAILURE_NAME_NOT_FOUND;
     }
 
     let buf_size = 8 + addrs.len() * mem::size_of::<*mut u8>();
@@ -303,12 +291,14 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
         for (i, p) in addrs.iter().enumerate() {
             *ptrs.add(i) = *p;
         }
+        *out = buf;
     }
-    buf
+    0
 }
 
 /// Sends data to a remote address via a socket. Suspends the process
-/// if the send buffer is full. Returns bytes sent, or -1 on error.
+/// if the send buffer is full. Returns the number of bytes sent, or the
+/// [`failure`] value of the error.
 ///
 /// # Safety
 /// Both pointers must contain the corresponding number of readable bytes.
@@ -324,16 +314,12 @@ pub unsafe extern "C" fn koja_socket_send_to(
     let (Ok(data_length), Ok(ip_length)) =
         (usize::try_from(data_length), usize::try_from(ip_length))
     else {
-        set_last_error("invalid socket buffer length");
-        return -1;
+        return FAILURE_NO_ERRNO;
     };
 
     let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, ip_length, port) {
         Ok(v) => v,
-        Err(e) => {
-            set_last_error(e);
-            return -1;
-        }
+        Err(e) => return failure(&e),
     };
 
     match block_until_ready(fd, Interest::Writable, None, || unsafe {
@@ -347,15 +333,13 @@ pub unsafe extern "C" fn koja_socket_send_to(
         )
     }) {
         Ok(sent) => sent as i64,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
 /// Sets `TCP_NODELAY` on a TCP socket, on when `enabled` is nonzero and
-/// off when it is zero. Returns 0 on success, -1 on error.
+/// off when it is zero. Returns 0, or the [`failure`] value of the
+/// error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_setsockopt_nodelay(fd: i32, enabled: i64) -> i64 {
     let optval: i32 = i32::from(enabled != 0);
@@ -369,13 +353,13 @@ pub extern "C" fn koja_socket_setsockopt_nodelay(fd: i32, enabled: i64) -> i64 {
         )
     };
     if ret < 0 {
-        set_last_error(last_os_error());
-        return -1;
+        return failure(&last_os_error());
     }
     0
 }
 
-/// Enables `SO_REUSEADDR` on a socket. Returns 0 on success, -1 on error.
+/// Enables `SO_REUSEADDR` on a socket. Returns 0, or the [`failure`]
+/// value of the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_setsockopt_reuse(fd: i32) -> i64 {
     let optval: i32 = 1;
@@ -389,8 +373,7 @@ pub extern "C" fn koja_socket_setsockopt_reuse(fd: i32) -> i64 {
         )
     };
     if ret < 0 {
-        set_last_error(last_os_error());
-        return -1;
+        return failure(&last_os_error());
     }
     0
 }

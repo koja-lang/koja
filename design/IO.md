@@ -230,6 +230,7 @@ end
 
 enum Socket.Error
   AddressInUse
+  Closed
   ConnectionAborted
   ConnectionRefused
   HostUnreachable
@@ -242,8 +243,10 @@ enum Socket.Error
 end
 ```
 
-Each has `from_code(code) -> Option<Self>`, a total `last()`, and
-`message()`. `IO.Error` is what `read`, `write`, and `close` do to an
+Each has `message()`. A failed runtime call returns its cause as a
+negative value, and the stdlib builds the error from that value. No
+shared slot holds the last error, so the cause cannot come from a
+different call or a different process. `IO.Error` is what `read`, `write`, and `close` do to an
 open descriptor. `File.Error` is what `open`, `delete`, `mkdir`,
 `rmdir`, and `rename` do to a path. `Socket.Error` is what `connect`,
 `bind`, `listen`, `accept`, and `resolve` do, and it survives in

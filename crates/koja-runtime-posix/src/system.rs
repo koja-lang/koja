@@ -13,7 +13,7 @@ use crate::ffi::libc_getentropy;
 use crate::ffi::libc_gethostname;
 #[cfg(target_os = "linux")]
 use crate::ffi::libc_getrandom;
-use crate::util::{alloc_binary, set_last_error};
+use crate::util::alloc_binary;
 
 /// Allocates a NUL-terminated C string copy of `s` and hands ownership
 /// to the caller as a raw payload pointer. Panics on an interior NUL,
@@ -27,10 +27,7 @@ fn into_raw_cstring(s: impl Into<Vec<u8>>) -> *const u8 {
 pub extern "C" fn koja_cwd() -> *const u8 {
     match env::current_dir() {
         Ok(path) => into_raw_cstring(path.to_string_lossy().into_owned()),
-        Err(e) => {
-            set_last_error(e);
-            ptr::null()
-        }
+        Err(_) => ptr::null(),
     }
 }
 
