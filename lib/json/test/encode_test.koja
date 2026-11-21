@@ -38,9 +38,10 @@ end
 
 test "encode empty array"
   value: Value = []
+  items: List<Value> = []
 
   assert encode(value) == "[]"
-  assert encode(Array{}) == "[]"
+  assert encode(items) == "[]"
 end
 
 test "encode array with elements"
@@ -68,6 +69,23 @@ end
 test "encode a list of values"
   values: List<Value> = [1, "a", NULL]
   assert encode(values) == "[1,\"a\",null]"
+end
+
+test "a list of values is a value"
+  rows: List<Value> = [1, "a"]
+  rows = rows.append(NULL)
+  value: Value = rows
+  wrapped: Value = ["rows": rows, "more": [rows, []]]
+
+  assert encode(value) == "[1,\"a\",null]"
+  assert encode(wrapped) ==
+    "{\"rows\":[1,\"a\",null],\"more\":[[1,\"a\",null],[]]}"
+end
+
+test "encode a list of lists"
+  matrix: List<List<Int>> = [[1, 2], [], [3]]
+
+  assert encode(matrix) == "[[1,2],[],[3]]"
 end
 
 test "encode writes the text of a number as is"

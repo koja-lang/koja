@@ -56,7 +56,7 @@ test "decode long array"
   input = "[" <> String.join(parts, ",") <> "]"
 
   match try require(decode(input))
-    array: Array -> assert array.items.length() == count
+    items: List<Value> -> assert items.length() == count
     _ -> fail "expected an array"
   end
 end
@@ -66,15 +66,15 @@ test "decode gives each JSON type its own type"
   names: List<String> = []
 
   match try require(decode(input))
-    array: Array ->
-      for item in array.items
+    items: List<Value> ->
+      for item in items
         name =
           match item
             _null: Null -> "null"
             _flag: Bool -> "bool"
             _number: Number -> "number"
             _text: String -> "string"
-            _array: Array -> "array"
+            _items: List<Value> -> "array"
             _object: Object -> "object"
           end
 
@@ -86,6 +86,30 @@ test "decode gives each JSON type its own type"
   end
 
   assert names == ["null", "bool", "number", "string", "array", "object"]
+end
+
+test "decode returns an array as a list"
+  match try require(decode("[1, \"a\", [true, []]]"))
+    items: List<Value> ->
+      first: Value = 1
+      nested: Value = [true, []]
+
+      assert items.length() == 3
+      assert items.get(0) == Option.Some(first)
+      assert items.get(2) == Option.Some(nested)
+
+    _ ->
+      fail "expected an array"
+  end
+end
+
+test "decode an array equals the same list literal"
+  expected: Value = [1, "a", [true, []], ["key": NULL]]
+
+  assert try require(decode("[1, \"a\", [true, []], {\"key\": null}]")) ==
+    expected
+  assert try require(decode("[1, \"a\", [true, [1]], {\"key\": null}]")) !=
+    expected
 end
 
 test "decode null equals the null constant"

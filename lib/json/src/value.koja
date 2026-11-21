@@ -1,13 +1,14 @@
 @doc """
 A JSON value. It is one of six types: `Null`, `Bool`, `Number`,
-`String`, `Array`, or `Object`.
+`String`, `List<Value>`, or `Object`. A JSON array is a list of
+values.
 
 A literal builds a value in a position that expects one. A string or
 boolean literal stays a `String` or a `Bool`, a number literal builds
-a `Number`, a list literal builds an `Array`, and a map literal
+a `Number`, a list literal builds a `List<Value>`, and a map literal
 builds an `Object`. `JSON.NULL` is the null value.
 
 Read a value with `match` and a typed binding for each type the
 caller accepts.
 """
-type Value = Null | Bool | Number | String | Array | Object
+type Value = Null | Bool | Number | String | List<Value> | Object

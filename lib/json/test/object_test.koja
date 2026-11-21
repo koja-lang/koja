@@ -13,7 +13,6 @@ end
 
 test "an object is empty by default"
   assert Object{}.entries.empty?()
-  assert Array{}.items.empty?()
 end
 
 test "Object.get returns the value of a key"

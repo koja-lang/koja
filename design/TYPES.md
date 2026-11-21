@@ -67,6 +67,7 @@ A union type is an anonymous structural sum written from its member types. A
 named `type` declaration may give that union a stable name without changing its
 member-based semantics. Values widen into a compatible union explicitly in the
 sealed program, and pattern matching must remain exhaustive.
+[UNIONS.md](UNIONS.md) holds the full model for unions.
 
 A literal in a union position builds one member, and the choice is static.
 The member that is the literal's default type wins. Without it, the single
@@ -112,7 +113,9 @@ Protocol conformance uses `impl Protocol for Type`.
 The `type` keyword gives a transparent name to any type expression, most
 commonly a union. Package `alias` declarations
 are file-local shorthands for qualified external types. Neither mechanism
-creates a new nominal wrapper.
+creates a new nominal wrapper, with one exception. A `type` alias of a union
+that names itself is a type of its own, because its members cannot be compared
+by structure. [UNIONS.md](UNIONS.md) states the rule.
 
 Package qualification is separate from type identity. Files in one package
 share a namespace, while external declarations are reached through their

@@ -13,7 +13,7 @@ priv struct Encoder
       flag: Bool -> flag ? "true" : "false"
       number: Number -> number.text
       text: String -> Encoder.encode_string(text)
-      array: Array -> Encoder.encode_array(array.items)
+      items: List<Value> -> Encoder.encode_array(items)
       object: Object -> Encoder.encode_object(object.entries)
     end
   end
@@ -92,8 +92,8 @@ priv struct Encoder
       text: String ->
         Encoder.encode_string(text)
 
-      array: Array ->
-        Encoder.encode_array_pretty(array.items, indent)
+      items: List<Value> ->
+        Encoder.encode_array_pretty(items, indent)
 
       object: Object ->
         Encoder.encode_object_pretty(object.entries, indent)

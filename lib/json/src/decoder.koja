@@ -225,7 +225,7 @@ priv struct Decoder
     items: List<Value> = List.new()
 
     if self.peek?(i, BYTE_RBRACKET)
-      return (Array{items: items}, i + 1)
+      return (items, i + 1)
     end
 
     try self.parse_array_elements(items, i, pos)
@@ -252,7 +252,7 @@ priv struct Decoder
     b = self.byte(i)
 
     if b == BYTE_RBRACKET
-      return (Array{items: items}, i + 1)
+      return (items, i + 1)
     end
 
     if b != BYTE_COMMA
