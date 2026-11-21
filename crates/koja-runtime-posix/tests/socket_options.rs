@@ -17,6 +17,10 @@ unsafe extern "C" {
     fn koja_socket_setsockopt_nodelay(fd: i32, enabled: i64) -> i64;
 }
 
+/// The `Closed` cause code, which the runtime returns for `EBADF`. A
+/// failed call returns the negated cause code.
+const CLOSED: i64 = 4;
+
 /// A connected loopback pair, client first.
 fn loopback_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -51,6 +55,6 @@ fn nodelay_starts_off_and_follows_each_call() {
 }
 
 #[test]
-fn nodelay_on_a_bad_descriptor_fails() {
-    assert_eq!(unsafe { koja_socket_setsockopt_nodelay(-1, 1) }, -1);
+fn nodelay_on_a_bad_descriptor_fails_with_closed() {
+    assert_eq!(unsafe { koja_socket_setsockopt_nodelay(-1, 1) }, -CLOSED);
 }

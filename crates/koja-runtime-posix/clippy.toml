@@ -1,0 +1,6 @@
+# A process can resume on a different worker thread after a wait, and
+# std lets the compiler reuse the address of `errno` for a whole
+# function. `ffi::get_errno` is the one reader that is safe after a wait.
+disallowed-methods = [
+    { path = "std::io::Error::last_os_error", reason = "use `ffi::last_os_error` or `ffi::get_errno`, which read a fresh `errno` after a wait" },
+]

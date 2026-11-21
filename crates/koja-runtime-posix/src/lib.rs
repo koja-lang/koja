@@ -37,4 +37,6 @@ pub use string::{codepoint_range_to_bytes, find_bytes, is_utf8_boundary};
 // Shared with `koja-ir-eval`, which drives the connect handshake and
 // its deadline on its own reactor.
 pub use socket::{ConnectProgress, connect_finish, connect_start};
-pub use util::set_last_error;
+// Shared with `koja-ir-eval`, whose own waits can fail a runtime call
+// before the native function runs.
+pub use util::failure;

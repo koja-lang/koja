@@ -446,9 +446,19 @@ static STEALERS: OnceLock<Vec<WorkerStealers>> = OnceLock::new();
 // stack. Therefore every function that can run on a process stack and
 // touches this state must be `#[inline(never)]` (a fresh call recomputes the
 // base) and must not read TLS after an internal context switch.
+//
+// `CURRENT_PID` is private for this reason. Every read goes through
+// `current_pid`, which is `#[inline(never)]`, so a caller holds the PID as
+// a value and never holds the address of the thread-local.
+//
+// The C `errno` has the same hazard. It is thread-local, and std lets the
+// compiler reuse its address for a whole function, so a read after a wait
+// can return the value of the old worker. Every `errno` read goes through
+// `ffi::get_errno`, which is `#[inline(never)]`, and a clippy rule for this
+// crate rejects `io::Error::last_os_error`.
 
 thread_local! {
-    pub(crate) static CURRENT_PID: Cell<i64> = const { Cell::new(-1) };
+    static CURRENT_PID: Cell<i64> = const { Cell::new(-1) };
     static SCHED_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
     static YIELD_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
     /// This worker's local run queues, installed at the top of `worker_loop`.
@@ -468,6 +478,18 @@ thread_local! {
     /// resume, and the process cannot migrate until `after_switch`
     /// re-queues it.
     static YIELDED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Returns the PID of the process this worker thread is running, or
+/// `-1` when it runs none.
+///
+/// `#[inline(never)]` is load-bearing, and this is the only reader of
+/// [`CURRENT_PID`]. Inlined into a caller whose frame crosses a context
+/// switch, a later read would resolve to the worker the process *used*
+/// to run on. See the TLS caching note above.
+#[inline(never)]
+pub(crate) fn current_pid() -> Pid {
+    CURRENT_PID.with(Cell::get)
 }
 
 /// Yields the current process back to its worker's scheduling loop,
@@ -684,7 +706,7 @@ unsafe fn init_process_stack(stack_top: *mut u8, entry: unsafe extern "C" fn()) 
 /// and initial state from the shared scheduler, calls the function,
 /// marks the process dead, and yields back to the worker.
 unsafe extern "C" fn process_trampoline() {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
 
     // Safety: this trampoline runs as the freshly claimed process, so it
     // is the slot's `on_cpu` claim holder.
@@ -1287,13 +1309,17 @@ fn maybe_dump_scheduler_trace() {
 /// oversized slot can't over-read the buffer. The nested Koja heap the
 /// payload may reference now belongs to the receiver, so this frees
 /// only the transport buffer (never `drop_glue`).
-fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
+///
+/// `pid` is the receiving process. The caller passes it because this
+/// function runs after the caller's context switch, where a read of
+/// the thread-local can resolve to the old worker. See the TLS caching
+/// note above.
+fn deliver_envelope(pid: Pid, envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
     let tag = unsafe { *envelope.buffer } as i64;
     // A business message installs the sender's request context on the
     // receiver for the handler that follows. System traffic and call
     // replies carry none, so the receiver keeps whatever it had.
     if tag == TAG_BUSINESS as i64 {
-        let pid = CURRENT_PID.with(|c| c.get());
         TABLE.set_context(pid, envelope.context);
     }
     let copy_len = (envelope.length - TAG_HEADER_SIZE).min(out_cap.max(0) as usize);
@@ -1314,13 +1340,13 @@ fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
 /// path produces.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
 
     // Check and park in one slot hold, so a delivery can't slip between
     // the empty check and the park. A refused park (killed mid-run) still
     // yields: the owner reclaims at switch-out and the frame never resumes.
     match TABLE.receive_or_park(pid, None) {
-        MailPark::Ready(envelope) => return deliver_envelope(envelope, out, out_cap),
+        MailPark::Ready(envelope) => return deliver_envelope(pid, envelope, out, out_cap),
         // `CalleeDown` and `Stale` are reply-park outcomes, never
         // produced by `receive_or_park`.
         MailPark::CalleeDown | MailPark::Parked | MailPark::Refused | MailPark::Stale(_) => {}
@@ -1330,7 +1356,7 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
 
     TABLE
         .pop_received(pid)
-        .map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
+        .map_or(-1, |envelope| deliver_envelope(pid, envelope, out, out_cap))
 }
 
 /// Receive with a timeout. Like [`koja_rt_receive`] but sets a
@@ -1339,17 +1365,17 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
 /// back to `Runnable` and this returns `-1`.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms: i64) -> i64 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     let now = Instant::now();
     let deadline = now + duration_from_user_millis(timeout_ms);
     if deadline <= now {
         return TABLE
             .pop_received(pid)
-            .map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap));
+            .map_or(-1, |envelope| deliver_envelope(pid, envelope, out, out_cap));
     }
 
     match TABLE.receive_or_park(pid, Some(deadline)) {
-        MailPark::Ready(envelope) => return deliver_envelope(envelope, out, out_cap),
+        MailPark::Ready(envelope) => return deliver_envelope(pid, envelope, out, out_cap),
         // Arm outside the slot hold. The order is safe: this process
         // cannot be resumed (and so cannot re-arm or cancel) until it
         // yields below, and a fire before the arm just misses an entry
@@ -1366,7 +1392,7 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
     TABLE.clear_deadline(pid);
     let envelope = TABLE.pop_received(pid);
     TIMERS.with(|timers| timers.cancel_deadline(pid));
-    envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
+    envelope.map_or(-1, |envelope| deliver_envelope(pid, envelope, out, out_cap))
 }
 
 /// Monotonic source of call-correlation tokens. Global rather than
@@ -1380,7 +1406,7 @@ static CALL_TOKEN: AtomicI64 = AtomicI64::new(0);
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_call_token() -> i64 {
     let token = CALL_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.set_awaiting_reply(pid, token);
     token
 }
@@ -1404,7 +1430,7 @@ pub extern "C" fn koja_rt_call_receive(
     timeout_ms: i64,
     target: i64,
 ) -> i64 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     let deadline = Instant::now() + duration_from_user_millis(timeout_ms);
 
     loop {
@@ -1428,7 +1454,7 @@ pub extern "C" fn koja_rt_call_receive(
         match TABLE.take_reply_or_park(pid, token, Some(deadline), target) {
             MailPark::Ready(envelope) => {
                 TIMERS.with(|timers| timers.cancel_deadline(pid));
-                deliver_envelope(envelope, out, out_cap);
+                deliver_envelope(pid, envelope, out, out_cap);
                 break 0;
             }
             // The target is dead and no reply is slotted. The take
@@ -1457,7 +1483,7 @@ pub extern "C" fn koja_rt_call_receive(
 /// thread. Mapped from the thread-local [`CURRENT_PID`].
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_self() -> i64 {
-    CURRENT_PID.with(|c| c.get())
+    current_pid()
 }
 
 /// Sends a business message to the process identified by `pid`.
@@ -1538,7 +1564,7 @@ pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
 /// dead and `notify_exit` fires.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_process_exit(reason: i64) {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.set_exit_reason(pid, ExitReason::from_index(reason));
 }
 
@@ -1548,7 +1574,7 @@ pub extern "C" fn koja_rt_process_exit(reason: i64) {
 /// declared priority for the rest of its life.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_set_priority(level: i64) {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.set_priority(pid, Priority::from_index(level));
 }
 
@@ -1575,7 +1601,7 @@ pub extern "C" fn koja_rt_set_priority(level: i64) {
 /// own TLS, so the TLS-caching hazard above does not apply.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_yield_check() -> u32 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     if pid < 0 {
         return Priority::Normal.budget();
     }
@@ -1591,7 +1617,7 @@ pub extern "C" fn koja_rt_yield_check() -> u32 {
 /// [`koja_rt_yield_check`].
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_reductions_grant() -> u32 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     if pid < 0 {
         return Priority::Normal.budget();
     }
@@ -1691,7 +1717,7 @@ pub extern "C" fn koja_rt_kill(pid: i64) {
 /// PID delivers the `ExitSignal` immediately.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_monitor(target: i64) -> i64 {
-    let watcher = CURRENT_PID.with(|c| c.get());
+    let watcher = current_pid();
     let token = TABLE.monitor(watcher, target);
     let settled = settle_exits();
     notify_workers(settled.woken);
@@ -1711,14 +1737,14 @@ pub extern "C" fn koja_rt_demonitor(token: i64) {
 /// (backing `Option.None` at the emitter).
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_parent() -> i64 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.parent(pid).unwrap_or(0)
 }
 
 /// The calling process's request context, as stamped onto every
 /// business envelope it sends.
 fn current_context() -> Context {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.context(pid)
 }
 
@@ -1758,7 +1784,7 @@ pub extern "C" fn koja_rt_scheduler_count() -> i64 {
 /// mailbox (`Runtime.mailbox_depth`).
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_self_mailbox_depth() -> i64 {
-    let pid = CURRENT_PID.with(|current| current.get());
+    let pid = current_pid();
     TABLE.mailbox_depth(pid).unwrap_or(0) as i64
 }
 
@@ -1841,7 +1867,7 @@ pub unsafe extern "C" fn koja_rt_spawn(
 
     // The spawner becomes the parent. On the host thread (the entry
     // process's spawn) `CURRENT_PID` is -1, so PID 1 gets no parent.
-    let parent = match CURRENT_PID.with(|c| c.get()) {
+    let parent = match current_pid() {
         pid if pid > 0 => Some(pid),
         _ => None,
     };

@@ -9,7 +9,7 @@
 //! ```ignore
 //! pass_through_externs! {
 //!     fd_close => fn koja_fd_close(fd: Int32) -> Int32;
-//!     fd_read => fn koja_fd_read(fd: Int32, count: Int64) -> CPtr;
+//!     file_open => fn koja_file_open(path: CPtr, mode: Int64) -> Int32;
 //! }
 //! ```
 //!

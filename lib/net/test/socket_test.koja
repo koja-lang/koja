@@ -90,6 +90,23 @@ test "TCPListener.accept fails with TimedOut after its timeout"
   end
 end
 
+test "Socket.accept fails with Closed on a closed socket"
+  socket = try require(Socket.create(SocketKind.Stream))
+  try require(socket.close())
+
+  match socket.accept(Option.Some(SHORT_WAIT))
+    Result.Ok(client) ->
+      _ = client.close()
+      fail "expected accept to fail on a closed socket"
+
+    Result.Err(SocketError.Closed) ->
+      ()
+
+    Result.Err(e) ->
+      fail "expected Closed, got: #{e.message()}"
+  end
+end
+
 test "TCPSocket.read fails with TimedOut when the peer is silent"
   (listener, port) = try bind_loopback_tcp()
   addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
