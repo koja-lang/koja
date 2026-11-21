@@ -23,9 +23,12 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{Conformance, GlobalRegistry};
 
-use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
+use super::control_flow::{
+    body_tail_expr, body_tail_type, join_arm_tails, require_bool_condition, widen_arm_tails,
+};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
+use super::speculation::ArmTail;
 use super::types::{display_resolution, is_primitive, peel_alias};
 use super::walker::resolve_body_with_expected;
 
@@ -215,7 +218,7 @@ pub(super) fn resolve_receive(
         return ResolvedType::Failed;
     }
 
-    let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len() + 1);
+    let mut tails: Vec<ArmTail> = Vec::with_capacity(arms.len() + 1);
     for (index, arm) in arms.iter_mut().enumerate() {
         resolve_receive_arm(arm, expected, resolver, diagnostics);
         tails.push((
@@ -240,6 +243,14 @@ pub(super) fn resolve_receive(
         let _ = after_present;
     }
 
+    let mut exprs: Vec<_> = arms
+        .iter_mut()
+        .map(|arm| body_tail_expr(&mut arm.body))
+        .collect();
+    if after_present {
+        exprs.push(body_tail_expr(after_body));
+    }
+    widen_arm_tails(&mut tails, exprs, expected, resolver.registry);
     join_arm_tails("receive", &tails, span, resolver.registry, diagnostics)
 }
 

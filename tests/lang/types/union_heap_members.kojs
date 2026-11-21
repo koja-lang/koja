@@ -25,3 +25,95 @@ match counts
   m: Map<String, Int> -> m.length().print()
   b: Bool -> b.print()
 end
+
+# Arms that yield different members widen into the union type that
+# the site expects. Each arm value must reach the site as a full
+# union value.
+struct Cat
+  name: String
+end
+
+struct Dog
+  name: String
+end
+
+type Pet = Cat | Dog
+
+fn describe(pet: Pet) -> String
+  match pet
+    c: Cat -> "cat #{c.name}"
+    d: Dog -> "dog #{d.name}"
+  end
+end
+
+fn pick_if(flag: Bool) -> Pet
+  if flag
+    Cat{name: "Tom"}
+  else
+    Dog{name: "Rex"}
+  end
+end
+
+fn pick_cond(n: Int) -> Pet
+  cond
+    n > 0 -> Cat{name: "Tom"}
+    else -> Dog{name: "Rex"}
+  end
+end
+
+# One arm is a member and the other arm is already the union.
+fn pick_match(flag: Bool, fallback: Pet) -> Pet
+  match flag
+    true -> Dog{name: "Rex"}
+    false -> fallback
+  end
+end
+
+# The first arm yields its pattern binding.
+fn junior(pet: Pet) -> Pet
+  match pet
+    c: Cat -> c
+    d: Dog -> Dog{name: "#{d.name} Jr"}
+  end
+end
+
+fn words_or_count(flag: Bool) -> Int | List<String>
+  flag ? ["a", "b"] : 7
+end
+
+IO.puts(describe(pick_if(true)))
+IO.puts(describe(pick_if(false)))
+IO.puts(describe(pick_cond(1)))
+IO.puts(describe(pick_cond(0)))
+
+cat = Cat{name: "Tom"}
+dog = Dog{name: "Rex"}
+IO.puts(describe(pick_match(true, cat)))
+IO.puts(describe(pick_match(false, cat)))
+IO.puts(describe(junior(cat)))
+IO.puts(describe(junior(dog)))
+
+flag = true
+picked: Pet = flag ? cat : dog
+IO.puts(describe(picked))
+IO.puts(describe(flag ? dog : cat))
+
+match words_or_count(true)
+  n: Int -> n.print()
+  xs: List<String> -> xs.length().print()
+end
+
+match words_or_count(false)
+  n: Int -> n.print()
+  xs: List<String> -> xs.length().print()
+end
+
+# The other operand gives the arms their expected type.
+pet: Pet = Cat{name: "Tom"}
+(pet == (flag ? cat : dog)).print()
+(pet == (flag ? dog : cat)).print()
+((flag ? cat : dog) == pet).print()
+
+# The locals stay live after the arms use them.
+IO.puts(cat.name)
+IO.puts(dog.name)

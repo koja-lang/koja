@@ -30,14 +30,16 @@
 //!   `type Pet = Cat | Dog` mismatch reports `Pet`, not the expanded
 //!   `Cat | Dog`.
 
-use koja_ast::ast::ExprKind;
+use koja_ast::ast::{ExprKind, Statement};
+use koja_ast::coercion::Coercion;
 use koja_ast::util::dedent;
 
 mod common;
 
 use common::{
-    assert_script_fails_with, bool_type, diagnostic_messages, trailing_expr,
-    typecheck_script as typecheck, typecheck_script_fail as typecheck_fail, warning_messages,
+    assert_script_fails_with, bool_type, diagnostic_messages, package_leaf, script_body,
+    trailing_expr, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    warning_messages,
 };
 
 #[test]
@@ -511,9 +513,10 @@ fn union_hash_requires_every_member_to_hash() {
     assert_script_fails_with(source, &["cannot hash unions containing `TestApp.B`"]);
 }
 
-/// Declarations for the union equality tests. They are three structs,
-/// the alias `Pet = Cat | Dog`, and one local of each type in play.
-const PET_EQUALITY_PRELUDE: &str = "
+/// Declarations for the union equality and arm tests. They are three
+/// structs, the alias `Pet = Cat | Dog`, and one local of each type
+/// in play.
+const PET_PRELUDE: &str = "
     struct Cat
       name: String
     end
@@ -536,13 +539,13 @@ const PET_EQUALITY_PRELUDE: &str = "
     value: Int | String = 1
     ";
 
-fn pet_equality_script(tail: &str) -> String {
-    format!("{}{}", dedent(PET_EQUALITY_PRELUDE), dedent(tail))
+fn pet_script(tail: &str) -> String {
+    format!("{}{}", dedent(PET_PRELUDE), dedent(tail))
 }
 
 #[test]
 fn union_equality_takes_a_member_on_the_right() {
-    let source = pet_equality_script(
+    let source = pet_script(
         "
         (pet == tom).print()
         (pet != tom).print()
@@ -558,7 +561,7 @@ fn union_equality_takes_a_member_on_the_right() {
 
 #[test]
 fn union_equality_takes_a_member_on_the_left() {
-    let source = pet_equality_script(
+    let source = pet_script(
         "
         (tom != pet).print()
         (Cat{name: \"Tom\"} == pet).print()
@@ -582,7 +585,7 @@ fn union_equality_takes_a_member_on_the_left() {
 
 #[test]
 fn union_equality_rejects_a_value_that_is_not_a_member() {
-    let source = pet_equality_script("pet == bird\n");
+    let source = pet_script("pet == bird\n");
     let failure = typecheck_fail(&source);
     let messages = diagnostic_messages(&failure);
     assert_eq!(
@@ -596,7 +599,7 @@ fn union_equality_rejects_a_value_that_is_not_a_member() {
 
 #[test]
 fn union_equality_rejects_unions_that_only_overlap() {
-    let source = pet_equality_script("pet == other\n");
+    let source = pet_script("pet == other\n");
     let failure = typecheck_fail(&source);
     let messages = diagnostic_messages(&failure);
     assert_eq!(
@@ -612,12 +615,154 @@ fn union_equality_rejects_unions_that_only_overlap() {
 fn member_equals_call_rejects_a_union_argument() {
     // Only the operator widens. The explicit call names the member's
     // own `equals?`, and that function takes the member type.
-    let source = pet_equality_script("tom.equals?(pet)\n");
+    let source = pet_script("tom.equals?(pet)\n");
     let failure = typecheck_fail(&source);
     let messages = diagnostic_messages(&failure);
     assert_eq!(
         messages,
         vec!["argument `other` to `TestApp.Cat.equals?` expects `TestApp.Cat`, got `TestApp.Pet`"],
+    );
+}
+
+#[test]
+fn arms_that_disagree_widen_into_an_expected_union() {
+    let source = pet_script(
+        "
+        flag = true
+        dog = Dog{name: \"Rex\"}
+
+        from_if: Pet = if flag
+          tom
+        else
+          dog
+        end
+
+        from_cond: Pet = cond
+          flag -> tom
+          else -> dog
+        end
+
+        from_match: Pet = match flag
+          true -> tom
+          false -> dog
+        end
+
+        from_ternary: Pet = flag ? tom : dog
+        ",
+    );
+    let checked = typecheck(&source);
+    // Each arm carries the widening. The ternary already has the
+    // union type, so it needs no coercion of its own.
+    let Some(Statement::Assignment { value, .. }) = script_body(&checked).last() else {
+        panic!("expected the script to end with an assignment");
+    };
+    let ExprKind::Ternary {
+        then_expr,
+        else_expr,
+        ..
+    } = &value.kind
+    else {
+        panic!("expected a ternary, got {:?}", value.kind);
+    };
+    let pet = package_leaf(&checked, "Pet");
+    let widen_to_pet = Some(Coercion::UnionWiden(pet.clone()));
+    assert_eq!(then_expr.coercion, widen_to_pet);
+    assert_eq!(else_expr.coercion, widen_to_pet);
+    assert_eq!(value.coercion, None);
+    assert_eq!(value.resolution, pet);
+}
+
+#[test]
+fn a_member_arm_joins_a_union_arm() {
+    let source = pet_script(
+        "
+        flag = true
+        dog = Dog{name: \"Rex\"}
+        member_then_union: Pet = flag ? dog : pet
+        union_then_member: Pet = flag ? pet : dog
+        narrower: Cat | Dog | Bird = flag ? pet : bird
+        scalar: Int | String = flag ? 1 : \"one\"
+        ",
+    );
+    typecheck(&source);
+}
+
+#[test]
+fn an_arm_that_diverges_does_not_stop_the_widening() {
+    let source = pet_script(
+        "
+        fn pick(n: Int) -> Pet
+          match n
+            0 -> Cat{name: \"Tom\"}
+            1 -> Dog{name: \"Rex\"}
+            _ -> return Cat{name: \"Tim\"}
+          end
+        end
+
+        pick(0)
+        ",
+    );
+    typecheck(&source);
+}
+
+#[test]
+fn an_arm_that_is_not_a_member_keeps_the_join_error() {
+    let source = pet_script(
+        "
+        flag = true
+        wrong: Pet = flag ? tom : bird
+        ",
+    );
+    assert_arms_inconsistent(&source, "then=`TestApp.Cat`, else=`TestApp.Bird`");
+}
+
+#[test]
+fn an_arm_union_that_only_overlaps_keeps_the_join_error() {
+    let source = pet_script(
+        "
+        flag = true
+        wrong: Pet = flag ? tom : other
+        ",
+    );
+    assert_arms_inconsistent(
+        &source,
+        "then=`TestApp.Cat`, else=`TestApp.Bird | TestApp.Dog`",
+    );
+}
+
+#[test]
+fn arms_with_no_expected_type_stay_strict() {
+    let source = pet_script(
+        "
+        flag = true
+        dog = Dog{name: \"Rex\"}
+        either = flag ? tom : dog
+        ",
+    );
+    assert_arms_inconsistent(&source, "then=`TestApp.Cat`, else=`TestApp.Dog`");
+}
+
+#[test]
+fn numeric_arms_stay_strict() {
+    // Arms widen only into a union. A sized integer arm does not
+    // widen to match an `Int` arm.
+    let source = "
+        flag = true
+        small: Int32 = 1
+        big = 2
+        n: Int = flag ? small : big
+        ";
+    assert_arms_inconsistent(&dedent(source), "then=`Int32`, else=`Int`");
+}
+
+/// Assert that `source` fails with only the ternary join error, and
+/// that the error names the two arm types in `arm_types`.
+fn assert_arms_inconsistent(source: &str, arm_types: &str) {
+    let failure = typecheck_fail(source);
+    let messages = diagnostic_messages(&failure);
+    assert_eq!(
+        messages,
+        vec![format!("ternary arms have inconsistent types. {arm_types}")],
     );
 }
 

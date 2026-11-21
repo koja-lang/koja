@@ -1173,6 +1173,16 @@ pet: Pet = c
 
 So does a union whose members all belong to the target. A `Cat | Dog` value flows into a `Pet` slot, and a function that fails with `ParseError | NetError` can be called with `try` from one that fails with `ParseError | NetError | AuthError`.
 
+The arms of an `if`, a `cond`, a `match`, a `receive`, or a `?:` can yield different members when the position expects the union. Each arm widens to that union:
+
+```koja
+fn adopt(wants_cat: Bool) -> Pet
+  wants_cat ? Cat{name: "Whiskers"} : Dog{name: "Rex"}
+end
+```
+
+In a position that expects no union, the arms must have the same type.
+
 Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
 
 A union has no functions of its own. To call a function, `match` on the value and call it on the member:

@@ -27,14 +27,16 @@ use koja_ast::identifier::ResolvedType;
 use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
-use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
+use super::control_flow::{
+    body_tail_expr, body_tail_type, join_arm_tails, require_bool_condition, resolve_arm_tails,
+};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::patterns::{
     DeconstructedPattern, SubjectCoverage, is_enum_or_union_subject, is_match_subject_primitive,
     resolve_pattern,
 };
-use super::speculation::{ArmSet, ArmTail, Restorable, resolve_arms};
+use super::speculation::{ArmSet, ArmTail, Restorable};
 use super::types::display_resolution;
 use super::walker::resolve_body_with_expected;
 use crate::registry::GlobalRegistry;
@@ -90,7 +92,7 @@ pub(super) fn resolve_match_arms(
     let has_literal_arm = arms
         .iter()
         .any(|arm| matches!(arm.pattern, Pattern::Literal { .. }));
-    let tails = resolve_arms(
+    let tails = resolve_arm_tails(
         &mut MatchArms {
             arms,
             keyword,
@@ -162,6 +164,13 @@ impl ArmSet for MatchArms<'_> {
             ));
         }
         tails
+    }
+
+    fn tail_exprs(&mut self) -> Vec<Option<&mut Expr>> {
+        self.arms
+            .iter_mut()
+            .map(|arm| body_tail_expr(&mut arm.body))
+            .collect()
     }
 }
 

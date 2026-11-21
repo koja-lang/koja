@@ -16,7 +16,7 @@
 //!
 //! [`LocalScope`]: crate::pipeline::local_scope::LocalScope
 
-use koja_ast::ast::Diagnostic;
+use koja_ast::ast::{Diagnostic, Expr};
 use koja_ast::identifier::ResolvedType;
 
 use super::control_flow::is_never;
@@ -83,7 +83,9 @@ impl<S: Restorable> Speculation<S> {
 pub(super) type ArmTail = (String, ResolvedType);
 
 /// The arms of one branch form. `resolve` walks every arm against
-/// `hint` and reports the tails in arm order.
+/// `hint` and reports the tails in arm order. `tail_exprs` gives the
+/// expression behind each tail in the same order, with `None` for an
+/// arm that has no tail expression.
 pub(super) trait ArmSet: Restorable {
     fn resolve(
         &mut self,
@@ -91,6 +93,8 @@ pub(super) trait ArmSet: Restorable {
         resolver: &mut Resolver<'_>,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Vec<ArmTail>;
+
+    fn tail_exprs(&mut self) -> Vec<Option<&mut Expr>>;
 }
 
 /// Resolve `arms` against `expected`, letting the arms hint each
