@@ -16,7 +16,8 @@ fn list_comments_stay_with_elements() {
         "
         list = [
           # first element
-          1, 2, # trailing
+          1,
+          2, # trailing
           3
         ]
         ",
@@ -24,8 +25,10 @@ fn list_comments_stay_with_elements() {
 }
 
 #[test]
-fn list_packing_resumes_around_comments() {
-    assert_unchanged_script(
+fn list_comment_keeps_one_element_per_line() {
+    // A comment never brings back packing. Every element takes its
+    // own line, also the elements that carry no comment.
+    assert_fmt_script(
         "
         big = [
           1, 2, # two
@@ -33,6 +36,33 @@ fn list_packing_resumes_around_comments() {
           # header values start here
           7, 8
         ]
+        ",
+        "
+        big = [
+          1,
+          2, # two
+          3,
+          4,
+          5,
+          6,
+          # header values start here
+          7,
+          8
+        ]
+        ",
+    );
+}
+
+#[test]
+fn binary_packing_resumes_around_comments() {
+    assert_unchanged_script(
+        "
+        big = <<
+          1, 2, # two
+          3, 4, 5, 6,
+          # header values start here
+          7, 8
+        >>
         ",
     );
 }
@@ -42,7 +72,8 @@ fn list_comment_before_closing_bracket_stays_inside() {
     assert_unchanged_script(
         "
         closed = [
-          1, 2
+          1,
+          2
           # before the bracket
         ]
         ",

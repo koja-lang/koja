@@ -63,7 +63,9 @@ struct JsonReporter
   """
   fn spec_started_event(spec: Spec) -> Value
     [
-      "event": "spec_started", "id": spec.id(), "group": spec.group,
+      "event": "spec_started",
+      "id": spec.id(),
+      "group": spec.group,
       "description": spec.description
     ]
   end
@@ -73,7 +75,8 @@ struct JsonReporter
   """
   fn spec_finished_event(spec: Spec, outcome: Outcome) -> Value
     head: List<(String, Value)> = [
-      ("event", "spec_finished"), ("id", spec.id()),
+      ("event", "spec_finished"),
+      ("id", spec.id()),
       ("outcome", JsonReporter.outcome_name(outcome)),
       ("microseconds", outcome.elapsed().to_microseconds().to_json())
     ]
@@ -96,8 +99,10 @@ struct JsonReporter
   """
   fn finished_event(summary: Summary) -> Value
     [
-      "event": "finished", "passed": summary.passed.to_json(),
-      "failed": summary.failed.to_json(), "skipped": summary.skipped.to_json(),
+      "event": "finished",
+      "passed": summary.passed.to_json(),
+      "failed": summary.failed.to_json(),
+      "skipped": summary.skipped.to_json(),
       "crashed": summary.crashed.to_json(),
       "timed_out": summary.timed_out.to_json(),
       "microseconds": summary.elapsed.to_microseconds().to_json()
@@ -118,8 +123,10 @@ struct JsonReporter
     match failure
       Failure.Assertion(assertion) ->
         [
-          "kind": "assertion", "expression": assertion.expression,
-          "file": assertion.file, "line": assertion.line.to_json(),
+          "kind": "assertion",
+          "expression": assertion.expression,
+          "file": assertion.file,
+          "line": assertion.line.to_json(),
           "column": assertion.column.to_json(),
           "source_line": assertion.source_line,
           "left": JsonReporter.optional(assertion.left),

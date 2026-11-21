@@ -89,8 +89,12 @@ priv fn info(c: Conn) -> Conn
   body: Value = [
     "name": "koja-shortener",
     "routes": [
-      "GET /links?limit=&offset=", "POST /links", "GET /links/:code",
-      "PUT /links/:code", "DELETE /links/:code", "GET /:code"
+      "GET /links?limit=&offset=",
+      "POST /links",
+      "GET /links/:code",
+      "PUT /links/:code",
+      "DELETE /links/:code",
+      "GET /:code"
     ]
   ]
   json(c, Status.ok(), body)
@@ -258,7 +262,8 @@ end
 
 priv fn error_body(status: Status, message: String) -> Value
   [
-    "error": status.reason.to_json(), "message": message.to_json(),
+    "error": status.reason.to_json(),
+    "message": message.to_json(),
     "status": status.code.to_json()
   ]
 end

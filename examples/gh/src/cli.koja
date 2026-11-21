@@ -73,7 +73,8 @@ struct Cli
     lines = push(lines, "joined", date_of(user.created_at))
     counts = String.join(
       [
-        "#{user.public_repos} public repos", "#{user.followers} followers",
+        "#{user.public_repos} public repos",
+        "#{user.followers} followers",
         "#{user.following} following"
       ],
       " · ",
@@ -94,11 +95,14 @@ struct Cli
   fn usage -> String
     String.join(
       [
-        "gh -- a tiny GitHub client (Koja example)", "", "usage:",
+        "gh -- a tiny GitHub client (Koja example)",
+        "",
+        "usage:",
         "  gh user <login>        show a user profile",
         "  gh repos <login>       list a user's repositories",
         "  gh repo <owner/name>   show one repository",
-        "  gh help                show this message", "",
+        "  gh help                show this message",
+        "",
         "set GITHUB_TOKEN to authenticate (raises the rate limit)"
       ],
       "\n",

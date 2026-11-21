@@ -1,8 +1,14 @@
 test "Method.to_string returns uppercase method name"
   cases: List<(Method, String)> = [
-    (Method.Connect, "CONNECT"), (Method.Delete, "DELETE"), (Method.Get, "GET"),
-    (Method.Head, "HEAD"), (Method.Options, "OPTIONS"), (Method.Patch, "PATCH"),
-    (Method.Post, "POST"), (Method.Put, "PUT"), (Method.Query, "QUERY"),
+    (Method.Connect, "CONNECT"),
+    (Method.Delete, "DELETE"),
+    (Method.Get, "GET"),
+    (Method.Head, "HEAD"),
+    (Method.Options, "OPTIONS"),
+    (Method.Patch, "PATCH"),
+    (Method.Post, "POST"),
+    (Method.Put, "PUT"),
+    (Method.Query, "QUERY"),
     (Method.Trace, "TRACE")
   ]
 
@@ -14,8 +20,16 @@ end
 
 test "Method.from_string parses valid methods"
   names = [
-    "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT",
-    "QUERY", "TRACE"
+    "CONNECT",
+    "DELETE",
+    "GET",
+    "HEAD",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+    "QUERY",
+    "TRACE"
   ]
 
   for name in names

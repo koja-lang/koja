@@ -6,7 +6,8 @@ for crashes, timeouts, and skips are left out, so the common line is
 fn summary_line(summary: Summary, color: Bool) -> String
   palette = Palette{color: color}
   parts: List<String> = [
-    "#{summary.passed} successful tests.", "#{summary.failed} failures."
+    "#{summary.passed} successful tests.",
+    "#{summary.failed} failures."
   ]
 
   if summary.crashed > 0

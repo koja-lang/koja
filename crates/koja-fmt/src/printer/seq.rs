@@ -133,13 +133,30 @@ pub(super) fn push_stragglers(body: &mut Vec<Doc>, stragglers: &[Comment]) {
 /// break after the opening brace. The caller closes with `hardline`
 /// and the delimiter.
 pub(super) fn field_lines(entries: Vec<SeqEntry>, stragglers: Vec<Comment>) -> Doc {
+    stacked_lines(entries, stragglers, true)
+}
+
+/// Broken element-list interior with one element per line, a comma
+/// after every element except the last, and comments anchored to their
+/// element. Starts with the break after the opening delimiter. The
+/// caller closes with `hardline` and the delimiter.
+pub(super) fn element_lines(entries: Vec<SeqEntry>, stragglers: Vec<Comment>) -> Doc {
+    stacked_lines(entries, stragglers, false)
+}
+
+/// One child per line with its comments. `comma_after_last` decides
+/// whether the last child takes a comma like every child before it.
+fn stacked_lines(entries: Vec<SeqEntry>, stragglers: Vec<Comment>, comma_after_last: bool) -> Doc {
+    let last = entries.len().saturating_sub(1);
     let mut body = Vec::new();
-    for entry in entries {
+    for (i, entry) in entries.into_iter().enumerate() {
         body.push(hardline());
         let (comment_parts, _) = leading_docs(&entry.leading);
         body.extend(comment_parts);
         body.push(entry.doc);
-        body.push(text(","));
+        if comma_after_last || i < last {
+            body.push(text(","));
+        }
         if let Some(tc) = trailing_doc(&entry.trailing) {
             body.push(tc);
         }
@@ -148,11 +165,11 @@ pub(super) fn field_lines(entries: Vec<SeqEntry>, stragglers: Vec<Comment>) -> D
     concat(body)
 }
 
-/// Broken element-list interior with comment-aware packing. Comment-free
+/// Broken segment-list interior with comment-aware packing. Comment-free
 /// runs fill-pack, a trailing comment ends its packed line, and a leading
 /// comment takes its own line before the next run. Comma after every
-/// element except the last.
-pub(super) fn element_lines(entries: Vec<SeqEntry>, stragglers: Vec<Comment>) -> Doc {
+/// segment except the last.
+pub(super) fn segment_lines(entries: Vec<SeqEntry>, stragglers: Vec<Comment>) -> Doc {
     let last = entries.len() - 1;
     let mut body = vec![hardline()];
     let mut run: Vec<Doc> = Vec::new();

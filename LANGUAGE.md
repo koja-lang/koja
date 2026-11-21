@@ -3213,7 +3213,10 @@ A literal builds a value in a position that expects one. A map literal builds an
 
 ```koja
 payload: JSON.Value = [
-  "name": "Koja", "active": true, "scores": [10, 20, 30], "owner": JSON.NULL
+  "name": "Koja",
+  "active": true,
+  "scores": [10, 20, 30],
+  "owner": JSON.NULL
 ]
 ```
 

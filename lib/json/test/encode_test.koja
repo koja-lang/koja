@@ -94,7 +94,10 @@ end
 
 test "encode nested JSON literals"
   value: Value = [
-    "first": 1, "first": 2, "nested": [true, -3, 1.5, "x"], "empty": [:]
+    "first": 1,
+    "first": 2,
+    "nested": [true, -3, 1.5, "x"],
+    "empty": [:]
   ]
   expected = "{\"first\":1,\"first\":2,\"nested\":[true,-3,1.5,\"x\"],\"empty\":{}}"
 

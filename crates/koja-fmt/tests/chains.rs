@@ -270,7 +270,12 @@ fn call_on_list_literal_breaks_the_literal_first() {
         "#,
         r#"
         names = [
-          "alpha", "bravo", "charlie", "delta", "echo", "foxtrot"
+          "alpha",
+          "bravo",
+          "charlie",
+          "delta",
+          "echo",
+          "foxtrot"
         ].map(name -> name.length())
         "#,
     );
@@ -284,7 +289,11 @@ fn call_on_map_literal_breaks_the_literal_first() {
         "#,
         r#"
         lookup = [
-          "alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5
+          "alpha": 1,
+          "bravo": 2,
+          "charlie": 3,
+          "delta": 4,
+          "echo": 5
         ].get("delta")
         "#,
     );

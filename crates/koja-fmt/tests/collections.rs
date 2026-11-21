@@ -18,8 +18,8 @@ fn binary_literal_formatting() {
 
 #[test]
 fn long_binary_literal_packs_like_fill() {
-    // Segments pack densely like list elements instead of one per
-    // line, so a long frame stays a readable byte sequence.
+    // Segments pack densely instead of one per line like list
+    // elements, so a long frame stays a readable byte sequence.
     assert_fmt_script(
         "
         frame = <<0x53::8, 0x51::8, 0x58::8, 0x70::8, 0x50::8, 0x42::8, 0x44::8, 0x45::8, 0x54::8, 0x43::8, 0x5a::8, 0x49::8>>
@@ -176,17 +176,98 @@ fn tuple_syntax_round_trips() {
 }
 
 #[test]
-fn long_tuple_literal_packs_like_fill() {
+fn long_tuple_literal_takes_one_element_per_line() {
     assert_fmt_script(
         r#"
         t = (first_element_value, second_element_value, third_element_value, fourth_element_value)
         "#,
         r#"
         t = (
-          first_element_value, second_element_value, third_element_value,
+          first_element_value,
+          second_element_value,
+          third_element_value,
           fourth_element_value
         )
         "#,
+    );
+}
+
+#[test]
+fn long_list_literal_takes_one_element_per_line() {
+    // No trailing comma, unlike a broken field list.
+    assert_fmt_script(
+        r#"
+        names = ["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE"]
+        "#,
+        r#"
+        names = [
+          "CONNECT",
+          "DELETE",
+          "GET",
+          "HEAD",
+          "OPTIONS",
+          "PATCH",
+          "POST",
+          "PUT",
+          "QUERY",
+          "TRACE"
+        ]
+        "#,
+    );
+}
+
+#[test]
+fn long_map_literal_takes_one_entry_per_line() {
+    assert_fmt_script(
+        r#"
+        body = ["code": self.code.to_json(), "created_at": self.created_at.to_json(), "url": self.url.to_json()]
+        "#,
+        r#"
+        body = [
+          "code": self.code.to_json(),
+          "created_at": self.created_at.to_json(),
+          "url": self.url.to_json()
+        ]
+        "#,
+    );
+}
+
+#[test]
+fn nested_list_that_fits_stays_inline_in_a_broken_list() {
+    assert_fmt_script(
+        r#"
+        rows = [["alpha", "bravo", "charlie"], ["delta", "echo", "foxtrot"], ["golf", "hotel", "india"]]
+        "#,
+        r#"
+        rows = [
+          ["alpha", "bravo", "charlie"],
+          ["delta", "echo", "foxtrot"],
+          ["golf", "hotel", "india"]
+        ]
+        "#,
+    );
+}
+
+#[test]
+fn short_broken_list_collapses_to_one_line() {
+    // Width alone decides. The author's line breaks and trailing
+    // comma do not keep a list broken.
+    assert_fmt_script(
+        "
+        nums = [
+          1,
+          2,
+          3,
+        ]
+        pair = (
+          1,
+          2
+        )
+        ",
+        "
+        nums = [1, 2, 3]
+        pair = (1, 2)
+        ",
     );
 }
 
