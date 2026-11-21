@@ -68,3 +68,35 @@ rex.format().print()
 # Bounded dispatch on a bare type parameter.
 same(whiskers, also_whiskers).print()
 same(whiskers, rex).print()
+
+# A union compares with one of its members on either side.
+plain = Cat{name: "Whiskers"}
+(whiskers == plain).print()
+(plain == whiskers).print()
+(plain != rex).print()
+(Dog{name: "Rex"} == rex).print()
+(mittens == Cat{name: "Whiskers"}).print()
+
+# A narrower union compares with a wider one on either side.
+wide: Cat | Dog | Int = Cat{name: "Whiskers"}
+(whiskers == wide).print()
+(wide == rex).print()
+
+# A literal takes the member that the union has for it.
+count: Int | String = 3
+(count == 3).print()
+("three" == count).print()
+
+# The operands evaluate left to right in both orders.
+fn loud_cat -> Cat
+  IO.puts("cat")
+  Cat{name: "Whiskers"}
+end
+
+fn loud_pet -> Pet
+  IO.puts("pet")
+  Cat{name: "Whiskers"}
+end
+
+(loud_cat() == loud_pet()).print()
+(loud_pet() != loud_cat()).print()

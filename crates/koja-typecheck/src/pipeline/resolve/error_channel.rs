@@ -17,6 +17,7 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
+use super::builders::{binding_pattern, ident};
 use super::coercion::check_compatible_stamping;
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
@@ -190,7 +191,7 @@ fn desugar_try(
     let binder_span = span.as_synthetic();
     let fail_tail = Expr::new(
         ExprKind::Fail {
-            value: Box::new(ident_expr(TRY_ERR_BINDER, binder_span)),
+            value: Box::new(ident(TRY_ERR_BINDER, span)),
         },
         span,
     );
@@ -539,7 +540,7 @@ fn unwrap_arm(binder: &str, span: Span) -> MatchArm {
     variant_arm(
         "Ok",
         binding_pattern(binder, binder_span),
-        ident_expr(binder, binder_span),
+        ident(binder, span),
         span,
     )
 }
@@ -559,24 +560,4 @@ fn variant_arm(variant: &str, element: Pattern, tail: Expr, span: Span) -> Match
         body: vec![Statement::Expr(tail)],
         span,
     }
-}
-
-/// A binding pattern at `span`. Callers pass the user's own span for
-/// a written binder and a synthetic span for a hidden one.
-fn binding_pattern(name: &str, span: Span) -> Pattern {
-    Pattern::Binding {
-        local_id: None,
-        name: Name::new(name, span),
-        span,
-    }
-}
-
-fn ident_expr(name: &str, span: Span) -> Expr {
-    Expr::new(
-        ExprKind::Ident {
-            name: name.to_string(),
-            resolution: Resolution::Unresolved,
-        },
-        span,
-    )
 }

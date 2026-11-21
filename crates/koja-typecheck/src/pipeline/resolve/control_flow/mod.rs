@@ -2,29 +2,36 @@
 //! the `?:` ternary, and `while`.
 //!
 //! `if`, `cond`, and ternary are value-producing when every reaching
-//! arm tail type joins. The join is strict equality (no coercion)
-//! with `Never` as the lattice bottom (`T ∪ Never = T`). Divergent
-//! arms (bodies that end in `return`) contribute `Never` and so
-//! do not constrain the join. With no expected type the arms hint
-//! each other through [`super::speculation::resolve_arms`].
+//! arm tail type joins. The join is strict equality with `Never` as
+//! the lattice bottom (`T ∪ Never = T`). Divergent arms (bodies that
+//! end in `return`) contribute `Never` and so do not constrain the
+//! join. With no expected type the arms hint each other through
+//! [`super::speculation::resolve_arms`].
+//!
+//! The one coercion runs before the join. When the expected type is
+//! a union, [`widen_arm_tails`] widens arms that yield different
+//! members into it, so the join sees arms that agree. Numeric arms
+//! never widen.
 //!
 //! `while` stays Unit-typed. Loops are statement-shaped.
 //!
 //! Statement-position `for` rewrites during the body walk before its
 //! generated assignments, `loop`, and `match` nodes resolve.
 //!
-//! [`body_tail_type`], [`join_arm_tails`], and
-//! [`require_bool_condition`] are also consumed by
-//! `super::match_expr`.
+//! [`body_tail_expr`], [`body_tail_type`], [`join_arm_tails`],
+//! [`require_bool_condition`], [`resolve_arm_tails`], and
+//! [`widen_arm_tails`] are also consumed by `super::match_expr` and
+//! `super::process`.
 
 use koja_ast::ast::{CondArm, Diagnostic, Expr, Statement};
 use koja_ast::identifier::ResolvedType;
 use koja_ast::span::Span;
 
+use super::coercion::{Compatible, check_compatible, check_compatible_stamping};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::speculation::{ArmSet, ArmTail, Restorable, resolve_arms};
-use super::types::{display_resolution, is_primitive, types_equivalent};
+use super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
 use super::walker::resolve_body_with_expected;
 use crate::registry::GlobalRegistry;
 
@@ -45,7 +52,7 @@ pub(super) fn resolve_if(
         resolve_body_with_expected(then_body, expected, resolver, diagnostics);
         return resolver.registry.primitive("Unit");
     };
-    let tails = resolve_arms(
+    let tails = resolve_arm_tails(
         &mut IfArms {
             else_body,
             then_body,
@@ -96,6 +103,13 @@ impl ArmSet for IfArms<'_> {
             ),
         ]
     }
+
+    fn tail_exprs(&mut self) -> Vec<Option<&mut Expr>> {
+        vec![
+            body_tail_expr(self.then_body),
+            body_tail_expr(self.else_body),
+        ]
+    }
 }
 
 /// Resolve a `cond ? then_expr : else_expr` ternary. Same arm-tail
@@ -116,7 +130,7 @@ pub(super) fn resolve_ternary(
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("ternary", condition, resolver.registry, diagnostics);
-    let tails = resolve_arms(
+    let tails = resolve_arm_tails(
         &mut TernaryArms {
             else_expr,
             then_expr,
@@ -161,6 +175,10 @@ impl ArmSet for TernaryArms<'_> {
             ("else".to_string(), self.else_expr.resolution.clone()),
         ]
     }
+
+    fn tail_exprs(&mut self) -> Vec<Option<&mut Expr>> {
+        vec![Some(&mut *self.then_expr), Some(&mut *self.else_expr)]
+    }
 }
 
 /// Resolve a `cond ... end` chain. Every arm's condition is a `Bool`,
@@ -183,7 +201,7 @@ pub(super) fn resolve_cond(
         require_bool_condition("cond", &arm.condition, resolver.registry, diagnostics);
     }
     let tails = match else_body {
-        Some(else_body) => resolve_arms(
+        Some(else_body) => resolve_arm_tails(
             &mut CondArms { arms, else_body },
             expected,
             resolver,
@@ -252,6 +270,16 @@ impl ArmSet for CondArms<'_> {
         ));
         tails
     }
+
+    fn tail_exprs(&mut self) -> Vec<Option<&mut Expr>> {
+        let mut exprs: Vec<_> = self
+            .arms
+            .iter_mut()
+            .map(|arm| body_tail_expr(&mut arm.body))
+            .collect();
+        exprs.push(body_tail_expr(self.else_body));
+        exprs
+    }
 }
 
 /// Resolve a `while cond ... end` loop. Condition must be `Bool`.
@@ -304,6 +332,104 @@ pub(super) fn resolve_loop(
     }
 }
 
+/// Resolve `arms` against `expected` and return the tails, ready for
+/// the join. [`resolve_arms`] walks the arms, and then
+/// [`widen_arm_tails`] widens tails that disagree into an expected
+/// union.
+pub(super) fn resolve_arm_tails(
+    arms: &mut impl ArmSet,
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<ArmTail> {
+    let mut tails = resolve_arms(arms, expected, resolver, diagnostics);
+    widen_arm_tails(&mut tails, arms.tail_exprs(), expected, resolver.registry);
+    tails
+}
+
+/// Widen arm tails that disagree into an expected union. The step
+/// acts only when `expected` is a union and every tail that does not
+/// diverge is a member of it or a narrower union. Each of those tail
+/// expressions gets the widening coercion and its tail type becomes
+/// `expected`, so the join that follows sees arms that agree.
+///
+/// In every other case the tails stay as they are and the join
+/// reports the mismatch. Arms that already agree also stay as they
+/// are, and the whole expression widens at the site that takes it.
+///
+/// `exprs` holds the expression behind each tail, in tail order.
+pub(super) fn widen_arm_tails(
+    tails: &mut [ArmTail],
+    exprs: Vec<Option<&mut Expr>>,
+    expected: Option<&ResolvedType>,
+    registry: &GlobalRegistry,
+) {
+    debug_assert_eq!(tails.len(), exprs.len());
+    let Some(expected) = expected else {
+        return;
+    };
+    if !is_resolved_union(expected, registry) || !tails_disagree(tails, registry) {
+        return;
+    }
+    let all_fit = tails
+        .iter()
+        .zip(&exprs)
+        .all(|((_, ty), expr)| tail_fits_union(ty, expr.as_deref(), expected, registry));
+    if !all_fit {
+        return;
+    }
+    for ((_, ty), expr) in tails.iter_mut().zip(exprs) {
+        if is_never(ty, registry) {
+            continue;
+        }
+        let Some(expr) = expr else {
+            continue;
+        };
+        check_compatible_stamping(expr, ty, expected, registry);
+        *ty = expected.clone();
+    }
+}
+
+fn is_resolved_union(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    ty.is_resolved() && matches!(peel_alias(ty, registry), ResolvedType::Union(_))
+}
+
+/// True when every tail is resolved and two tails that do not
+/// diverge have different types.
+fn tails_disagree(tails: &[ArmTail], registry: &GlobalRegistry) -> bool {
+    if tails.iter().any(|(_, ty)| !ty.is_resolved()) {
+        return false;
+    }
+    let mut reaching = tails
+        .iter()
+        .map(|(_, ty)| ty)
+        .filter(|ty| !is_never(ty, registry));
+    let Some(first) = reaching.next() else {
+        return false;
+    };
+    reaching.any(|ty| !types_equivalent(first, ty, registry))
+}
+
+/// True when one tail can take the type `union`. A tail that diverges
+/// has no value to widen, so it fits. Any other tail needs an
+/// expression to carry the coercion.
+fn tail_fits_union(
+    ty: &ResolvedType,
+    expr: Option<&Expr>,
+    union: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> bool {
+    if is_never(ty, registry) {
+        return true;
+    }
+    expr.is_some_and(|expr| {
+        matches!(
+            check_compatible(expr, ty, union, registry),
+            Compatible::Strict | Compatible::UnionWiden { .. }
+        )
+    })
+}
+
 /// Join exactly two arm tails (`if`/`else`'s shape). Separated from
 /// the n-arm [`join_arm_tails`] so the diagnostic naming the
 /// offending arms ("then" / "else") stays terse.
@@ -352,7 +478,7 @@ fn join_two_arms(
 /// produced its own diagnostic).
 pub(super) fn join_arm_tails(
     keyword: &str,
-    tails: &[(String, ResolvedType)],
+    tails: &[ArmTail],
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -395,13 +521,31 @@ pub(super) fn join_arm_tails(
 /// (assignments / breaks have no value), and an empty body is
 /// `Unit` too.
 pub(super) fn body_tail_type(body: &[Statement], registry: &GlobalRegistry) -> ResolvedType {
-    if body.iter().any(|s| matches!(s, Statement::Return { .. })) {
+    if body_diverges(body) {
         return registry.primitive("Never");
     }
     match body.last() {
         Some(Statement::Expr(expr)) => expr.resolution.clone(),
         Some(_) | None => registry.primitive("Unit"),
     }
+}
+
+/// The expression behind [`body_tail_type`], or `None` when the body
+/// diverges or does not end in an expression.
+pub(super) fn body_tail_expr(body: &mut [Statement]) -> Option<&mut Expr> {
+    if body_diverges(body) {
+        return None;
+    }
+    match body.last_mut() {
+        Some(Statement::Expr(expr)) => Some(expr),
+        Some(_) | None => None,
+    }
+}
+
+/// True when the body holds a `return`, so control never reaches its
+/// end.
+fn body_diverges(body: &[Statement]) -> bool {
+    body.iter().any(|s| matches!(s, Statement::Return { .. }))
 }
 
 pub(super) fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {

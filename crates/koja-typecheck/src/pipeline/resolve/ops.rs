@@ -20,12 +20,13 @@
 //! [`LiteralCoercion`], the same plumbing the other coercion sites
 //! use.
 
-use koja_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, Name, UnaryOp};
+use koja_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, MatchArm, Statement, UnaryOp};
 use koja_ast::coercion::LiteralCoercion;
 use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::labels::bin_op_label;
 use koja_ast::span::Span;
 
+use super::builders::{binding_pattern, ident, method_call};
 use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
@@ -35,6 +36,9 @@ use super::types::{
 };
 use crate::registry::{GlobalKind, GlobalRegistry};
 
+/// Binder for the left operand in [`member_left_equality`]. The
+/// leading underscores keep it out of the way of user locals.
+const EQ_LHS_BINDER: &str = "__eq_lhs";
 const EQ_METHOD: &str = "equals?";
 
 /// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
@@ -43,7 +47,10 @@ const EQ_METHOD: &str = "equals?";
 /// struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
 /// `not …` for `!=`) and go through the normal method-call path.
 /// The operands are already walked, so that path reads their types
-/// and does not resolve them again. `derive_equality` supplies an
+/// and does not resolve them again. A union operand also compares
+/// with one of its members or a narrower union. On the right, that
+/// value widens as the `equals?` argument. On the left, the rewrite
+/// is [`member_left_equality`]. `derive_equality` supplies an
 /// `Equality` impl for every user type without a hand-written one,
 /// and [`diagnose_equality_unsupported`] rejects instantiations a
 /// hand-written conditional impl leaves out.
@@ -69,29 +76,67 @@ pub(super) fn resolve_equality_op_expr(
         return ResolvedType::Failed;
     }
 
+    let left_widens = matches!(
+        check_compatible(left, &left.resolution, &right.resolution, registry),
+        Compatible::UnionWiden { .. }
+    );
     let left_taken = std::mem::replace(left.as_mut(), placeholder_expr(span));
     let right_taken = std::mem::replace(right.as_mut(), placeholder_expr(span));
-    let method_call = ExprKind::MethodCall {
-        receiver: Box::new(left_taken),
-        method: Name::new(EQ_METHOD, span.as_synthetic()),
-        args: vec![Arg {
-            name: None,
-            value: right_taken,
-            span,
-        }],
-        target: Resolution::Unresolved,
-        type_args: Vec::new(),
+    let comparison = if left_widens {
+        member_left_equality(left_taken, right_taken, span)
+    } else {
+        equals_call(left_taken, right_taken, span)
     };
     expr.kind = match op {
-        BinOp::Eq => method_call,
+        BinOp::Eq => comparison.kind,
         BinOp::NotEq => ExprKind::Unary {
             op: UnaryOp::Not,
-            operand: Box::new(Expr::new(method_call, span)),
+            operand: Box::new(comparison),
         },
         _ => unreachable!("resolve_equality_op_expr only handles Eq / NotEq"),
     };
     resolve_expr(expr, resolver, diagnostics);
     expr.resolution.clone()
+}
+
+/// `receiver.equals?(argument)`, unresolved.
+fn equals_call(receiver: Expr, argument: Expr, span: Span) -> Expr {
+    let args = vec![Arg {
+        name: None,
+        value: argument,
+        span,
+    }];
+    method_call(receiver, EQ_METHOD, args, span)
+}
+
+/// Build the comparison for a left operand that widens into the union
+/// type of the right operand. `left == right` becomes
+///
+/// ```text
+/// match left
+///   __eq_lhs -> right.equals?(__eq_lhs)
+/// end
+/// ```
+///
+/// The union must be the receiver, because `equals?` on the member
+/// takes only that member. The `match` binds the left value first, so
+/// the operands still evaluate left to right. Both operands are
+/// already resolved and the walk skips them.
+fn member_left_equality(left: Expr, right: Expr, span: Span) -> Expr {
+    let call = equals_call(right, ident(EQ_LHS_BINDER, span), span);
+    let arm = MatchArm {
+        pattern: binding_pattern(EQ_LHS_BINDER, span.as_synthetic()),
+        guard: None,
+        body: vec![Statement::Expr(call)],
+        span,
+    };
+    Expr::new(
+        ExprKind::Match {
+            subject: Box::new(left),
+            arms: vec![arm],
+        },
+        span,
+    )
 }
 
 /// Resolve both operands so a generic call on either side can take

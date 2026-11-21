@@ -1,12 +1,11 @@
 //! Resolve-time rewrite for statement-position `for` loops.
 
-use koja_ast::ast::{
-    Arg, Diagnostic, Expr, ExprKind, LValue, Literal, MatchArm, Name, Pattern, Statement,
-};
+use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal, MatchArm, Name, Pattern, Statement};
 use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_ast::span::Span;
 
+use super::builders::{assign_local, binding_pattern, ident, method_call};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::types::{display_resolution, lookup_type, peel_alias};
@@ -157,14 +156,7 @@ fn build_rewrite(
         pattern: Pattern::Constructor {
             name: Name::new("Some", name_span),
             elements: vec![Pattern::Tuple {
-                elements: vec![
-                    pattern,
-                    Pattern::Binding {
-                        local_id: None,
-                        name: Name::new(rest_name, name_span),
-                        span: name_span,
-                    },
-                ],
+                elements: vec![pattern, binding_pattern(&rest_name, name_span)],
                 span,
             }],
             span,
@@ -212,47 +204,4 @@ fn build_rewrite(
         cursor_assignment,
         Statement::Expr(loop_expression),
     ]
-}
-
-/// Assign a compiler-synthesized hidden local. The segment name is
-/// synthetic so reference lookups skip it.
-pub(super) fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
-    Statement::Assignment {
-        target: LValue {
-            head_resolved_type: None,
-            local_id: None,
-            segments: vec![Name::new(name, span.as_synthetic())],
-            span,
-        },
-        type_annotation: None,
-        value,
-        span,
-    }
-}
-
-/// Read a compiler-synthesized hidden local. The whole expression is
-/// synthetic because the user never wrote this identifier.
-pub(super) fn ident(name: &str, span: Span) -> Expr {
-    Expr::new(
-        ExprKind::Ident {
-            name: name.to_string(),
-            resolution: Resolution::Unresolved,
-        },
-        span.as_synthetic(),
-    )
-}
-
-/// Call a compiler-synthesized method. The call keeps the given span
-/// and only the method name is synthetic.
-pub(super) fn method_call(receiver: Expr, method: &str, args: Vec<Arg>, span: Span) -> Expr {
-    Expr::new(
-        ExprKind::MethodCall {
-            receiver: Box::new(receiver),
-            method: Name::new(method, span.as_synthetic()),
-            args,
-            target: Resolution::Unresolved,
-            type_args: Vec::new(),
-        },
-        span,
-    )
 }

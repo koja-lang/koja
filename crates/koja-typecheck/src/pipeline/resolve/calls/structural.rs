@@ -12,6 +12,7 @@ use koja_ast::ast::{Arg, Diagnostic, Expr};
 use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
+use super::super::coercion::check_compatible_stamping;
 use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
 use super::super::types::{
@@ -149,10 +150,10 @@ pub(super) fn resolve_structural_method_call(
     }
 }
 
-/// `lhs.equals?(rhs)`: one argument of the same structural type as
-/// the receiver. Parts compare through their own `Equality`
-/// conformance, so every tuple element and union member must carry
-/// one.
+/// Resolve `lhs.equals?(rhs)`. It takes one argument that fits the
+/// receiver type (see [`coerce_equality_argument`]). Parts compare
+/// through their own `Equality` conformance, so every tuple element
+/// and union member must carry one.
 fn resolve_structural_eq(
     shape: StructuralShape,
     receiver: &Expr,
@@ -180,21 +181,11 @@ fn resolve_structural_eq(
         resolver,
         diagnostics,
     );
-    if !types_equivalent(
-        &arg.value.resolution,
-        &receiver.resolution,
-        resolver.registry,
-    ) {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "cannot compare `{}` with `{}`. {} equality requires both sides to have \
-                 the same type",
-                display_resolution(&receiver.resolution, resolver.registry),
-                display_resolution(&arg.value.resolution, resolver.registry),
-                capitalize(shape.label()),
-            ),
-            call_span,
-        ));
+    let registry = resolver.registry;
+    if !coerce_equality_argument(shape, &receiver.resolution, &mut arg.value, registry) {
+        let message =
+            equality_mismatch_message(shape, &receiver.resolution, &arg.value.resolution, registry);
+        diagnostics.push(Diagnostic::error(message, call_span));
         return bool_ty;
     }
     if let Some(part) = first_part_without_equality(&receiver.resolution, resolver) {
@@ -212,6 +203,55 @@ fn resolve_structural_eq(
         ));
     }
     bool_ty
+}
+
+/// Coerce the `equals?` argument to the receiver type. Returns false
+/// when the argument does not fit. A tuple or a function needs an
+/// argument of the same type. A union also takes one of its members
+/// or a narrower union. That argument gets the widening coercion, so
+/// the comparison sees two values of the receiver type.
+fn coerce_equality_argument(
+    shape: StructuralShape,
+    receiver_ty: &ResolvedType,
+    argument: &mut Expr,
+    registry: &GlobalRegistry,
+) -> bool {
+    let argument_ty = argument.resolution.clone();
+    match shape {
+        StructuralShape::Union => {
+            check_compatible_stamping(argument, &argument_ty, receiver_ty, registry).is_none()
+        }
+        StructuralShape::Function | StructuralShape::Tuple => {
+            types_equivalent(&argument_ty, receiver_ty, registry)
+        }
+    }
+}
+
+/// The message for an `equals?` argument that does not fit the
+/// receiver type.
+fn equality_mismatch_message(
+    shape: StructuralShape,
+    receiver_ty: &ResolvedType,
+    argument_ty: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> String {
+    let receiver_label = display_resolution(receiver_ty, registry);
+    let argument_label = display_resolution(argument_ty, registry);
+    let reason = match shape {
+        StructuralShape::Union
+            if matches!(peel_alias(argument_ty, registry), ResolvedType::Union(_)) =>
+        {
+            format!("`{argument_label}` has a member that is not a member of `{receiver_label}`")
+        }
+        StructuralShape::Union => {
+            format!("`{argument_label}` is not a member of `{receiver_label}`")
+        }
+        StructuralShape::Function | StructuralShape::Tuple => format!(
+            "{} equality requires both sides to have the same type",
+            capitalize(shape.label()),
+        ),
+    };
+    format!("cannot compare `{receiver_label}` with `{argument_label}`. {reason}")
 }
 
 /// `union.hash()`: zero arguments, `Int` result, every member `Hash`.

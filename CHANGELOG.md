@@ -60,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A constant of a union type takes a value of one member, as in `const NOTHING: Value = Null{}`, and so does a union field of a struct constant.
 - A constant of type `Int` or `Float` takes a sized number from another constant, as in `const WIDE: Int = SMALL` where `SMALL` is an `Int32`, and so does an `Int` or `Float` field of a struct constant.
 - A compiled program can hold a struct constant of a recursive type, as in `const LEAF: Node = Node{value: 1, next: Option.None}` where `Node` has a `next: Option<Node>` field.
+- `==` and `!=` compare a union with one of its members on either side, as in `pet == Cat{name: "Tom"}` and `tom == pet` where `pet` is a `Cat | Dog`. A narrower union compares with a wider one the same way.
+- The arms of an `if`, a `cond`, a `match`, a `receive`, or a `?:` can yield different members of a union when the position expects that union, as in `pet: Pet = likes_cats ? cat : dog`.
 
 ## [0.20.1] - 2026-11-06
 

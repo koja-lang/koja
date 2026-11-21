@@ -393,6 +393,24 @@ fn receive_with_inconsistent_arm_tails_diagnoses() {
 }
 
 #[test]
+fn receive_arms_widen_into_an_expected_union() {
+    // The two arms and the `after` body each yield one member of the
+    // union that the local expects.
+    let source = "
+        fn main -> StopReason
+          outcome: Int | String | Bool = receive
+            envelope: (Int, Option<ReplyTo<Int>>) -> 1
+            event: Lifecycle -> \"stopped\"
+          after 10
+            false
+          end
+          StopReason.Normal
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn ref_call_accepts_union_member_arg() {
     // `impl Process<_, MsgA | MsgB, _>` makes `spawn`'s return
     // `Ref<MsgA | MsgB, _>`. Calling `.call(MsgA.Ping(...))` must

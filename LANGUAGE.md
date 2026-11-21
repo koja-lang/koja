@@ -1173,6 +1173,16 @@ pet: Pet = c
 
 So does a union whose members all belong to the target. A `Cat | Dog` value flows into a `Pet` slot, and a function that fails with `ParseError | NetError` can be called with `try` from one that fails with `ParseError | NetError | AuthError`.
 
+The arms of an `if`, a `cond`, a `match`, a `receive`, or a `?:` can yield different members when the position expects the union. Each arm widens to that union:
+
+```koja
+fn adopt(wants_cat: Bool) -> Pet
+  wants_cat ? Cat{name: "Whiskers"} : Dog{name: "Rex"}
+end
+```
+
+In a position that expects no union, the arms must have the same type.
+
 Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
 
 A union has no functions of its own. To call a function, `match` on the value and call it on the member:
@@ -1196,6 +1206,17 @@ introduce(pet) # works when Cat, Dog, and Fish all implement Greeter
 ```
 
 This works only for a protocol whose functions all take `self` and name `Self` in no other position. A protocol with a static function, a `Self` parameter, or a `Self` result cannot pick one member from a value, so a union does not satisfy it. `Debug`, `Equality`, and `Hash` are the exceptions. A union gets `format()`, `print()`, `==`, and `hash()` when its members have them.
+
+`==` and `!=` also compare a union with one of its members, on either side. The result is `true` when the union holds that member and the two values are equal. A narrower union compares with a wider one the same way.
+
+```koja
+pet: Pet = Cat{name: "Whiskers"}
+c = Cat{name: "Whiskers"}
+
+pet == c # true
+c == pet # true
+pet == Dog{name: "Rex"} # false, pet holds a Cat
+```
 
 A literal in a position that expects a union builds one member. The member that is the default type of the literal wins, so `"text"` is a `String` and `true` is a `Bool` when the union has those members. Without that member, the literal goes to the one member that implements its [literal protocol](#literal-protocols). It is an error when two members do.
 
