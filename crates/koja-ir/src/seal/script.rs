@@ -12,7 +12,7 @@ use crate::types::ValueId;
 
 use super::calls::seal_calls;
 use super::closures::seal_closure_ops;
-use super::constants::{seal_built_constants, seal_loadconst_pool};
+use super::constants::{seal_built_constants, seal_loadconst_pool, seal_struct_constants};
 use super::enums::seal_enum_ops;
 use super::function::{
     collect_block_ids, collect_block_params, seal_block, seal_package, seal_ssa,
@@ -50,6 +50,7 @@ pub(crate) fn seal_script(script: &IRScript) {
     seal_script_enum_ops(script);
     seal_script_closure_ops(script);
     seal_script_loadconst_pool(script);
+    seal_struct_constants(&declarations);
     seal_built_constants(&declarations, &script.built_constant_order);
     seal_script_no_loadcapture(script);
 }

@@ -5,15 +5,16 @@
 //! [`IRPackage::constants`](crate::package::IRPackage::constants) and load through
 //! [`IRInstruction::LoadConst`](crate::function::IRInstruction::LoadConst).
 //! Every other shape the typecheck lift admits (list, map, and set
-//! literals, payload variants, generic structs, and compounds that
-//! contain one of those) pools as [`IRConstantValue::Built`] with a
-//! synthesized zero-parameter init function that backends run once
-//! at program start.
+//! literals, payload variants, generic structs, values that widen
+//! into a union, and compounds that contain one of those) pools as
+//! [`IRConstantValue::Built`] with a synthesized zero-parameter init
+//! function that backends run once at program start.
 
 use koja_ast::ast::{
     BinarySegment, Constant, EnumConstructionData, Expr, ExprKind, Literal, StringPart, UnaryOp,
     name_texts,
 };
+use koja_ast::coercion::Coercion;
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
     ConstantDefinition, GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth,
@@ -186,12 +187,60 @@ fn constant_value_from_registry(
 /// [`IRConstantValue`]. Returns `None` on shapes the static folder
 /// cannot express, which the caller turns into a `Built` entry.
 /// Those shapes are list, map, and set literals, payload variants,
-/// generic structs, reads of a built constant, and any compound that
-/// contains one of those.
-/// Each subexpression's `literal_coercion` annotation drives the
-/// resulting `ConstValue::*` width. Absent annotation, primitives
-/// keep their default 64-bit head.
+/// generic structs, values that widen into a union, reads of a built
+/// constant, and any compound that contains one of those.
+///
+/// A value that widens into a union needs a wrap, and static data
+/// has no union form. The init of the `Built` entry lowers the value
+/// through the ordinary expression lowerer, which emits the wrap.
+///
+/// A sized number that widens into `Int` or `Float` folds to the
+/// wide scalar here, so the constant keeps its static shape.
 fn lower_constant_value(
+    expr: &Expr,
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> Option<IRConstantValue> {
+    match &expr.coercion {
+        Some(Coercion::UnionWiden(_)) => None,
+        Some(Coercion::NumericWiden(_)) => {
+            widen_primitive(fold_constant_shape(expr, registry, instantiations)?)
+        }
+        None => fold_constant_shape(expr, registry, instantiations),
+    }
+}
+
+/// Widen a folded sized number to its hub type, the fold-time form
+/// of [`IRInstruction::NumericWiden`](crate::function::IRInstruction::NumericWiden).
+/// Signed integers sign-extend to `Int64`, unsigned integers
+/// zero-extend to `Int64`, and `Float32` extends to `Float64`. Each
+/// conversion is exact. Returns `None` for any other value, so the
+/// constant builds at start and the expression lowerer applies the
+/// conversion.
+fn widen_primitive(value: IRConstantValue) -> Option<IRConstantValue> {
+    let IRConstantValue::Primitive(value) = value else {
+        return None;
+    };
+    let widened = match value {
+        ConstValue::Int8(n) => ConstValue::Int64(i64::from(n)),
+        ConstValue::Int16(n) => ConstValue::Int64(i64::from(n)),
+        ConstValue::Int32(n) => ConstValue::Int64(i64::from(n)),
+        ConstValue::UInt8(n) => ConstValue::Int64(i64::from(n)),
+        ConstValue::UInt16(n) => ConstValue::Int64(i64::from(n)),
+        ConstValue::UInt32(n) => ConstValue::Int64(i64::from(n)),
+        ConstValue::Float32(f) => ConstValue::Float64(f64::from(f)),
+        _ => return None,
+    };
+    Some(IRConstantValue::Primitive(widened))
+}
+
+/// Fold the shape of `expr` with no regard for its value-conversion
+/// annotation, which [`lower_constant_value`] owns. Subexpressions
+/// fold through [`lower_constant_value`], so each one applies its own
+/// annotation. Each subexpression's `literal_coercion` annotation
+/// drives the resulting `ConstValue::*` width. Absent annotation,
+/// primitives keep their default 64-bit head.
+fn fold_constant_shape(
     expr: &Expr,
     registry: &GlobalRegistry,
     instantiations: &mut Vec<Instantiation>,

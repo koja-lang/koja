@@ -651,7 +651,8 @@ fn require_one_of(actual: &IRType, expected: &[IRType], location: &str) {
     }
 }
 
-fn constant_type(value: &IRConstantValue) -> IRType {
+/// The type a read of the pool entry `value` yields.
+pub(super) fn constant_type(value: &IRConstantValue) -> IRType {
     match value {
         IRConstantValue::Built { ty, .. } => ty.clone(),
         IRConstantValue::EnumVariant { ty, .. } => IRType::Enum(ty.clone()),

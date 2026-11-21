@@ -348,6 +348,222 @@ fn constant_read_of_a_scalar_constant_folds_inline() {
     assert_eq!(count_load_const(&script), 0);
 }
 
+// Union widening. A value that widens into a union needs a wrap that
+// static data cannot hold, so the constant builds at start and its
+// init applies the wrap.
+
+/// Assert the constant `name` is `Built` with a union type.
+fn assert_built_union(script: &IRScript, name: &str) {
+    let IRConstantValue::Built { ty, .. } = pooled_value(script, name) else {
+        panic!(
+            "expected `{name}` to be a built constant, got {:?}",
+            pooled_value(script, name)
+        );
+    };
+    assert!(
+        matches!(ty, IRType::Union { .. }),
+        "expected `{name}` to have a union type, got {ty:?}",
+    );
+}
+
+#[test]
+fn union_constant_with_a_struct_member_builds() {
+    let source = "
+        struct Null
+        end
+
+        type Value = Null | Bool
+
+        const NOTHING: Value = Null{}
+
+        match NOTHING
+          flag: Bool -> 1
+          nothing: Null -> 0
+        end
+        ";
+
+    let script = lower_script_source(source);
+    assert_built_union(&script, "NOTHING");
+    assert_eq!(built_order(&script), ["NOTHING"]);
+    assert_eq!(count_load_const(&script), 1);
+}
+
+#[test]
+fn union_constant_with_a_scalar_member_builds_and_loads() {
+    // A scalar constant inlines at each read. A scalar member of a
+    // union cannot, because the inline form has no union shape.
+    let source = "
+        const LIMIT: Int | String = 5
+
+        match LIMIT
+          n: Int -> n
+          s: String -> 0
+        end
+        ";
+
+    let script = lower_script_source(source);
+    assert_built_union(&script, "LIMIT");
+    assert_eq!(count_load_const(&script), 1);
+}
+
+#[test]
+fn struct_constant_with_a_union_field_builds() {
+    let source = "
+        struct Null
+        end
+
+        type Value = Null | Bool
+
+        struct Slot
+          value: Value
+        end
+
+        const SLOT: Slot = Slot{value: Null{}}
+
+        match SLOT.value
+          flag: Bool -> 1
+          nothing: Null -> 0
+        end
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(built_init(&script, "SLOT"), "TestApp.SLOT__init");
+}
+
+#[test]
+fn union_constant_that_reads_a_member_constant_builds() {
+    let source = "
+        struct Null
+        end
+
+        type Value = Null | Bool
+
+        const COPY: Value = NOTHING
+        const NOTHING: Null = Null{}
+
+        match COPY
+          flag: Bool -> 1
+          nothing: Null -> 0
+        end
+        ";
+
+    let script = lower_script_source(source);
+    assert_built_union(&script, "COPY");
+    assert!(
+        matches!(
+            pooled_value(&script, "NOTHING"),
+            IRConstantValue::Struct { .. }
+        ),
+        "the member constant keeps its static shape",
+    );
+    assert_eq!(built_order(&script), ["COPY"]);
+}
+
+#[test]
+fn wider_union_constant_orders_the_narrower_one_first() {
+    let source = "
+        const ALL: Bool | Int | String = BASE
+        const BASE: Int | String = 5
+
+        match ALL
+          flag: Bool -> 1
+          n: Int -> n
+          s: String -> 0
+        end
+        ";
+
+    let script = lower_script_source(source);
+    assert_built_union(&script, "ALL");
+    assert_built_union(&script, "BASE");
+    assert_eq!(built_order(&script), ["BASE", "ALL"]);
+}
+
+// Numeric widening. A sized number that widens into `Int` or `Float`
+// folds to the wide scalar, so the constant keeps its static shape.
+
+/// The scalars the script body materializes with `Const`.
+fn body_consts(script: &IRScript) -> Vec<&ConstValue> {
+    all_instructions(&script.blocks)
+        .filter_map(|inst| match inst {
+            IRInstruction::Const { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn widened_integer_constant_folds_inline_at_the_wide_width() {
+    let source = "
+        const NARROW: Int32 = 7
+        const WIDE: Int = NARROW
+
+        WIDE + 1
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(pooled_constants_len(&script), 0);
+    assert_eq!(count_load_const(&script), 0);
+    let consts = body_consts(&script);
+    assert!(
+        consts.contains(&&ConstValue::Int64(7)),
+        "expected the read to inline as Int64, got {consts:?}",
+    );
+}
+
+#[test]
+fn widened_float_constant_folds_inline_at_the_wide_width() {
+    let source = "
+        const NARROW: Float32 = 1.5
+        const WIDE: Float = NARROW
+
+        WIDE + 1.0
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(pooled_constants_len(&script), 0);
+    let consts = body_consts(&script);
+    assert!(
+        consts.contains(&&ConstValue::Float64(1.5)),
+        "expected the read to inline as Float64, got {consts:?}",
+    );
+}
+
+#[test]
+fn widened_fields_of_a_struct_constant_fold_statically() {
+    // Signed sources sign-extend and unsigned sources zero-extend.
+    let source = "
+        struct Slot
+          low: Int
+          high: Int
+          ratio: Float
+        end
+
+        const LOW: Int8 = -3
+        const HIGH: UInt8 = 200
+        const RATIO: Float32 = 0.5
+        const SLOT: Slot = Slot{low: LOW, high: HIGH, ratio: RATIO}
+
+        SLOT.low + SLOT.high
+        ";
+
+    let script = lower_script_source(source);
+    let IRConstantValue::Struct { fields, .. } = pooled_value(&script, "SLOT") else {
+        panic!(
+            "expected a pooled struct constant, got {:?}",
+            pooled_value(&script, "SLOT")
+        );
+    };
+    assert_eq!(
+        fields,
+        &[
+            IRConstantValue::Primitive(ConstValue::Int64(-3)),
+            IRConstantValue::Primitive(ConstValue::Int64(200)),
+            IRConstantValue::Primitive(ConstValue::Float64(0.5)),
+        ]
+    );
+    assert!(built_order(&script).is_empty());
+}
+
 // Startup order. `IRPackage::constants` is a `BTreeMap`, so symbol
 // order is alphabetical, and these tests name the dependent so it
 // sorts first.

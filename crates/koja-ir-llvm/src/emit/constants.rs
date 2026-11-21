@@ -1,13 +1,15 @@
 //! Constant emission. Covers scalar `ConstValue`s, the heap-payload
 //! header shape (`String` / `Binary` / `Bits` literals), the
 //! `LoadConst` cache that materializes pooled aggregate constants
-//! through [`emit_ir_constant_aggregate`], and the load from a
-//! `Built` constant's global (see [`super::built_constants`]).
+//! through [`emit_ir_constant_aggregate`], the static box behind a
+//! cycle-broken field of a constant struct (see [`emit_const_box`]),
+//! and the load from a `Built` constant's global (see
+//! [`super::built_constants`]).
 
 use inkwell::module::Linkage;
-use inkwell::types::{ArrayType, IntType};
+use inkwell::types::{ArrayType, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
-use koja_ir::{ConstValue, IRConstantValue, IRSymbol, IRVariantTag};
+use koja_ir::{ConstValue, IRConstantValue, IRSymbol, IRType, IRVariantTag};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
@@ -73,6 +75,12 @@ pub(super) fn emit_load_const<'ctx>(
 /// reads the constant, and a constant struct embeds its fields by
 /// value, so an instruction here would either refer across
 /// functions or fail `const_named_struct`.
+///
+/// The pool entry holds each struct field in its unboxed form. A
+/// field the struct declares as `Indirect` stores a box pointer, so
+/// its value goes into a static box through [`emit_const_box`]. That
+/// is the constant form of the boxing a struct literal gets at run
+/// time.
 fn emit_ir_constant_aggregate<'ctx>(
     ctx: &EmitContext<'ctx>,
     cv: &IRConstantValue,
@@ -88,11 +96,54 @@ fn emit_ir_constant_aggregate<'ctx>(
             let struct_type = ctx.layouts.struct_type(ty.mangled());
             let comps: Vec<BasicValueEnum<'ctx>> = fields
                 .iter()
-                .map(|f| emit_ir_constant_aggregate(ctx, f))
-                .collect::<Result<_, _>>()?;
+                .enumerate()
+                .map(|(index, field)| {
+                    let value = emit_ir_constant_aggregate(ctx, field)?;
+                    Ok(match ctx.layouts.struct_field_ir_type(ty, index) {
+                        IRType::Indirect(_) => emit_const_box(ctx, value).into(),
+                        _ => value,
+                    })
+                })
+                .collect::<Result<_, LlvmError>>()?;
+            check_constant_struct_fields(struct_type, ty, &comps);
             Ok(struct_type.const_named_struct(&comps).into())
         }
     }
+}
+
+/// Check that each field value of a constant struct has the LLVM
+/// type the struct declares for that field. `const_named_struct`
+/// and the module verifier both accept a value of the wrong type,
+/// and the program then reads the field as the declared type. A
+/// mismatch is a bug in this emitter, so it stops the compile here.
+fn check_constant_struct_fields<'ctx>(
+    struct_type: StructType<'ctx>,
+    ty: &IRSymbol,
+    values: &[BasicValueEnum<'ctx>],
+) {
+    let declared = struct_type.get_field_types();
+    assert_eq!(
+        values.len(),
+        declared.len(),
+        "LLVM emit: constant struct `{ty}` has the wrong number of field values \
+         (IR seal invariant violation)",
+    );
+    for (index, (value, declared)) in values.iter().zip(&declared).enumerate() {
+        let actual = value.get_type();
+        assert!(
+            actual == *declared,
+            "LLVM emit: field {index} of constant struct `{ty}` holds a value of type \
+             `{}`, but the struct declares `{}` (constant emission bug)",
+            type_text(actual),
+            type_text(*declared),
+        );
+    }
+}
+
+/// The LLVM text of `ty` for a panic message. The `Display` of an
+/// inkwell type adds quotes and escapes around the same text.
+fn type_text(ty: BasicTypeEnum<'_>) -> String {
+    ty.print_to_string().to_string()
 }
 
 /// Build a unit variant of enum `ty` as an LLVM constant. The outer
@@ -224,6 +275,56 @@ fn emit_const_payload<'ctx>(
     ]);
     let symbol = ctx.next_payload_symbol(prefix);
     let global = ctx.module.add_global(header_ty, None, &symbol);
+    global.set_initializer(&initializer);
+    global.set_constant(true);
+    global.set_linkage(Linkage::Private);
+    // SAFETY: the global was just defined with the header, so the
+    // payload starts `HEADER_BYTES` in.
+    unsafe {
+        global
+            .as_pointer_value()
+            .const_gep(i8_ty, &[i64_ty.const_int(HEADER_BYTES, false)])
+    }
+}
+
+/// Emit the box for a cycle-broken `Indirect` field of a constant
+/// struct, and return the payload pointer the field stores. The box
+/// is a private constant global in the
+/// `[i64 rc][i64 payload_bytes][T]` shape that
+/// [`super::indirect::emit_box_value`] allocates at run time, with
+/// `rc` set to [`RC_IMMORTAL`]. A clone or a release of the box is
+/// then a no-op, so the block never reaches `free`. Boxes are
+/// write-once, so no code writes through the pointer.
+///
+/// `value` is the constant the field holds, in its unboxed form.
+fn emit_const_box<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    value: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let i64_ty = ctx.context.i64_type();
+    let i8_ty = ctx.context.i8_type();
+    let value_ty = value.get_type();
+    let payload_bytes = ctx.layouts.target_data.get_abi_size(&value_ty);
+    let block_ty = ctx
+        .context
+        .struct_type(&[i64_ty.into(), i64_ty.into(), value_ty], false);
+    // The rc primitives find the block base `HEADER_BYTES` before the
+    // payload. A payload type that aligns to more than 8 bytes would
+    // move the payload, so check the layout of this block.
+    assert_eq!(
+        ctx.layouts.target_data.offset_of_element(&block_ty, 2),
+        Some(HEADER_BYTES),
+        "LLVM emit: the payload of a constant box of type `{}` does not start \
+         {HEADER_BYTES} bytes into its block (layout invariant)",
+        type_text(value_ty),
+    );
+    let initializer = block_ty.const_named_struct(&[
+        i64_ty.const_int(RC_IMMORTAL as u64, false).into(),
+        i64_ty.const_int(payload_bytes, false).into(),
+        value,
+    ]);
+    let symbol = ctx.next_payload_symbol("box");
+    let global = ctx.module.add_global(block_ty, None, &symbol);
     global.set_initializer(&initializer);
     global.set_constant(true);
     global.set_linkage(Linkage::Private);

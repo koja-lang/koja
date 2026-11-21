@@ -1,0 +1,29 @@
+# A constant of type `Int` or `Float` takes a sized number from
+# another constant. The value widens at the top level and in a field
+# of a struct constant.
+
+struct Slot
+  low: Int
+  high: Int
+  ratio: Float
+end
+
+const SMALL: Int32 = 7
+const LOW: Int8 = -3
+const HIGH: UInt8 = 200
+const RATIO: Float32 = 0.5
+
+const WIDE: Int = SMALL
+const WIDE_RATIO: Float = RATIO
+const SLOT: Slot = Slot{low: LOW, high: HIGH, ratio: RATIO}
+
+fn add(n: Int) -> Int
+  n + WIDE
+end
+
+(WIDE + 1).print()
+add(2).print()
+(WIDE_RATIO + 1.0).print()
+(SLOT.low + 1).print()
+(SLOT.high + 1).print()
+(SLOT.ratio + 1.0).print()

@@ -2,9 +2,11 @@
 //! materializes as a true LLVM constant, so it can sit inside a
 //! constant struct and be shared by every function that reads it.
 //! Both shapes failed module verification before the constant
-//! emitter stopped building enum values through an alloca. A built
-//! constant instead gets one internal global that `__koja_const_init`
-//! fills from PID 1's entry code before any user code runs.
+//! emitter stopped building enum values through an alloca. A
+//! cycle-broken field of a constant struct points at a static box.
+//! A built constant instead gets one internal global that
+//! `__koja_const_init` fills from PID 1's entry code before any user
+//! code runs.
 
 use koja_ast::util::dedent;
 use koja_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
@@ -119,6 +121,51 @@ fn nested_constant_lowers_like_a_package_constant() {
         &ir_text,
         "(%TestApp.Span { i64 0, %TestApp.Span.Unit { [1 x i8] c\"\\01\" } })",
     );
+}
+
+#[test]
+fn struct_constant_with_a_cycle_broken_field_points_at_an_immortal_box() {
+    let source = "
+        struct Node
+          value: Int
+          next: Option<Node>
+        end
+
+        const LEAF: Node = Node{value: 1, next: Option.None}
+
+        fn value_of(node: Node) -> Int
+          node.value
+        end
+
+        value_of(LEAF)
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    // The cycle pass boxes `Node.next`, so the struct stores a
+    // pointer in that slot.
+    assert_contains(&ir_text, "%TestApp.Node = type { i64, ptr }");
+    // The box is static data. Its header holds the immortal count
+    // and the size of the `Option` value.
+    let box_global = ir_text
+        .lines()
+        .find(|line| line.starts_with("@koja_box."))
+        .expect("the constant should emit a box global");
+    assert_contains(
+        box_global,
+        "= private constant { i64, i64, %\"Global.Option_$TestApp.Node$\" } \
+         { i64 -9223372036854775808, i64 24, ",
+    );
+    // The field holds the payload pointer, 16 bytes past the block
+    // base, and the read allocates nothing.
+    let user_main = extract_function_body(&ir_text, "__koja_user_main");
+    assert_contains(
+        user_main,
+        "(%TestApp.Node { i64 1, ptr getelementptr (i8, ptr @koja_box.",
+    );
+    assert_not_contains(user_main, "malloc");
 }
 
 #[test]
