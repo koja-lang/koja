@@ -30,13 +30,14 @@
 //!   `type Pet = Cat | Dog` mismatch reports `Pet`, not the expanded
 //!   `Cat | Dog`.
 
+use koja_ast::ast::ExprKind;
 use koja_ast::util::dedent;
 
 mod common;
 
 use common::{
-    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail, warning_messages,
+    assert_script_fails_with, bool_type, diagnostic_messages, trailing_expr,
+    typecheck_script as typecheck, typecheck_script_fail as typecheck_fail, warning_messages,
 };
 
 #[test]
@@ -508,6 +509,116 @@ fn union_hash_requires_every_member_to_hash() {
         v.hash().print()
         ";
     assert_script_fails_with(source, &["cannot hash unions containing `TestApp.B`"]);
+}
+
+/// Declarations for the union equality tests. They are three structs,
+/// the alias `Pet = Cat | Dog`, and one local of each type in play.
+const PET_EQUALITY_PRELUDE: &str = "
+    struct Cat
+      name: String
+    end
+
+    struct Dog
+      name: String
+    end
+
+    struct Bird
+      name: String
+    end
+
+    type Pet = Cat | Dog
+
+    pet: Pet = Cat{name: \"Tom\"}
+    tom = Cat{name: \"Tom\"}
+    bird = Bird{name: \"Tweety\"}
+    wide: Cat | Dog | Bird = tom
+    other: Dog | Bird = bird
+    value: Int | String = 1
+    ";
+
+fn pet_equality_script(tail: &str) -> String {
+    format!("{}{}", dedent(PET_EQUALITY_PRELUDE), dedent(tail))
+}
+
+#[test]
+fn union_equality_takes_a_member_on_the_right() {
+    let source = pet_equality_script(
+        "
+        (pet == tom).print()
+        (pet != tom).print()
+        (pet == Cat{name: \"Tom\"}).print()
+        pet.equals?(tom).print()
+        (wide == pet).print()
+        (value == 1).print()
+        (value == \"koja\").print()
+        ",
+    );
+    typecheck(&source);
+}
+
+#[test]
+fn union_equality_takes_a_member_on_the_left() {
+    let source = pet_equality_script(
+        "
+        (tom != pet).print()
+        (Cat{name: \"Tom\"} == pet).print()
+        (pet == wide).print()
+        (1 == value).print()
+        (\"koja\" == value).print()
+        tom == pet
+        ",
+    );
+    let checked = typecheck(&source);
+    // The union must be the `equals?` receiver, so the left value
+    // binds first and the operands still evaluate left to right.
+    let comparison = trailing_expr(&checked);
+    assert!(
+        matches!(comparison.kind, ExprKind::Match { .. }),
+        "expected the member-left comparison to rewrite to a match, got {:?}",
+        comparison.kind,
+    );
+    assert_eq!(comparison.resolution, bool_type(&checked));
+}
+
+#[test]
+fn union_equality_rejects_a_value_that_is_not_a_member() {
+    let source = pet_equality_script("pet == bird\n");
+    let failure = typecheck_fail(&source);
+    let messages = diagnostic_messages(&failure);
+    assert_eq!(
+        messages,
+        vec![
+            "cannot compare `TestApp.Pet` with `TestApp.Bird`. `TestApp.Bird` is not a member \
+             of `TestApp.Pet`"
+        ],
+    );
+}
+
+#[test]
+fn union_equality_rejects_unions_that_only_overlap() {
+    let source = pet_equality_script("pet == other\n");
+    let failure = typecheck_fail(&source);
+    let messages = diagnostic_messages(&failure);
+    assert_eq!(
+        messages,
+        vec![
+            "cannot compare `TestApp.Pet` with `TestApp.Bird | TestApp.Dog`. \
+             `TestApp.Bird | TestApp.Dog` has a member that is not a member of `TestApp.Pet`"
+        ],
+    );
+}
+
+#[test]
+fn member_equals_call_rejects_a_union_argument() {
+    // Only the operator widens. The explicit call names the member's
+    // own `equals?`, and that function takes the member type.
+    let source = pet_equality_script("tom.equals?(pet)\n");
+    let failure = typecheck_fail(&source);
+    let messages = diagnostic_messages(&failure);
+    assert_eq!(
+        messages,
+        vec!["argument `other` to `TestApp.Cat.equals?` expects `TestApp.Cat`, got `TestApp.Pet`"],
+    );
 }
 
 #[test]

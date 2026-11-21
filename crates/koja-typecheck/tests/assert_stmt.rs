@@ -297,6 +297,28 @@ fn left_literal_takes_the_right_operands_width() {
 }
 
 #[test]
+fn union_operand_compares_with_a_member_on_either_side() {
+    typecheck_file(&dedent(
+        "
+        struct Cat
+          name: String
+        end
+
+        struct Dog
+          name: String
+        end
+
+        type Pet = Cat | Dog
+
+        fn check(tom: Cat, pet: Pet) ! Test.Failure
+          assert tom == pet
+          assert pet == tom
+        end
+        ",
+    ));
+}
+
+#[test]
 fn a_failed_operand_reports_once() {
     for condition in ["nope == 1", "nope < 1"] {
         let failure = typecheck_file_fail(&dedent(&format!(

@@ -25,6 +25,7 @@
 //!   `Result.Ok` auto-wrapping for `! E` functions.
 //! - [`mod@assert`]: statement-position `assert` desugaring onto `if` and
 //!   `fail Test.Failure.Assertion(...)`.
+//! - [`builders`]: unresolved AST nodes for the resolve-time rewrites.
 //! - [`ops`]: literal, binary, and unary type rules.
 //! - [`return_type`]: trailing-expression-vs-declared-return checking.
 //! - [`speculation`]: trial resolution with rollback, so sibling
@@ -38,6 +39,7 @@
 //! [`ResolvedType`]: koja_ast::identifier::ResolvedType
 
 mod assert;
+mod builders;
 mod calls;
 mod closures;
 pub(crate) mod coercion;

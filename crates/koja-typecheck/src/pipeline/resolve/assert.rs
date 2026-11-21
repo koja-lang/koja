@@ -37,8 +37,8 @@ use koja_ast::ast::{
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
+use super::builders::{assign_local, ident, method_call};
 use super::ctx::Resolver;
-use super::for_loop::{assign_local, ident, method_call};
 use super::types::peel_alias;
 
 const TEST_PACKAGE: &str = "Test";
