@@ -443,3 +443,49 @@ slot array, the shape `IndexMap` uses, and `next` walks the list. The
 interpreter already has that order. If it is not, the `Debug` and
 `Log.Text` renderers sort their keys so rendered text is stable, and
 the golden rule stays. Either way the `Map` doc should say which.
+
+---
+
+## A `type` alias cannot be recursive
+
+Found 2026-11-20 while turning `JSON.Value` from an enum into a union.
+The natural shape for a JSON array is `List<Value>` as a member of
+`Value` itself, as in `type Value = Null | Bool | List<Value> | ...`.
+`lift_signatures/type_aliases.rs` rejects that with "references itself
+(cycle)". An alias is transparent, `peel_alias` expands it in place,
+and the IR mangles a union from its members, so a member that names
+the alias never ends.
+
+Consequence: `JSON.Array` and `JSON.Object` are structs that hold the
+list. The struct is what breaks the cycle. A reader writes
+`array.items` where a native list would need no step, and a
+`List<JSON.Value>` does not flow into a `JSON.Value` slot.
+
+**Fix path:** a recursive alias needs a nominal handle in the IR, a
+union that is named and laid out by name the way a struct is. That is
+a real feature and not a relaxed check. Crystal modeled JSON as the
+recursive alias `JSON::Type`, dropped that alias from its standard
+library in 0.25.0, and moved the recursion into the `JSON::Any`
+struct. That is a reason to be sure before starting.
+
+---
+
+## No direct call on a union value
+
+Found 2026-11-20 with the union conformance rule. A union satisfies
+`T: Protocol` when every member conforms and the protocol dispatches
+on the receiver alone, and a call through the bound lowers to a switch
+over the members. The same call written on the value is still an
+error. `resolve/calls/structural.rs` admits only `equals?`, the
+`Debug` family, and `hash` on a union receiver.
+
+Consequence: `JSON.encode(value)` works for a `JSON.Value`, and a
+user protocol works through a generic function, but `value.label()`
+needs a `match` or a one-line generic wrapper.
+
+**Fix path:** resolve a method on a union receiver when exactly one
+protocol that the union satisfies declares it. The lowering exists
+already (`lower_union_member_call` in `koja-ir/src/lower/unions.rs`).
+The open question is whether an inherent function that every member
+happens to share should count. It should not, because then adding a
+member silently changes which calls compile.

@@ -1175,6 +1175,37 @@ So does a union whose members all belong to the target. A `Cat | Dog` value flow
 
 Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
 
+A union has no functions of its own. To call a function, `match` on the value and call it on the member:
+
+```koja
+match pet
+  cat: Cat -> cat.name
+  dog: Dog -> dog.name
+  fish: Fish -> fish.species
+end
+```
+
+A union does satisfy a [trait bound](#trait-bounds) when every member implements the protocol. A call through the bound runs the function of the member the value holds:
+
+```koja
+fn introduce<T: Greeter>(animal: T) -> String
+  animal.greet()
+end
+
+introduce(pet) # works when Cat, Dog, and Fish all implement Greeter
+```
+
+This works only for a protocol whose functions all take `self` and name `Self` in no other position. A protocol with a static function, a `Self` parameter, or a `Self` result cannot pick one member from a value, so a union does not satisfy it. `Debug`, `Equality`, and `Hash` are the exceptions. A union gets `format()`, `print()`, `==`, and `hash()` when its members have them.
+
+A literal in a position that expects a union builds one member. The member that is the default type of the literal wins, so `"text"` is a `String` and `true` is a `Bool` when the union has those members. Without that member, the literal goes to the one member that implements its [literal protocol](#literal-protocols). It is an error when two members do.
+
+```koja
+type Setting = Bool | String | Count # Count implements IntLiteral
+
+a: Setting = "auto" # a String
+b: Setting = 3 # a Count, through Count.from_int
+```
+
 ### Tuples
 
 An anonymous, fixed-size grouping of values. Tuples are structural. Two tuple types are the same type exactly when their element types match, position by position.
@@ -1632,7 +1663,7 @@ Unbounded type parameters (`<T>`) remain valid and backwards compatible.
 
 ### Dispatch
 
-Protocol dispatch is static via monomorphization. No vtables, no dynamic dispatch.
+Protocol dispatch is static via monomorphization. No vtables, no dynamic dispatch. A [union](#union-types) that satisfies a bound is the one case with a choice at run time. The call reads which member the value holds and calls the function of that member.
 
 ---
 
@@ -3165,20 +3196,55 @@ Checksum.crc32c("123456789".to_binary()) == 0xE3069283
 
 ### JSON package
 
-`JSON.Value` represents a JSON value tree. Contextual literals can build nested arrays and objects directly:
+`JSON.Value` is a JSON value. It is a union of one type for each kind of JSON value:
+
+```koja
+type Value = Null | Bool | Number | String | Array | Object
+```
+
+`Bool` and `String` are the Koja types. The other four belong to the package:
+
+- `JSON.Null` has one value, the constant `JSON.NULL`.
+- `JSON.Number` holds the number as JSON writes it, in its `text` field.
+- `JSON.Array` holds its `items`, a `List<JSON.Value>`.
+- `JSON.Object` holds its `entries`, a `List<(String, JSON.Value)>`. It keeps entry order and duplicate names.
+
+A literal builds a value in a position that expects one. A map literal builds an object, a list literal builds an array, and a number literal builds a number:
 
 ```koja
 payload: JSON.Value = [
   "name": "Koja",
   "active": true,
   "scores": [10, 20, 30],
-  "metadata": [:]
+  "owner": JSON.NULL
 ]
 ```
 
-JSON objects keep entry order and duplicate names. Use `JSON.Value.Null` for JSON null.
+A variable needs no conversion when its type is one of the six, so a `String`, a `Bool`, or another `JSON.Value` goes in as it is. An `Int` or a `Float` is not one of the six, so call `to_json()` on it:
 
-`JSON.Encoding` converts a type to `JSON.Value` through `to_json`. `JSON.Value`, `Bool`, `Int`, `Float`, `String`, and `List<T: JSON.Encoding>` conform.
+```koja
+count = 3
+name = "Koja"
+payload: JSON.Value = ["name": name, "count": count.to_json()]
+```
+
+To read a value, `match` with a typed binding for each type the code accepts. `JSON.get(value, key)` returns the value of a key as an `Option<JSON.Value>`. It returns `None` when the value is not an object or has no such key, and the last entry when a key occurs more than one time. `Object.get(key)` does the same for a `JSON.Object`.
+
+```koja
+match JSON.get(payload, "name")
+  Option.Some(name: String) when not name.empty?() -> name
+  _ -> fail "name is required"
+end
+```
+
+`JSON.decode` checks a number against the JSON grammar and keeps its text, so it loses no digit. The code that reads the number picks the type:
+
+- `number.to_int()` returns `Int ! NumericConversionError`. A number with a fraction of zero is an integer, so `1.0` gives `1` and `1e2` gives `100`. It fails with `InvalidFormat` for `1.5`, the same as `"1.5".to_int()`, and with `OutOfRange` for an integer that does not fit in 64 bits.
+- `number.to_float()` returns `Float ! NumericConversionError`. It gives the nearest float, and fails with `OutOfRange` when the magnitude is too large.
+
+Two numbers are equal when they have the same value, so a decoded `1` equals a decoded `1.0`.
+
+`JSON.Encoding` converts a type to `JSON.Value` through `to_json`. `Bool`, `Int`, `Float`, `String`, `List<T: JSON.Encoding>`, and the four package types conform, and so `JSON.Value` does too.
 
 ```koja
 struct Point
@@ -3188,8 +3254,7 @@ end
 
 impl JSON.Encoding for Point
   fn to_json(self) -> JSON.Value
-    value: JSON.Value = ["x": self.x.to_json(), "y": self.y.to_json()]
-    value
+    ["x": self.x.to_json(), "y": self.y.to_json()]
   end
 end
 
@@ -3387,6 +3452,15 @@ end
 Entry order and duplicate keys remain available to the conformer. The default `Map<K, V>` carrier still lowers directly to `Map.new().put(...)` without an intermediate entry list.
 
 Collection element, key, and value types come from the selected conformance. A non-generic type can therefore implement `ListLiteral<Item>` or `MapLiteral<Key, Value>`.
+
+Each entry of a list or map literal flows into the element, key, or value type the way an argument flows into a parameter. A member widens into a union, and a numeric literal takes a sized type:
+
+```koja
+mixed: List<Int | String> = [1, "a"]
+bytes: List<UInt8> = [1, 2, 3]
+```
+
+When the expected type is a union, a literal builds one member of it. See [Union Types](#union-types).
 
 ---
 

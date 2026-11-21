@@ -1,0 +1,78 @@
+alias Test.require
+
+test "a map literal builds an object in source order"
+  object: Object = ["b": 1, "a": "two"]
+  keys: List<String> = []
+
+  for (key, _) in object.entries
+    keys = keys.append(key)
+  end
+
+  assert keys == ["b", "a"]
+end
+
+test "an object is empty by default"
+  assert Object{}.entries.empty?()
+  assert Array{}.items.empty?()
+end
+
+test "Object.get returns the value of a key"
+  object: Object = ["name": "koja", "count": 3]
+  name: Value = "koja"
+  count: Value = 3
+
+  assert object.get("name") == Option.Some(name)
+  assert object.get("count") == Option.Some(count)
+end
+
+test "Object.get returns None for a key the object does not have"
+  object: Object = ["name": "koja"]
+
+  assert object.get("missing").none?()
+  assert Object{}.get("name").none?()
+end
+
+test "Object.get returns the last entry of a repeated key"
+  object: Object = ["key": 1, "other": true, "key": 2]
+  last: Value = 2
+
+  assert object.get("key") == Option.Some(last)
+end
+
+test "get reads a key of an object value"
+  value = try require(decode("{\"query\": \"koja\", \"limit\": 10}"))
+  query: Value = "koja"
+
+  assert get(value, "query") == Option.Some(query)
+  assert get(value, "missing").none?()
+end
+
+test "get returns None for a value that is not an object"
+  array: Value = [1, 2]
+  text: Value = "query"
+  null: Value = NULL
+
+  assert get(array, "query").none?()
+  assert get(text, "query").none?()
+  assert get(null, "query").none?()
+end
+
+struct ObjectTest
+  # The shape a caller uses to read one typed field.
+  priv fn text(value: Value, key: String) -> String
+    match get(value, key)
+      Option.Some(text: String) when not text.empty?() -> text
+      _ -> "none"
+    end
+  end
+
+  test "get results match on the type of the value"
+    input = "{\"query\": \"koja\", \"empty\": \"\", \"limit\": 10}"
+    value = try require(decode(input))
+
+    assert ObjectTest.text(value, "query") == "koja"
+    assert ObjectTest.text(value, "empty") == "none"
+    assert ObjectTest.text(value, "limit") == "none"
+    assert ObjectTest.text(value, "missing") == "none"
+  end
+end

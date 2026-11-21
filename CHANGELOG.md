@@ -22,8 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Status.reason()` returns the standard reason phrase for a code, or `""` when there is none.
 - Every `HTTP` client function takes a trailing `timeout: Option<Duration> = Option.None`. It bounds the whole request except the DNS lookup, and a request that passes it fails with `HTTP.Error.Timeout`.
 - `HTTP.patch`, `HTTP.post`, `HTTP.put`, and `HTTP.request` take a `Binary | String` body.
+- A union satisfies a protocol bound when every member implements the protocol, so a `Cat | Dog` value can go to `fn show<T: Label>(value: T)`. A call through the bound runs the function of the member the value holds. The protocol must take `self` in every function and name `Self` in no other position.
+- A literal in a position that expects a union builds one member of it. `"text"` is the `String` member and `true` is the `Bool` member. Without such a member, the literal goes to the one member that implements its literal protocol, and it is an error when two members do.
+- Each entry of a list or map literal flows into the expected element type the way an argument does. `List<Int | String> = [1, "a"]`, `List<UInt8> = [1, 2, 3]`, and a `List<Shape>` literal that holds a `Circle` and a `Square` now compile.
+- `JSON.NULL` is the JSON `null` value, of the new type `JSON.Null`.
+- `JSON.Number` holds a JSON number as its text. `to_int()` and `to_float()` convert it and fail with `NumericConversionError`. `to_int()` accepts a number with a fraction of zero, so `1.0` and `1e2` are integers.
+- `JSON.get(value, key)` returns the value of a key in a JSON object as an `Option<JSON.Value>`, and `Option.None` when the value is not an object. `JSON.Object.get(key)` does the same for an object.
 
 ### Changed
+
+- **Breaking change.** `JSON.Value` is the union `Null | Bool | Number | String | Array | Object`, not an enum. A `match` arm names a type with a binding, so `Value.String(text) ->` becomes `text: String ->` and `Value.Array(items) ->` becomes `array: JSON.Array ->` with `array.items`. The constructors `Value.null`, `Value.bool`, `Value.int`, `Value.float`, `Value.string`, `Value.array`, `Value.object`, and `Value.entry` are gone. A `String`, a `Bool`, or a literal is a value as it is, `Value.Null` becomes `JSON.NULL`, and an `Int` or `Float` variable takes `.to_json()`.
+- **Breaking change.** `JSON.decode` returns each number as a `JSON.Number` with the text it had, in place of an `Int` or a `Float`. Call `to_int()` or `to_float()` where the code needs one. An integer too large for 64 bits no longer fails the decode, a long fraction keeps every digit, and `JSON.encode` writes the same text back.
 
 - **Breaking change.** `Request.body` and `Response.body` are `Binary`. `response.body` becomes `try response.text()` where the code needs a `String`, and `body_as_binary()` is gone. `Response.new(status, body)` takes `Binary | String` and sets `Content-Length` from the byte size, not the character count.
 - **Breaking change.** `Request.uri`, a `URI`, replaces `Request.path`. `request.path` becomes `request.uri.path`, and the query moves to `request.uri.query`. `Request.Parser` fills `uri.host` and `uri.port` from the `Host` header. It keeps the query as it arrived, so `uri.query` can hold text that `URI.parse` rejects, such as `tag[]=a`.

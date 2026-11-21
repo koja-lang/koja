@@ -63,21 +63,24 @@ priv struct Decoder
       fail "expected 'null' at position #{pos}"
     end
 
-    (Value.Null, pos + 4)
+    (NULL, pos + 4)
   end
 
   priv fn parse_bool(self, pos: Int) -> (Value, Int) ! String
     if pos + 4 <= self.size and self.text(pos, pos + 3) == "true"
-      return (Value.Bool(true), pos + 4)
+      return (true, pos + 4)
     end
 
     if pos + 5 <= self.size and self.text(pos, pos + 4) == "false"
-      return (Value.Bool(false), pos + 5)
+      return (false, pos + 5)
     end
 
     fail "expected 'true' or 'false' at position #{pos}"
   end
 
+  # Checks the number against the JSON grammar and keeps its text. The
+  # caller picks the numeric type later, through `Number.to_int` or
+  # `Number.to_float`.
   priv fn parse_number(self, pos: Int) -> (Value, Int) ! String
     i = pos
 
@@ -90,10 +93,8 @@ priv struct Decoder
     end
 
     i = self.consume_digits(i)
-    is_float = false
 
     if self.peek?(i, BYTE_DOT)
-      is_float = true
       i += 1
 
       if not self.digit_at?(i)
@@ -104,7 +105,6 @@ priv struct Decoder
     end
 
     if self.peek?(i, BYTE_LOWER_E) or self.peek?(i, BYTE_UPPER_E)
-      is_float = true
       i += 1
 
       if self.peek?(i, BYTE_PLUS) or self.peek?(i, BYTE_MINUS)
@@ -118,19 +118,7 @@ priv struct Decoder
       i = self.consume_digits(i)
     end
 
-    num_str = self.text(pos, i - 1)
-
-    if is_float
-      f = num_str.to_float()
-        rescue e -> fail "invalid float '#{num_str}' at position #{pos}: #{e}"
-
-      return (Value.Float(f), i)
-    end
-
-    n = num_str.to_int()
-      rescue e -> fail "invalid integer '#{num_str}' at position #{pos}: #{e}"
-
-    (Value.Int(n), i)
+    (Number{text: self.text(pos, i - 1)}, i)
   end
 
   priv fn consume_digits(self, start: Int) -> Int
@@ -149,7 +137,7 @@ priv struct Decoder
 
   priv fn parse_string(self, pos: Int) -> (Value, Int) ! String
     (string, next_pos) = try self.parse_raw_string(pos)
-    (Value.String(string), next_pos)
+    (string, next_pos)
   end
 
   priv fn parse_raw_string(self, pos: Int) -> (String, Int) ! String
@@ -237,7 +225,7 @@ priv struct Decoder
     items: List<Value> = List.new()
 
     if self.peek?(i, BYTE_RBRACKET)
-      return (Value.Array(items), i + 1)
+      return (Array{items: items}, i + 1)
     end
 
     try self.parse_array_elements(items, i, pos)
@@ -264,7 +252,7 @@ priv struct Decoder
     b = self.byte(i)
 
     if b == BYTE_RBRACKET
-      return (Value.Array(items), i + 1)
+      return (Array{items: items}, i + 1)
     end
 
     if b != BYTE_COMMA
@@ -279,7 +267,7 @@ priv struct Decoder
     entries: List<(String, Value)> = List.new()
 
     if self.peek?(i, BYTE_RBRACE)
-      return (Value.Object(entries), i + 1)
+      return (Object{entries: entries}, i + 1)
     end
 
     try self.parse_object_entries(entries, i, pos)
@@ -317,7 +305,7 @@ priv struct Decoder
     b = self.byte(i)
 
     if b == BYTE_RBRACE
-      return (Value.Object(entries), i + 1)
+      return (Object{entries: entries}, i + 1)
     end
 
     if b != BYTE_COMMA

@@ -18,6 +18,9 @@
 //!   surfaces a precise "match the union first" error, and a
 //!   `MethodCall` admits only the universal protocol functions
 //!   (`equals?`, the `Debug` family, `hash`) before saying the same.
+//! - **Bounds**: a union discharges a `T: Protocol` bound when every
+//!   member conforms and the protocol dispatches on the receiver
+//!   alone (no static function, no `Self` outside the receiver).
 //! - **Match exhaustiveness**: typed-binding arms over a union
 //!   subject either cover every member or surface a precise
 //!   missing-member diagnostic. A duplicate member arm warns as
@@ -505,6 +508,175 @@ fn union_hash_requires_every_member_to_hash() {
         v.hash().print()
         ";
     assert_script_fails_with(source, &["cannot hash unions containing `TestApp.B`"]);
+}
+
+#[test]
+fn union_satisfies_protocol_bound_when_every_member_conforms() {
+    let source = "
+        protocol Label
+          fn label(self) -> String
+        end
+
+        struct A: Label
+          x: Int
+
+          fn label(self) -> String
+            \"a\"
+          end
+        end
+
+        struct B: Label
+          y: Int
+
+          fn label(self) -> String
+            \"b\"
+          end
+        end
+
+        type Item = A | B
+
+        fn show<T: Label>(value: T) -> String
+          value.label()
+        end
+
+        named: Item = A{x: 1}
+        bare: A | B = B{y: 2}
+        show(named).print()
+        show(bare).print()
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn union_bound_requires_every_member_to_conform() {
+    let source = "
+        protocol Label
+          fn label(self) -> String
+        end
+
+        struct A: Label
+          x: Int
+
+          fn label(self) -> String
+            \"a\"
+          end
+        end
+
+        struct B
+          y: Int
+        end
+
+        fn show<T: Label>(value: T) -> String
+          value.label()
+        end
+
+        v: A | B = A{x: 1}
+        show(v).print()
+        ";
+    assert_union_bound_fails(
+        source,
+        "does not implement protocol `TestApp.Label`",
+        "`TestApp.B` does not implement `TestApp.Label`",
+    );
+}
+
+#[test]
+fn union_bound_rejects_protocol_with_static_function() {
+    // A static function has no receiver, so no tag picks the impl.
+    let source = "
+        protocol Named
+          fn name(self) -> String
+          fn default_name -> String
+        end
+
+        struct A: Named
+          x: Int
+
+          fn name(self) -> String
+            \"a\"
+          end
+
+          fn default_name -> String
+            \"a\"
+          end
+        end
+
+        struct B: Named
+          y: Int
+
+          fn name(self) -> String
+            \"b\"
+          end
+
+          fn default_name -> String
+            \"b\"
+          end
+        end
+
+        fn show<T: Named>(value: T) -> String
+          value.name()
+        end
+
+        v: A | B = A{x: 1}
+        show(v).print()
+        ";
+    assert_union_bound_fails(
+        source,
+        "does not implement protocol `TestApp.Named`",
+        "only when every function takes `self`",
+    );
+}
+
+#[test]
+fn union_bound_rejects_protocol_that_names_self_outside_the_receiver() {
+    // `other: Self` could carry a different member than the receiver.
+    let source = "
+        protocol Merge
+          fn merge(self, other: Self) -> Int
+        end
+
+        struct A: Merge
+          x: Int
+
+          fn merge(self, other: A) -> Int
+            self.x + other.x
+          end
+        end
+
+        struct B: Merge
+          y: Int
+
+          fn merge(self, other: B) -> Int
+            self.y + other.y
+          end
+        end
+
+        fn combine<T: Merge>(left: T, right: T) -> Int
+          left.merge(right)
+        end
+
+        v: A | B = A{x: 1}
+        combine(v, v).print()
+        ";
+    assert_union_bound_fails(
+        source,
+        "does not implement protocol `TestApp.Merge`",
+        "names `Self` in no other position",
+    );
+}
+
+/// Assert one diagnostic carries both the bound failure and the hint
+/// that says why the union fails it.
+fn assert_union_bound_fails(source: &str, message_needle: &str, hint_needle: &str) {
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure.diagnostics.iter().any(|d| {
+            d.message.contains(message_needle)
+                && d.hint.as_deref().is_some_and(|h| h.contains(hint_needle))
+        }),
+        "expected `{message_needle}` with hint `{hint_needle}`, got {:?}",
+        failure.diagnostics,
+    );
 }
 
 #[test]

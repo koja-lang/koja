@@ -10,11 +10,12 @@ use common::{
 
 #[test]
 fn scalar_literals_rewrite_through_their_protocols() {
+    // `Log.Attribute` conforms to all four scalar literal protocols.
     let source = "
-        bool_value: JSON.Value = true
-        int_value: JSON.Value = -42
-        float_value: JSON.Value = -1.5
-        string_value: JSON.Value = \"count #{42}\"
+        bool_value: Log.Attribute = true
+        int_value: Log.Attribute = -42
+        float_value: Log.Attribute = -1.5
+        string_value: Log.Attribute = \"count #{42}\"
         string_value
         ";
     let checked = typecheck(&dedent(source));

@@ -1,0 +1,258 @@
+@doc """
+A JSON number. `text` holds the number as JSON writes it, so a
+decoded number keeps every digit. `to_int` and `to_float` convert it,
+and each one fails when the number does not fit the type.
+
+An integer or float literal builds a `Number` in a position that
+expects a JSON value, and so does `to_json()` on an `Int` or a
+`Float`. Two numbers are equal when they have the same value, so `1`,
+`1.0`, and `1e0` are all equal.
+"""
+struct Number: Equality, FloatLiteral, IntLiteral
+  text: String
+
+  # `EXPONENT_DIGITS` is the longest exponent, in digits, that
+  # `decimal` reads. A longer one cannot take part in `Int`
+  # arithmetic. `INT_DIGITS` is the most decimal digits an `Int` can
+  # hold.
+  priv const EXPONENT_DIGITS = 18
+  priv const INT_DIGITS = 19
+
+  @doc """
+  Compares by value. A number with an exponent of more than 18 digits
+  compares by its text.
+  """
+  fn equals?(self, other: Number) -> Bool
+    if self.text == other.text
+      return true
+    end
+
+    match (self.decimal(), other.decimal())
+      (Result.Ok(left), Result.Ok(right)) -> left == right
+      _ -> false
+    end
+  end
+
+  @doc """
+  Writes a float literal as a JSON number.
+  """
+  fn from_float(value: Float) -> Number
+    Number{text: "#{value}"}
+  end
+
+  @doc """
+  Writes an integer literal as a JSON number.
+  """
+  fn from_int(value: Int) -> Number
+    Number{text: "#{value}"}
+  end
+
+  @doc """
+  Converts to a `Float`. The result is the nearest float, so a number
+  with many digits can lose precision. Fails with
+  `NumericConversionError.OutOfRange` when the magnitude is too large
+  for a float.
+  """
+  fn to_float(self) -> Float ! NumericConversionError
+    try self.text.to_float()
+  end
+
+  @doc """
+  Converts to an `Int`. A number with a fraction of zero is an
+  integer, so `1.0` and `1e2` convert to `1` and `100`. Fails with
+  `NumericConversionError.InvalidFormat` when the number has a
+  fraction, as in `1.5`, and with `NumericConversionError.OutOfRange`
+  when the integer does not fit in 64 bits.
+  """
+  fn to_int(self) -> Int ! NumericConversionError
+    (negative, digits, exponent) = try self.decimal()
+
+    if digits.empty?()
+      return 0
+    end
+
+    if exponent < 0
+      fail NumericConversionError.InvalidFormat
+    end
+
+    if digits.byte_length() + exponent > Number.INT_DIGITS
+      fail NumericConversionError.OutOfRange
+    end
+
+    whole = negative ? "-" <> digits : digits
+    i = 0
+
+    while i < exponent
+      whole = whole <> "0"
+      i += 1
+    end
+
+    try whole.to_int()
+  end
+
+  # The number as `(negative, digits, exponent)`. Its value is `digits`
+  # times ten to the power `exponent`. `digits` has no zero at either
+  # end, so zero is the empty string with exponent 0, and each value
+  # has one form. Reads the text only, and never writes the exponent
+  # out as digits, so `1e999999999` costs no memory.
+  #
+  # Fails with `InvalidFormat` when the text is not a JSON number. An
+  # exponent longer than `EXPONENT_DIGITS` fails the way `to_int`
+  # reports it, with `OutOfRange` when positive and `InvalidFormat`
+  # when negative.
+  priv fn decimal(self) -> (Bool, String, Int) ! NumericConversionError
+    bytes = self.text.to_binary()
+    size = bytes.byte_size()
+    negative = Number.byte_at?(bytes, 0, BYTE_MINUS)
+    whole_start = negative ? 1 : 0
+    whole_end = Number.skip_digits(bytes, whole_start)
+
+    if whole_end == whole_start
+      fail NumericConversionError.InvalidFormat
+    end
+
+    fraction_start = whole_end
+    fraction_end = whole_end
+
+    if Number.byte_at?(bytes, whole_end, BYTE_DOT)
+      fraction_start = whole_end + 1
+      fraction_end = Number.skip_digits(bytes, fraction_start)
+
+      if fraction_end == fraction_start
+        fail NumericConversionError.InvalidFormat
+      end
+    end
+
+    whole = Number.text(bytes, whole_start, whole_end)
+    fraction = Number.text(bytes, fraction_start, fraction_end)
+    (digits, trailing) = Number.strip_zeros(whole <> fraction)
+
+    if fraction_end == size
+      return Number.normal(
+        negative,
+        digits,
+        trailing - (fraction_end - fraction_start),
+      )
+    end
+
+    if not Number.byte_at?(bytes, fraction_end, BYTE_LOWER_E)
+      and not Number.byte_at?(bytes, fraction_end, BYTE_UPPER_E)
+
+      fail NumericConversionError.InvalidFormat
+    end
+
+    sign_at = fraction_end + 1
+    negative_exponent = Number.byte_at?(bytes, sign_at, BYTE_MINUS)
+    signed = negative_exponent or Number.byte_at?(bytes, sign_at, BYTE_PLUS)
+    power_start = signed ? sign_at + 1 : sign_at
+    power_end = Number.skip_digits(bytes, power_start)
+
+    if power_end == power_start or power_end != size
+      fail NumericConversionError.InvalidFormat
+    end
+
+    if digits.empty?()
+      return (false, "", 0)
+    end
+
+    (power, _) = Number.strip_leading_zeros(
+      Number.text(bytes, power_start, power_end),
+    )
+
+    if power.byte_length() > Number.EXPONENT_DIGITS
+      if negative_exponent
+        fail NumericConversionError.InvalidFormat
+      end
+
+      fail NumericConversionError.OutOfRange
+    end
+
+    magnitude = 0
+
+    if not power.empty?()
+      magnitude = try power.to_int()
+    end
+
+    exponent = negative_exponent ? -magnitude : magnitude
+    Number.normal(
+      negative,
+      digits,
+      exponent + trailing - (fraction_end - fraction_start),
+    )
+  end
+
+  # Whether `bytes` holds `expected` at `index`.
+  priv fn byte_at?(bytes: Binary, index: Int, expected: Int) -> Bool
+    match bytes.at(index)
+      Option.Some(found) -> found == expected
+      Option.None -> false
+    end
+  end
+
+  # The one form of a value for `decimal`. Zero has no sign and no
+  # exponent.
+  priv fn normal(negative: Bool, digits: String, exponent: Int)
+    -> (Bool, String, Int)
+
+    digits.empty?() ? (false, "", 0) : (negative, digits, exponent)
+  end
+
+  # The index of the first byte at or after `start` that is not a
+  # digit.
+  priv fn skip_digits(bytes: Binary, start: Int) -> Int
+    i = start
+
+    while i < bytes.byte_size()
+      b = bytes.at(i).unwrap()
+
+      if b < BYTE_ZERO or b > BYTE_NINE
+        return i
+      end
+
+      i += 1
+    end
+
+    i
+  end
+
+  # `digits` with no zero at the start, and the count of zeros removed.
+  priv fn strip_leading_zeros(digits: String) -> (String, Int)
+    bytes = digits.to_binary()
+    size = bytes.byte_size()
+    first = 0
+
+    while first < size and Number.byte_at?(bytes, first, BYTE_ZERO)
+      first += 1
+    end
+
+    (Number.text(bytes, first, size), first)
+  end
+
+  # `digits` with no zero at either end, and the count of zeros removed
+  # from the end.
+  priv fn strip_zeros(digits: String) -> (String, Int)
+    (digits, _) = Number.strip_leading_zeros(digits)
+    bytes = digits.to_binary()
+    size = bytes.byte_size()
+    last = size
+
+    while last > 0 and Number.byte_at?(bytes, last - 1, BYTE_ZERO)
+      last -= 1
+    end
+
+    (Number.text(bytes, 0, last), size - last)
+  end
+
+  # The bytes from `start` up to, and not including, `stop` as a
+  # String. Every caller cuts a run of ASCII bytes.
+  priv fn text(bytes: Binary, start: Int, stop: Int) -> String
+    if stop <= start
+      return ""
+    end
+
+    match bytes.slice(Range{start: start, stop: stop - 1}).to_string()
+      Result.Ok(text) -> text
+      Result.Err(_) -> ""
+    end
+  end
+end

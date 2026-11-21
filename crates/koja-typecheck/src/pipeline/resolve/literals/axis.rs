@@ -7,9 +7,12 @@
 //! diagnostic label and an example fragment for the empty-and-no-
 //! hint case.
 //!
-//! The hint, when present, always wins. Every entry whose
-//! resolution disagrees emits a mismatch diagnostic but the hint
-//! is what the caller stamps. Without a hint the floor is set by
+//! The hint, when present, always wins. An entry flows into the hint
+//! the way an argument flows into a parameter, so a union member
+//! widens into a union hint and a numeric literal narrows to a sized
+//! hint. Every entry the hint does not accept emits a mismatch
+//! diagnostic but the hint is what the caller stamps. Without a
+//! hint the floor is set by
 //! the first resolved entry, and later entries that disagree diagnose
 //! against the floor. An empty axis with no hint surfaces a
 //! "cannot infer" diagnostic and returns `None`.
@@ -18,6 +21,7 @@ use koja_ast::ast::{Diagnostic, Expr};
 use koja_ast::identifier::ResolvedType;
 use koja_ast::span::Span;
 
+use super::super::coercion::{Mismatch, check_compatible_stamping, mismatch_message};
 use super::super::ctx::Resolver;
 use super::super::types::display_resolution;
 
@@ -54,19 +58,34 @@ pub(super) fn infer_axis<'a, I>(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedType>
 where
-    I: IntoIterator<Item = &'a Expr>,
+    I: IntoIterator<Item = &'a mut Expr>,
 {
-    let entries: Vec<&Expr> = entries.into_iter().collect();
+    let entries: Vec<&mut Expr> = entries.into_iter().collect();
     if let Some(hint) = hint {
-        for entry in &entries {
-            if entry.resolution.is_resolved() && &entry.resolution != hint {
-                diagnostics.push(mismatch(
+        for entry in entries {
+            if !entry.resolution.is_resolved() {
+                continue;
+            }
+            let actual = entry.resolution.clone();
+            match check_compatible_stamping(entry, &actual, hint, resolver.registry) {
+                None => {}
+                Some(Mismatch::Incompatible) => diagnostics.push(mismatch(
                     label.collection,
                     label.axis,
                     hint,
                     entry,
                     resolver,
-                ));
+                )),
+                Some(out_of_range) => diagnostics.push(Diagnostic::error(
+                    mismatch_message(
+                        &format!("{} {}", label.collection, label.axis),
+                        &out_of_range,
+                        hint,
+                        &actual,
+                        resolver.registry,
+                    ),
+                    entry.span,
+                )),
             }
         }
         return Some(hint.clone());

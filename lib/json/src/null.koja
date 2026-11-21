@@ -1,0 +1,10 @@
+@doc """
+The type of the JSON `null` value. It has one value, `JSON.NULL`.
+"""
+struct Null
+end
+
+@doc """
+The JSON `null` value.
+"""
+const NULL: Null = Null{}

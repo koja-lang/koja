@@ -14,8 +14,8 @@ use koja_ast::identifier::{
 };
 
 use super::{
-    BoundOverlay, Conformance, ConformanceScope, GlobalKind, GlobalRegistry, ResolvedProtocolBound,
-    UNIVERSAL_PROTOCOLS,
+    BoundOverlay, Conformance, ConformanceScope, Dispatch, GlobalKind, GlobalRegistry,
+    ResolvedProtocolBound, UNIVERSAL_PROTOCOLS,
 };
 use crate::pipeline::resolve::types::types_equivalent;
 
@@ -262,35 +262,65 @@ impl GlobalRegistry {
     /// `Equality` when every element or member is, functions by site
     /// plus captures. Unions are also `Hash` when every member is.
     /// Functions never hash because the type cannot see its captures.
+    ///
+    /// A union also satisfies any other protocol that every member
+    /// satisfies, provided the protocol dispatches on the receiver
+    /// alone (see [`Self::protocol_dispatches_on_receiver`]). A call
+    /// through the bound then lowers to a switch on the tag with one
+    /// member call per arm.
     fn structural_bound_satisfied(
         &self,
         ty: &ResolvedType,
         bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
     ) -> bool {
-        if !bound.args.is_empty() {
-            return false;
-        }
         let Some(entry) = self.get(bound.protocol_id) else {
             return false;
         };
-        if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
-            return false;
-        }
         let all_satisfy = |parts: &[ResolvedType]| {
             parts
                 .iter()
                 .all(|part| self.bound_satisfied(part, bound, overlay))
         };
-        match (entry.identifier.last(), ty) {
-            ("Debug", _) => true,
-            ("Equality", ResolvedType::Anonymous(AnonymousKind::Function { .. })) => true,
-            ("Equality", ResolvedType::Anonymous(AnonymousKind::Tuple { elements })) => {
+        let global_name = (bound.args.is_empty()
+            && entry.identifier.package() == "Global"
+            && entry.identifier.path().len() == 1)
+            .then(|| entry.identifier.last());
+        match (global_name, ty) {
+            (Some("Debug"), _) => true,
+            (Some("Equality"), ResolvedType::Anonymous(AnonymousKind::Function { .. })) => true,
+            (Some("Equality"), ResolvedType::Anonymous(AnonymousKind::Tuple { elements })) => {
                 all_satisfy(elements)
             }
-            ("Equality" | "Hash", ResolvedType::Union(members)) => all_satisfy(members),
+            (Some("Equality" | "Hash"), ResolvedType::Union(members)) => all_satisfy(members),
+            (_, ResolvedType::Union(members)) => {
+                self.protocol_dispatches_on_receiver(bound.protocol_id) && all_satisfy(members)
+            }
             _ => false,
         }
+    }
+
+    /// Whether every function of `protocol_id` takes `self` and names
+    /// `Self` in no other position. Only such a protocol can dispatch
+    /// on a union value, because the tag of the receiver is the one
+    /// thing that picks the member impl. A static function has no
+    /// receiver to read a tag from, a `Self` parameter could carry a
+    /// different member than the receiver, and a `Self` result would
+    /// have a different type in each arm.
+    fn protocol_dispatches_on_receiver(&self, protocol_id: GlobalRegistryId) -> bool {
+        let Some(GlobalKind::Protocol(Some(definition))) =
+            self.get(protocol_id).map(|entry| &entry.kind)
+        else {
+            return false;
+        };
+        definition.methods.iter().all(|method| {
+            method.dispatch == Dispatch::Instance
+                && !names_protocol_self(&method.return_type, protocol_id)
+                && method
+                    .non_self_params
+                    .iter()
+                    .all(|param| !names_protocol_self(&param.ty, protocol_id))
+        })
     }
 
     /// Whether `protocol_id` names a universal protocol
@@ -388,6 +418,29 @@ impl GlobalRegistry {
     /// Pairwise [`types_equivalent`] over two arg lists.
     fn type_args_equivalent(&self, a: &[ResolvedType], b: &[ResolvedType]) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_equivalent(x, y, self))
+    }
+}
+
+/// Whether `ty` names the implicit `Self` of `protocol_id` at any
+/// depth. Lift registers `Self` as type-param slot 0 of the protocol.
+fn names_protocol_self(ty: &ResolvedType, protocol_id: GlobalRegistryId) -> bool {
+    let any = |parts: &[ResolvedType]| {
+        parts
+            .iter()
+            .any(|part| names_protocol_self(part, protocol_id))
+    };
+    match ty {
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, index },
+            type_args,
+        } => (*owner == protocol_id && index.as_u32() == 0) || any(type_args),
+        ResolvedType::Named { type_args, .. } => any(type_args),
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            any(params) || names_protocol_self(ret, protocol_id)
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => any(elements),
+        ResolvedType::Union(members) => any(members),
+        ResolvedType::Failed | ResolvedType::Unresolved => false,
     }
 }
 

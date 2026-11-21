@@ -56,7 +56,65 @@ test "decode long array"
   input = "[" <> String.join(parts, ",") <> "]"
 
   match try require(decode(input))
-    Value.Array(items) -> assert items.length() == count
+    array: Array -> assert array.items.length() == count
     _ -> fail "expected an array"
   end
+end
+
+test "decode gives each JSON type its own type"
+  input = "[null, true, 1, \"a\", [], {}]"
+  names: List<String> = []
+
+  match try require(decode(input))
+    array: Array ->
+      for item in array.items
+        name =
+          match item
+            _null: Null -> "null"
+            _flag: Bool -> "bool"
+            _number: Number -> "number"
+            _text: String -> "string"
+            _array: Array -> "array"
+            _object: Object -> "object"
+          end
+
+        names = names.append(name)
+      end
+
+    _ ->
+      fail "expected an array"
+  end
+
+  assert names == ["null", "bool", "number", "string", "array", "object"]
+end
+
+test "decode null equals the null constant"
+  null: Value = NULL
+
+  assert try require(decode("null")) == null
+  assert try require(decode("0")) != null
+end
+
+test "decode keeps the text of a number"
+  input = "[1.0,1e2,-0.0,9223372036854775808,0.10000000000000000001]"
+
+  assert encode(try require(decode(input))) == input
+end
+
+test "decode leaves the numeric type to the caller"
+  match try require(decode("1.0"))
+    number: Number ->
+      assert number.to_int() == Result.Ok(1)
+      assert number.to_float() == Result.Ok(1.0)
+
+    _ ->
+      fail "expected a number"
+  end
+end
+
+test "decode rejects a number outside the grammar"
+  assert decode("-").err?()
+  assert decode("1.").err?()
+  assert decode("1e").err?()
+  assert decode("1e+").err?()
 end

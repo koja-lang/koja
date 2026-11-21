@@ -1,0 +1,140 @@
+struct NumberTest
+  priv fn to_int(text: String) -> Result<Int, NumericConversionError>
+    Number{text: text}.to_int()
+  end
+
+  priv fn to_float(text: String) -> Result<Float, NumericConversionError>
+    Number{text: text}.to_float()
+  end
+
+  priv fn equal?(left: String, right: String) -> Bool
+    Number{text: left} == Number{text: right}
+  end
+
+  test "to_int reads an integer"
+    assert NumberTest.to_int("1") == Result.Ok(1)
+    assert NumberTest.to_int("-42") == Result.Ok(-42)
+    assert NumberTest.to_int("9223372036854775807") == Result.Ok(Int.MAX)
+    assert NumberTest.to_int("-9223372036854775808") == Result.Ok(Int.MIN)
+  end
+
+  test "to_int accepts a fraction of zero"
+    assert NumberTest.to_int("1.0") == Result.Ok(1)
+    assert NumberTest.to_int("-0.0") == Result.Ok(0)
+    assert NumberTest.to_int("0.000") == Result.Ok(0)
+  end
+
+  test "to_int applies the exponent"
+    assert NumberTest.to_int("1e2") == Result.Ok(100)
+    assert NumberTest.to_int("1E+2") == Result.Ok(100)
+    assert NumberTest.to_int("1.50e1") == Result.Ok(15)
+    assert NumberTest.to_int("5000e-3") == Result.Ok(5)
+    assert NumberTest.to_int("0e999") == Result.Ok(0)
+  end
+
+  test "to_int rejects a fraction"
+    assert NumberTest.to_int("1.5") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("1e-1") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("15e-1") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+  end
+
+  test "to_int rejects an integer that does not fit in 64 bits"
+    assert NumberTest.to_int("9223372036854775808") ==
+      Result.Err(NumericConversionError.OutOfRange)
+    assert NumberTest.to_int("-9223372036854775809") ==
+      Result.Err(NumericConversionError.OutOfRange)
+    assert NumberTest.to_int("1e19") ==
+      Result.Err(NumericConversionError.OutOfRange)
+    assert NumberTest.to_int("1e999") ==
+      Result.Err(NumericConversionError.OutOfRange)
+  end
+
+  # The exponent is compared and never written out as digits, so a
+  # huge one fails at once.
+  test "to_int does not expand a huge exponent"
+    assert NumberTest.to_int("1e999999999") ==
+      Result.Err(NumericConversionError.OutOfRange)
+    assert NumberTest.to_int("1e99999999999999999999") ==
+      Result.Err(NumericConversionError.OutOfRange)
+    assert NumberTest.to_int("1e-99999999999999999999") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("0e99999999999999999999") == Result.Ok(0)
+  end
+
+  test "to_int rejects text that is not a JSON number"
+    assert NumberTest.to_int("") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("abc") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("-") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("1.") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("1e") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("12abc") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+  end
+
+  test "to_float reads every number form"
+    assert NumberTest.to_float("1") == Result.Ok(1.0)
+    assert NumberTest.to_float("1.5") == Result.Ok(1.5)
+    assert NumberTest.to_float("1e2") == Result.Ok(100.0)
+    assert NumberTest.to_float("-0.0") == Result.Ok(0.0)
+    assert NumberTest.to_float("9223372036854775808") ==
+      Result.Ok(9223372036854775808.0)
+  end
+
+  test "to_float rejects a magnitude too large for a float"
+    assert NumberTest.to_float("1e999") ==
+      Result.Err(NumericConversionError.OutOfRange)
+  end
+
+  test "to_float rejects text that is not a number"
+    assert NumberTest.to_float("abc") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+  end
+
+  test "numbers with one value are equal"
+    assert NumberTest.equal?("1", "1")
+    assert NumberTest.equal?("1", "1.0")
+    assert NumberTest.equal?("1", "1e0")
+    assert NumberTest.equal?("100", "1e2")
+    assert NumberTest.equal?("1.5", "1.50")
+    assert NumberTest.equal?("1.5", "15e-1")
+    assert NumberTest.equal?("0", "-0.0")
+    assert NumberTest.equal?("0", "0e5")
+  end
+
+  test "numbers with different values are not equal"
+    assert not NumberTest.equal?("1", "2")
+    assert not NumberTest.equal?("1", "-1")
+    assert not NumberTest.equal?("1e2", "1e3")
+    assert not NumberTest.equal?("1.5", "1.05")
+    assert not NumberTest.equal?("1", "abc")
+  end
+
+  test "a number literal writes its text"
+    int: Number = 42
+    negative: Number = -7
+    float: Number = 1.5
+
+    assert int.text == "42"
+    assert negative.text == "-7"
+    assert float.text == "1.5"
+  end
+
+  test "values compare numbers by value"
+    one: Value = 1
+    also_one: Value = 1.0
+    two: Value = 2
+    text: Value = "1"
+
+    assert one == also_one
+    assert one != two
+    assert one != text
+  end
+end
