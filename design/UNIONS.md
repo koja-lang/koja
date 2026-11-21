@@ -200,6 +200,19 @@ This list holds the open issues against the rules.
 - [#186](https://github.com/koja-lang/koja/issues/186): a reassignment and
   a field write do not widen a member. This is a missing position under
   rule 4.
+- [#192](https://github.com/koja-lang/koja/issues/192): a union alias does
+  not flatten a union alias that the file declares later. This breaks
+  rule 1.
+- [#193](https://github.com/koja-lang/koja/issues/193): a generic struct
+  literal or variant constructor does not take its type arguments from a
+  member of the expected union. This is a missing position under rule 4.
+- [#194](https://github.com/koja-lang/koja/issues/194): a generic function
+  that widens into a union with a type parameter panics in IR lowering.
+  Rule 4 holds in the typecheck, and the record of the widening is wrong
+  after monomorphization.
+- [#195](https://github.com/koja-lang/koja/issues/195): a union with a type
+  parameter is not canonical after the parameter gets its type. This breaks
+  rule 1.
 
 One limit is a decision and not a bug. A direct call on a union value is an
 error under rule 6, and [GAPS.md](GAPS.md) records the open question.
