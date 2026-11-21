@@ -38,6 +38,64 @@ fn direction_name(d: Direction) -> String
   end
 end
 
+# Struct constants of a recursive type. A recursive field sits behind
+# a pointer in a compiled program, and a constant holds one like any
+# other value of the type.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct Node
+  value: Int
+  next: Option<Node>
+end
+
+# A field default supplies the recursive field.
+struct Step
+  value: Int
+  next: Option<Step> = Option.None
+end
+
+# A struct that holds a recursive struct by value.
+struct Carrier
+  name: String
+  node: Node
+end
+
+# A cycle through two structs.
+struct Outer
+  id: Int
+  inner: Inner
+end
+
+struct Inner
+  back: Option<Outer>
+end
+
+const LEAF: Node = Node{value: 1, next: Option.None}
+const FIRST: Step = Step{value: 3}
+const CARRIED: Carrier = Carrier{name: "carried", node: LEAF}
+const ROOT: Outer = Outer{id: 7, inner: Inner{back: Option.None}}
+
+# A constant that is built at program start reads a static one.
+const PAIR: Node = Node{value: 2, next: Option.Some(LEAF)}
+
+fn depth(node: Node) -> Int
+  match node.next
+    Option.Some(rest) -> 1 + depth(rest)
+    Option.None -> 1
+  end
+end
+
+# A write to a copy leaves the constant as it was.
+fn overwrite -> Int
+  copy = LEAF
+  copy.next = Option.Some(Node{value: 9, next: Option.Some(LEAF)})
+  depth(copy) + depth(LEAF)
+end
+
 MAX.print()
 PI.print()
 NAME.print()
@@ -51,3 +109,39 @@ ORIGIN.y.print()
 NOTHING.none?().print()
 Slot.EMPTY.ref.none?().print()
 Holder{}.slot.ref.none?().print()
+
+LEAF.value.print()
+LEAF.next.none?().print()
+FIRST.value.print()
+FIRST.next.none?().print()
+CARRIED.name.print()
+CARRIED.node.value.print()
+CARRIED.node.next.none?().print()
+ROOT.id.print()
+ROOT.inner.back.none?().print()
+depth(LEAF).print()
+depth(PAIR).print()
+overwrite().print()
+
+# Copies and writes in a loop release every block they allocate, and
+# the constant stays readable.
+_ = overwrite()
+start = Rt.koja_rt_live_blocks()
+total = 0
+i = 0
+
+loop
+  total += overwrite()
+  i += 1
+
+  if i == 100
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+(finish == start
+  ? "recursive struct constants: ok"
+  : "recursive struct constants: LEAK").print()
+(total == 400).print()
+LEAF.next.none?().print()

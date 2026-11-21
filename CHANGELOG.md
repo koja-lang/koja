@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failed call on a file, a descriptor, a socket, or a TLS connection always reports its own cause. Before, a program with many processes could get the cause of a different failed call, such as `File.Error.NotFound` in place of `File.Error.AlreadyExists`.
 - A constant of a union type takes a value of one member, as in `const NOTHING: Value = Null{}`, and so does a union field of a struct constant.
 - A constant of type `Int` or `Float` takes a sized number from another constant, as in `const WIDE: Int = SMALL` where `SMALL` is an `Int32`, and so does an `Int` or `Float` field of a struct constant.
+- A compiled program can hold a struct constant of a recursive type, as in `const LEAF: Node = Node{value: 1, next: Option.None}` where `Node` has a `next: Option<Node>` field.
 
 ## [0.20.1] - 2026-11-06
 
