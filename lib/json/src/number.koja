@@ -11,16 +11,6 @@ expects a JSON value, and so does `to_json()` on an `Int` or a
 struct Number: Equality, FloatLiteral, IntLiteral
   text: String
 
-  @doc """
-  Why a `Number` could not convert. `InvalidFormat` means `text` is
-  not a JSON number. A decoded number and a literal never cause it.
-  """
-  enum Error
-    InvalidFormat
-    NotAnInteger
-    OutOfRange
-  end
-
   # `EXPONENT_DIGITS` is the longest exponent, in digits, that
   # `decimal` reads. A longer one cannot take part in `Int`
   # arithmetic. `INT_DIGITS` is the most decimal digits an `Int` can
@@ -60,27 +50,21 @@ struct Number: Equality, FloatLiteral, IntLiteral
   @doc """
   Converts to a `Float`. The result is the nearest float, so a number
   with many digits can lose precision. Fails with
-  `Number.Error.OutOfRange` when the magnitude is too large for a
-  float.
+  `NumericConversionError.OutOfRange` when the magnitude is too large
+  for a float.
   """
-  fn to_float(self) -> Float ! Number.Error
-    match self.text.to_float()
-      Result.Ok(value) -> value
-      Result.Err(NumericConversionError.InvalidFormat) ->
-        fail Number.Error.InvalidFormat
-      Result.Err(NumericConversionError.OutOfRange) ->
-        fail Number.Error.OutOfRange
-    end
+  fn to_float(self) -> Float ! NumericConversionError
+    try self.text.to_float()
   end
 
   @doc """
   Converts to an `Int`. A number with a fraction of zero is an
   integer, so `1.0` and `1e2` convert to `1` and `100`. Fails with
-  `Number.Error.NotAnInteger` when the number has a fraction, as in
-  `1.5`, and with `Number.Error.OutOfRange` when the integer does not
-  fit in 64 bits.
+  `NumericConversionError.InvalidFormat` when the number has a
+  fraction, as in `1.5`, and with `NumericConversionError.OutOfRange`
+  when the integer does not fit in 64 bits.
   """
-  fn to_int(self) -> Int ! Number.Error
+  fn to_int(self) -> Int ! NumericConversionError
     (negative, digits, exponent) = try self.decimal()
 
     if digits.empty?()
@@ -88,11 +72,11 @@ struct Number: Equality, FloatLiteral, IntLiteral
     end
 
     if exponent < 0
-      fail Number.Error.NotAnInteger
+      fail NumericConversionError.InvalidFormat
     end
 
     if digits.byte_length() + exponent > Number.INT_DIGITS
-      fail Number.Error.OutOfRange
+      fail NumericConversionError.OutOfRange
     end
 
     whole = negative ? "-" <> digits : digits
@@ -103,7 +87,7 @@ struct Number: Equality, FloatLiteral, IntLiteral
       i += 1
     end
 
-    whole.to_int() rescue _ -> fail Number.Error.OutOfRange
+    try whole.to_int()
   end
 
   # The number as `(negative, digits, exponent)`. Its value is `digits`
@@ -113,9 +97,10 @@ struct Number: Equality, FloatLiteral, IntLiteral
   # out as digits, so `1e999999999` costs no memory.
   #
   # Fails with `InvalidFormat` when the text is not a JSON number. An
-  # exponent longer than `EXPONENT_DIGITS` fails as `to_int` reports
-  # it: `OutOfRange` when positive, `NotAnInteger` when negative.
-  priv fn decimal(self) -> (Bool, String, Int) ! Number.Error
+  # exponent longer than `EXPONENT_DIGITS` fails the way `to_int`
+  # reports it, with `OutOfRange` when positive and `InvalidFormat`
+  # when negative.
+  priv fn decimal(self) -> (Bool, String, Int) ! NumericConversionError
     bytes = self.text.to_binary()
     size = bytes.byte_size()
     negative = Number.byte_at?(bytes, 0, BYTE_MINUS)
@@ -123,7 +108,7 @@ struct Number: Equality, FloatLiteral, IntLiteral
     whole_end = Number.skip_digits(bytes, whole_start)
 
     if whole_end == whole_start
-      fail Number.Error.InvalidFormat
+      fail NumericConversionError.InvalidFormat
     end
 
     fraction_start = whole_end
@@ -134,7 +119,7 @@ struct Number: Equality, FloatLiteral, IntLiteral
       fraction_end = Number.skip_digits(bytes, fraction_start)
 
       if fraction_end == fraction_start
-        fail Number.Error.InvalidFormat
+        fail NumericConversionError.InvalidFormat
       end
     end
 
@@ -153,7 +138,7 @@ struct Number: Equality, FloatLiteral, IntLiteral
     if not Number.byte_at?(bytes, fraction_end, BYTE_LOWER_E)
       and not Number.byte_at?(bytes, fraction_end, BYTE_UPPER_E)
 
-      fail Number.Error.InvalidFormat
+      fail NumericConversionError.InvalidFormat
     end
 
     sign_at = fraction_end + 1
@@ -163,7 +148,7 @@ struct Number: Equality, FloatLiteral, IntLiteral
     power_end = Number.skip_digits(bytes, power_start)
 
     if power_end == power_start or power_end != size
-      fail Number.Error.InvalidFormat
+      fail NumericConversionError.InvalidFormat
     end
 
     if digits.empty?()
@@ -176,16 +161,16 @@ struct Number: Equality, FloatLiteral, IntLiteral
 
     if power.byte_length() > Number.EXPONENT_DIGITS
       if negative_exponent
-        fail Number.Error.NotAnInteger
+        fail NumericConversionError.InvalidFormat
       end
 
-      fail Number.Error.OutOfRange
+      fail NumericConversionError.OutOfRange
     end
 
     magnitude = 0
 
     if not power.empty?()
-      magnitude = power.to_int() rescue _ -> fail Number.Error.InvalidFormat
+      magnitude = try power.to_int()
     end
 
     exponent = negative_exponent ? -magnitude : magnitude

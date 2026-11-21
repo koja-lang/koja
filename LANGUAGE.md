@@ -3236,8 +3236,8 @@ end
 
 `JSON.decode` checks a number against the JSON grammar and keeps its text, so it loses no digit. The code that reads the number picks the type:
 
-- `number.to_int()` returns `Int ! JSON.Number.Error`. A number with a fraction of zero is an integer, so `1.0` gives `1` and `1e2` gives `100`. It fails with `NotAnInteger` for `1.5` and with `OutOfRange` for an integer that does not fit in 64 bits.
-- `number.to_float()` returns `Float ! JSON.Number.Error`. It gives the nearest float, and fails with `OutOfRange` when the magnitude is too large.
+- `number.to_int()` returns `Int ! NumericConversionError`. A number with a fraction of zero is an integer, so `1.0` gives `1` and `1e2` gives `100`. It fails with `InvalidFormat` for `1.5`, the same as `"1.5".to_int()`, and with `OutOfRange` for an integer that does not fit in 64 bits.
+- `number.to_float()` returns `Float ! NumericConversionError`. It gives the nearest float, and fails with `OutOfRange` when the magnitude is too large.
 
 Two numbers are equal when they have the same value, so a decoded `1` equals a decoded `1.0`.
 

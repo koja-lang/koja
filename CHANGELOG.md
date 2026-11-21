@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A literal in a position that expects a union builds one member of it. `"text"` is the `String` member and `true` is the `Bool` member. Without such a member, the literal goes to the one member that implements its literal protocol, and it is an error when two members do.
 - Each entry of a list or map literal flows into the expected element type the way an argument does. `List<Int | String> = [1, "a"]`, `List<UInt8> = [1, 2, 3]`, and a `List<Shape>` literal that holds a `Circle` and a `Square` now compile.
 - `JSON.NULL` is the JSON `null` value, of the new type `JSON.Null`.
-- `JSON.Number` holds a JSON number as its text. `to_int()` and `to_float()` convert it and fail with `JSON.Number.Error`. `to_int()` accepts a number with a fraction of zero, so `1.0` and `1e2` are integers.
+- `JSON.Number` holds a JSON number as its text. `to_int()` and `to_float()` convert it and fail with `NumericConversionError`. `to_int()` accepts a number with a fraction of zero, so `1.0` and `1e2` are integers.
 - `JSON.get(value, key)` returns the value of a key in a JSON object as an `Option<JSON.Value>`, and `Option.None` when the value is not an object. `JSON.Object.get(key)` does the same for an object.
 
 ### Changed

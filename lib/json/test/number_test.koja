@@ -1,9 +1,9 @@
 struct NumberTest
-  priv fn to_int(text: String) -> Result<Int, Number.Error>
+  priv fn to_int(text: String) -> Result<Int, NumericConversionError>
     Number{text: text}.to_int()
   end
 
-  priv fn to_float(text: String) -> Result<Float, Number.Error>
+  priv fn to_float(text: String) -> Result<Float, NumericConversionError>
     Number{text: text}.to_float()
   end
 
@@ -33,39 +33,50 @@ struct NumberTest
   end
 
   test "to_int rejects a fraction"
-    assert NumberTest.to_int("1.5") == Result.Err(Number.Error.NotAnInteger)
-    assert NumberTest.to_int("1e-1") == Result.Err(Number.Error.NotAnInteger)
-    assert NumberTest.to_int("15e-1") == Result.Err(Number.Error.NotAnInteger)
+    assert NumberTest.to_int("1.5") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("1e-1") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("15e-1") ==
+      Result.Err(NumericConversionError.InvalidFormat)
   end
 
   test "to_int rejects an integer that does not fit in 64 bits"
     assert NumberTest.to_int("9223372036854775808") ==
-      Result.Err(Number.Error.OutOfRange)
+      Result.Err(NumericConversionError.OutOfRange)
     assert NumberTest.to_int("-9223372036854775809") ==
-      Result.Err(Number.Error.OutOfRange)
-    assert NumberTest.to_int("1e19") == Result.Err(Number.Error.OutOfRange)
-    assert NumberTest.to_int("1e999") == Result.Err(Number.Error.OutOfRange)
+      Result.Err(NumericConversionError.OutOfRange)
+    assert NumberTest.to_int("1e19") ==
+      Result.Err(NumericConversionError.OutOfRange)
+    assert NumberTest.to_int("1e999") ==
+      Result.Err(NumericConversionError.OutOfRange)
   end
 
   # The exponent is compared and never written out as digits, so a
   # huge one fails at once.
   test "to_int does not expand a huge exponent"
     assert NumberTest.to_int("1e999999999") ==
-      Result.Err(Number.Error.OutOfRange)
+      Result.Err(NumericConversionError.OutOfRange)
     assert NumberTest.to_int("1e99999999999999999999") ==
-      Result.Err(Number.Error.OutOfRange)
+      Result.Err(NumericConversionError.OutOfRange)
     assert NumberTest.to_int("1e-99999999999999999999") ==
-      Result.Err(Number.Error.NotAnInteger)
+      Result.Err(NumericConversionError.InvalidFormat)
     assert NumberTest.to_int("0e99999999999999999999") == Result.Ok(0)
   end
 
   test "to_int rejects text that is not a JSON number"
-    assert NumberTest.to_int("") == Result.Err(Number.Error.InvalidFormat)
-    assert NumberTest.to_int("abc") == Result.Err(Number.Error.InvalidFormat)
-    assert NumberTest.to_int("-") == Result.Err(Number.Error.InvalidFormat)
-    assert NumberTest.to_int("1.") == Result.Err(Number.Error.InvalidFormat)
-    assert NumberTest.to_int("1e") == Result.Err(Number.Error.InvalidFormat)
-    assert NumberTest.to_int("12abc") == Result.Err(Number.Error.InvalidFormat)
+    assert NumberTest.to_int("") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("abc") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("-") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("1.") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("1e") ==
+      Result.Err(NumericConversionError.InvalidFormat)
+    assert NumberTest.to_int("12abc") ==
+      Result.Err(NumericConversionError.InvalidFormat)
   end
 
   test "to_float reads every number form"
@@ -78,11 +89,13 @@ struct NumberTest
   end
 
   test "to_float rejects a magnitude too large for a float"
-    assert NumberTest.to_float("1e999") == Result.Err(Number.Error.OutOfRange)
+    assert NumberTest.to_float("1e999") ==
+      Result.Err(NumericConversionError.OutOfRange)
   end
 
   test "to_float rejects text that is not a number"
-    assert NumberTest.to_float("abc") == Result.Err(Number.Error.InvalidFormat)
+    assert NumberTest.to_float("abc") ==
+      Result.Err(NumericConversionError.InvalidFormat)
   end
 
   test "numbers with one value are equal"
