@@ -32,11 +32,13 @@ end
 
 test "Status.reason matches each named constructor"
   cases: List<(Status, String)> = [
-    (Status.bad_request(), "Bad Request"), (Status.created(), "Created"),
+    (Status.bad_request(), "Bad Request"),
+    (Status.created(), "Created"),
     (Status.forbidden(), "Forbidden"),
     (Status.internal_server_error(), "Internal Server Error"),
     (Status.method_not_allowed(), "Method Not Allowed"),
-    (Status.no_content(), "No Content"), (Status.not_found(), "Not Found"),
+    (Status.no_content(), "No Content"),
+    (Status.not_found(), "Not Found"),
     (Status.unauthorized(), "Unauthorized")
   ]
 

@@ -85,8 +85,12 @@ end
 
 test "to_string reassembles components"
   inputs = [
-    "http://user:pass@example.com:8080/path?a=1#frag", "https://koja-lang.org/",
-    "//koja-lang.org/", "/foo/bar", "foo/bar", "https:?query"
+    "http://user:pass@example.com:8080/path?a=1#frag",
+    "https://koja-lang.org/",
+    "//koja-lang.org/",
+    "/foo/bar",
+    "foo/bar",
+    "https:?query"
   ]
 
   for input in inputs

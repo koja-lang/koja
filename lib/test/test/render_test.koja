@@ -80,10 +80,13 @@ struct RenderTest
     ))
     expected = String.join(
       [
-        "failure: assertion failed", "   ╭─ test/stack_test.koja:23:12",
-        "   │", "23 │     assert popped == 3",
+        "failure: assertion failed",
+        "   ╭─ test/stack_test.koja:23:12",
+        "   │",
+        "23 │     assert popped == 3",
         "   │            ───────────",
-        "   │            left:  2", "   │            right: 3"
+        "   │            left:  2",
+        "   │            right: 3"
       ],
       "\n",
     )
@@ -115,7 +118,8 @@ struct RenderTest
     ))
     expected = String.join(
       [
-        "crash: index 5 out of bounds", "   ╭─ test/stack_test.koja:14",
+        "crash: index 5 out of bounds",
+        "   ╭─ test/stack_test.koja:14",
         "   │   at list.koja:40"
       ],
       "\n",

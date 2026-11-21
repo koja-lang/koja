@@ -230,7 +230,8 @@ extend ISO8601
     match self
       ISO8601.Basic ->
         match (
-          ISO8601.digits(bytes, start, 4), ISO8601.digits(bytes, start + 4, 2),
+          ISO8601.digits(bytes, start, 4),
+          ISO8601.digits(bytes, start + 4, 2),
           ISO8601.digits(bytes, start + 6, 2)
         )
           (Option.Some(year), Option.Some(month), Option.Some(day)) ->
@@ -248,7 +249,8 @@ extend ISO8601
         end
 
         match (
-          ISO8601.digits(bytes, start, 4), ISO8601.digits(bytes, start + 5, 2),
+          ISO8601.digits(bytes, start, 4),
+          ISO8601.digits(bytes, start + 5, 2),
           ISO8601.digits(bytes, start + 8, 2)
         )
           (Option.Some(year), Option.Some(month), Option.Some(day)) ->

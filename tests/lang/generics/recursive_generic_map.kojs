@@ -8,7 +8,8 @@ enum JsonValue
 end
 
 obj: Map<String, JsonValue> = [
-  "name": JsonValue.JStr("Koja"), "version": JsonValue.JInt(1)
+  "name": JsonValue.JStr("Koja"),
+  "version": JsonValue.JInt(1)
 ]
 v = JsonValue.JObj(obj)
 

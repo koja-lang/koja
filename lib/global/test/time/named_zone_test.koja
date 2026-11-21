@@ -52,8 +52,10 @@ priv fn chicago -> TimeZone
     identifier: "America/Chicago",
     initial: offset(LMT),
     transitions: [
-      transition(1_741_507_200, CDT), transition(1_762_066_800, CST),
-      transition(1_772_956_800, CDT), transition(1_793_516_400, CST)
+      transition(1_741_507_200, CDT),
+      transition(1_762_066_800, CST),
+      transition(1_772_956_800, CDT),
+      transition(1_793_516_400, CST)
     ],
   })
 end

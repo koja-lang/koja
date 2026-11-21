@@ -57,18 +57,13 @@ pub(super) fn type_params_doc(tps: &[TypeParam]) -> Doc {
     ]))
 }
 
-/// Formats a comma-separated list of items using fill layout inside brackets.
+/// Formats a comment-free segment list (a binary literal or a binary
+/// pattern) using fill layout inside its delimiters.
 ///
-/// Items are packed left-to-right on each line. A trailing comma is added
-/// to all items except the last. The result is wrapped in a group so the
+/// Segments are packed left-to-right on each line. A comma is added to
+/// all segments except the last. The result is wrapped in a group so the
 /// whole list can collapse to a single line when it fits.
-pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc {
-    group(bracket_list_body(open, close, items))
-}
-
-/// The layout of [`fill_bracket_list`] without its enclosing group, so a
-/// caller can bind the break decision to a larger group.
-pub(super) fn bracket_list_body(open: &str, close: &str, items: Vec<Doc>) -> Doc {
+pub(super) fn segment_list(open: &str, close: &str, items: Vec<Doc>) -> Doc {
     let last = items.len() - 1;
     let fill_items: Vec<Doc> = items
         .into_iter()
@@ -81,9 +76,28 @@ pub(super) fn bracket_list_body(open: &str, close: &str, items: Vec<Doc>) -> Doc
             }
         })
         .collect();
-    concat(vec![
+    group(concat(vec![
         text(open),
         indent(2, concat(vec![softline(), fill(fill_items)])),
+        softline(),
+        text(close),
+    ]))
+}
+
+/// The layout of a comment-free element list (a list, map, or tuple)
+/// without its enclosing group, so a caller can bind the break decision
+/// to a larger group. The list stays on one line when the group fits and
+/// otherwise puts one element per line, without a trailing comma.
+pub(super) fn stacked_list_body(open: &str, close: &str, items: Vec<Doc>) -> Doc {
+    concat(vec![
+        text(open),
+        indent(
+            2,
+            concat(vec![
+                softline(),
+                intersperse(items, concat(vec![text(","), line()])),
+            ]),
+        ),
         softline(),
         text(close),
     ])
@@ -561,7 +575,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
                     .iter()
                     .map(|seg| p.binary_segment_to_doc(seg))
                     .collect();
-                fill_bracket_list("<<", ">>", seg_docs)
+                segment_list("<<", ">>", seg_docs)
             }
         }
         Pattern::Or { patterns, .. } => {

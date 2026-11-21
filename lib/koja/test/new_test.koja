@@ -11,9 +11,12 @@ end
 
 test "snake_case normalizes kebab, Pascal, and acronym spellings"
   cases: List<(String, String)> = [
-    ("git_hygiene", "git_hygiene"), ("git-hygiene", "git_hygiene"),
-    ("GitHygiene", "git_hygiene"), ("My-App", "my_app"),
-    ("HTTPServer", "http_server"), ("v2Client", "v2_client")
+    ("git_hygiene", "git_hygiene"),
+    ("git-hygiene", "git_hygiene"),
+    ("GitHygiene", "git_hygiene"),
+    ("My-App", "my_app"),
+    ("HTTPServer", "http_server"),
+    ("v2Client", "v2_client")
   ]
 
   for pair in cases

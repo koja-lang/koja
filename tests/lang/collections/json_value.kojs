@@ -47,7 +47,8 @@ end
 
 arr = [JsonValue.JInt(1), JsonValue.JStr("hello"), JsonValue.JBool(true)]
 obj: Map<String, JsonValue> = [
-  "name": JsonValue.JStr("Koja"), "tags": JsonValue.JArr(arr),
+  "name": JsonValue.JStr("Koja"),
+  "tags": JsonValue.JArr(arr),
   "active": JsonValue.JBool(true)
 ]
 root = JsonValue.JObj(obj)

@@ -54,8 +54,10 @@ end
 
 test "the state wire table pins the ABI integers"
   pinned: List<(Process.State, Int)> = [
-    (Process.State.Blocked, 0), (Process.State.Created, 1),
-    (Process.State.Runnable, 2), (Process.State.Running, 3),
+    (Process.State.Blocked, 0),
+    (Process.State.Created, 1),
+    (Process.State.Runnable, 2),
+    (Process.State.Running, 3),
     (Process.State.WaitingIO, 4)
   ]
 

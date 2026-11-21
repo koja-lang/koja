@@ -7,8 +7,12 @@ end
 
 test "basename returns the last component"
   cases: List<(String, String)> = [
-    ("foo", "foo"), ("foo/bar", "bar"), ("foo/bar/", "bar"), ("/", ""),
-    ("//", ""), ("", "")
+    ("foo", "foo"),
+    ("foo/bar", "bar"),
+    ("foo/bar/", "bar"),
+    ("/", ""),
+    ("//", ""),
+    ("", "")
   ]
 
   for test_case in cases
@@ -19,8 +23,13 @@ end
 
 test "dirname returns the directory component"
   cases: List<(String, String)> = [
-    ("/foo/bar.ex", "/foo"), ("/foo/bar/", "/foo/bar"), ("bar.ex", "."),
-    ("foo//bar", "foo"), ("/foo", "/"), ("/", "/"), ("", ".")
+    ("/foo/bar.ex", "/foo"),
+    ("/foo/bar/", "/foo/bar"),
+    ("bar.ex", "."),
+    ("foo//bar", "foo"),
+    ("/foo", "/"),
+    ("/", "/"),
+    ("", ".")
   ]
 
   for test_case in cases
@@ -31,8 +40,12 @@ end
 
 test "extname returns the last dot segment of the basename"
   cases: List<(String, String)> = [
-    ("foo.erl", ".erl"), ("~/foo/bar", ""), (".gitignore", ""), ("foo.", "."),
-    ("foo.d/bar", ""), ("archive.tar.gz", ".gz")
+    ("foo.erl", ".erl"),
+    ("~/foo/bar", ""),
+    (".gitignore", ""),
+    ("foo.", "."),
+    ("foo.d/bar", ""),
+    ("archive.tar.gz", ".gz")
   ]
 
   for test_case in cases

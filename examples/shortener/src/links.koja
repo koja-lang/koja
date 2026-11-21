@@ -17,8 +17,10 @@ struct Link: JSON.Encoding
   """
   fn to_json(self) -> JSON.Value
     [
-      "code": self.code.to_json(), "created_at": self.created_at.to_json(),
-      "hits": self.hits.to_json(), "short_path": ("/" <> self.code).to_json(),
+      "code": self.code.to_json(),
+      "created_at": self.created_at.to_json(),
+      "hits": self.hits.to_json(),
+      "short_path": ("/" <> self.code).to_json(),
       "url": self.url.to_json()
     ]
   end

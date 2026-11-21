@@ -3172,7 +3172,7 @@ payload: JSON.Value = [
   "name": "Koja",
   "active": true,
   "scores": [10, 20, 30],
-  "metadata": [:],
+  "metadata": [:]
 ]
 ```
 
