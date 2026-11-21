@@ -1,0 +1,64 @@
+# A constant of a union type takes a value of one member. The value
+# widens into the union at the top level, in a field of a struct
+# constant, and through a read of another constant.
+
+struct Null
+end
+
+type Value = Null | Bool
+
+struct Slot
+  value: Value
+end
+
+struct Limits
+  max: Int | String
+end
+
+const NOTHING: Value = Null{}
+const FLAG: Value = true
+const NAME: Int | String = "koja"
+const LIMIT: Int | String = 5
+const SLOT: Slot = Slot{value: Null{}}
+const LIMITS: Limits = Limits{max: 9}
+
+const MEMBER: Null = Null{}
+const COPY: Value = MEMBER
+const WIDER: Bool | Int | String = LIMIT
+
+fn describe(value: Value) -> String
+  match value
+    flag: Bool -> "bool #{flag}"
+    nothing: Null -> "null"
+  end
+end
+
+fn label(value: Int | String) -> String
+  match value
+    n: Int -> "int #{n}"
+    s: String -> "string #{s}"
+  end
+end
+
+fn from_function -> Value
+  NOTHING
+end
+
+describe(NOTHING).print()
+describe(FLAG).print()
+label(NAME).print()
+label(LIMIT).print()
+describe(SLOT.value).print()
+label(LIMITS.max).print()
+describe(COPY).print()
+describe(from_function()).print()
+
+match WIDER
+  flag: Bool -> "bool #{flag}".print()
+  n: Int -> "int #{n}".print()
+  s: String -> "string #{s}".print()
+end
+
+# A read into a local keeps the union type.
+local = NOTHING
+describe(local).print()

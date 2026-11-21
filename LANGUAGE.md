@@ -177,7 +177,7 @@ const TAGS: Set<String> = ["web", "api"]
 
 A constant may read another constant declared anywhere in the program, in any source order. A constant that depends on itself, directly or through other constants, is a compile error.
 
-How a constant reaches its use sites depends on its value. Scalars (int, float, bool) are inlined at every read. Strings, binaries, enum variants, and struct literals of those are pooled once per program. Collections, and any value that contains one, are built once at program start. Each read borrows the shared value, and a binding clones it like any other list, so appending to a binding never changes the constant.
+How a constant reaches its use sites depends on its value. Scalars (int, float, bool) are inlined at every read. Strings, binaries, enum variants, and struct literals of those are pooled once per program. Collections, values that widen into a union type, and any value that contains one of those, are built once at program start. Each read borrows the shared value, and a binding clones it like any other list, so appending to a binding never changes the constant.
 
 Within a package, constants are read by bare name (`MAX`). Constants from the auto-imported `Global` package also resolve bare (`STDOUT`). Public constants in other packages are read through the package namespace (`Mathlib.PI`).
 

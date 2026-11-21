@@ -10,7 +10,7 @@ use crate::types::IRType;
 
 use super::calls::seal_calls;
 use super::closures::seal_closure_ops;
-use super::constants::{seal_built_constants, seal_loadconst_pool};
+use super::constants::{seal_built_constants, seal_loadconst_pool, seal_struct_constants};
 use super::enums::seal_enum_ops;
 use super::function::seal_package;
 use super::seal_panic;
@@ -43,6 +43,7 @@ pub(crate) fn seal_program(program: &IRProgram) {
     seal_program_enum_ops(program);
     seal_program_closure_ops(program);
     seal_program_loadconst_pool(program);
+    seal_struct_constants(&declarations);
     seal_built_constants(&declarations, &program.built_constant_order);
     seal_program_entry_wrappers(program);
 }

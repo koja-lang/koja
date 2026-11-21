@@ -489,3 +489,36 @@ already (`lower_union_member_call` in `koja-ir/src/lower/unions.rs`).
 The open question is whether an inherent function that every member
 happens to share should count. It should not, because then adding a
 member silently changes which calls compile.
+
+---
+
+## Tagged values in constants are not static data
+
+Found 2026-11-21 with the fix for a constant that widens a member into
+a union. The static constant folder (`lower_constant_value` in
+`koja-ir/src/lower/constants.rs`) can express a scalar, a string, a
+binary, a unit variant, and a struct of those. A payload variant such
+as `Option.Some(1)` and a value that widens into a union both hold a
+tag and a payload, and the folder has no form for that. Each one
+becomes a `Built` constant. An init function runs at program start and
+stores the value in a global, and each read loads the global.
+
+Consequence: the behavior is correct and the cost is small.
+`const LIMIT: Int | String = 5` is one init call at start and a load
+at each read, where `const LIMIT = 5` is an inline scalar. A struct
+constant becomes `Built` as a whole when one field holds such a value.
+
+**Fix path:** one feature for both, static tagged values.
+`IRConstantValue` gains a form for a variant with a payload and a form
+for a union value. The interpreter builds the value from them, and the
+seal checks the payload against the declaration. The native backend is
+the real work. An enum is an array of integer chunks and a union is a
+tag word with an array of `i64` words, so a constant of either must
+write its payload as integer words at compile time. A struct payload
+most likely needs an encoder that flattens a constant struct into
+words with the offsets and padding of the target, which would be a
+second place that knows struct layout. This estimate comes from
+reading `koja-ir-llvm/src/emit/constants.rs` and `emit/unions.rs`, and
+nobody has tried it. Do payload variants and unions in one change.
+Static unions alone would leave `Option.Some(1)` built at start and a
+union static, with no reason a user could see.
