@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change.** The `HTTP` client functions fail with `HTTP.Error | Socket.Error | IO.Error | TLSError`, so a network failure keeps its own type. `HTTP.Error` is now `BodyTooLarge`, `InvalidUrl(String)`, `Parse(Parser.Error)`, or `Timeout`. A union has no `message()`, so `rescue e -> fail e.message()` becomes a `match` on the type of `e`.
 - **Breaking change.** `IO.Error.last()`, `File.Error.last()`, `Socket.Error.last()`, and `IO.Error.from_errno()` are gone. Each one read a value that a different failed call could replace first. Every function that can fail already returns its error, so match on that error. `from_code` on the three enums stays but is no longer in the docs.
 - The `HTTP` client reads the response as bytes, so a binary body arrives whole and a multibyte character split across two reads no longer fails. It turns `TCP_NODELAY` on, skips a 1xx response other than 101, and fails with `HTTP.Error.BodyTooLarge` for a body over 16 MiB.
+- `koja format` puts each element of a list, map, or tuple literal on its own line when the literal does not fit on one line. The broken form has no trailing comma, and a literal that fits stays on one line. Binary literals still pack.
 
 ### Fixed
 

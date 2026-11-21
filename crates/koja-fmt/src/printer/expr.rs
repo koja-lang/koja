@@ -9,7 +9,7 @@ use koja_ast::span::Span;
 use super::Printer;
 use super::attach::Slot;
 use super::comments::{leading_docs, trailing_doc};
-use super::seq::{Group, SeqEntry, element_lines, field_lines, push_stragglers};
+use super::seq::{Group, SeqEntry, element_lines, field_lines, push_stragglers, segment_lines};
 use super::util::*;
 
 impl Printer {
@@ -35,7 +35,7 @@ impl Printer {
                         |seg| seg.span,
                         |p, seg| p.binary_segment_to_doc(seg),
                     );
-                    self.element_list_to_doc("<<", ">>", entries, expr.span)
+                    self.segment_list_to_doc("<<", ">>", entries, expr.span)
                 }
             }
             ExprKind::Call { callee, args, .. } => concat(vec![
@@ -519,8 +519,9 @@ impl Printer {
         )
     }
 
-    /// Formats an element list (list, tuple, map, or binary literal) with
-    /// packed layout when comment-free and comment-aware packing otherwise.
+    /// Formats an element list (list, map, or tuple). A comment-free list
+    /// stays on one line when it fits and otherwise takes one element per
+    /// line. A list that holds a comment is always broken.
     pub(super) fn element_list_to_doc(
         &mut self,
         open: &str,
@@ -546,10 +547,27 @@ impl Printer {
     ) -> Doc {
         if comment_free {
             let items = entries.into_iter().map(|e| e.doc).collect();
-            return bracket_list_body(open, close, items);
+            return stacked_list_body(open, close, items);
         }
         let stragglers = self.comments.take(owner, Slot::Stragglers);
         broken_list(open, close, element_lines(entries, stragglers))
+    }
+
+    /// Formats a segment list (binary literal or binary pattern) with
+    /// packed layout when comment-free and comment-aware packing otherwise.
+    pub(super) fn segment_list_to_doc(
+        &mut self,
+        open: &str,
+        close: &str,
+        entries: Vec<SeqEntry>,
+        owner: Span,
+    ) -> Doc {
+        if self.entries_comment_free(&entries, owner) {
+            let items = entries.into_iter().map(|e| e.doc).collect();
+            return segment_list(open, close, items);
+        }
+        let stragglers = self.comments.take(owner, Slot::Stragglers);
+        broken_list(open, close, segment_lines(entries, stragglers))
     }
 
     /// Builds the bracket layout for a non-empty collection literal

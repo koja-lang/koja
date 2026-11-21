@@ -130,7 +130,9 @@ priv fn pretty_assertion(assertion: Assertion, palette: Palette) -> String
   location = "#{assertion.file}:#{assertion.line}:#{assertion.column}"
 
   rows: List<String> = [
-    "#{head} #{title}", "#{pad} #{corner} #{location}", gutter,
+    "#{head} #{title}",
+    "#{pad} #{corner} #{location}",
+    gutter,
     "#{line_label} #{bar} #{assertion.source_line}",
     "#{gutter} #{indent}#{underline}"
   ]

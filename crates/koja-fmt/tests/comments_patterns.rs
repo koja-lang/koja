@@ -10,8 +10,7 @@ fn list_pattern_comment_anchors_to_element() {
           match packet
             [
               # version byte
-              version,
-              flags
+              version, flags
             ] -> version + flags
             _ -> 0
           end
@@ -22,7 +21,8 @@ fn list_pattern_comment_anchors_to_element() {
           match packet
             [
               # version byte
-              version, flags
+              version,
+              flags
             ] -> version + flags
             _ -> 0
           end
@@ -38,7 +38,8 @@ fn tuple_pattern_trailing_comment_stays_on_element() {
         fn f(point: (Int, Int)) -> Int
           match point
             (
-              x, y # unchecked
+              x,
+              y # unchecked
             ) -> x + y
             _ -> 0
           end
@@ -123,7 +124,8 @@ fn commented_pattern_keeps_guard_glued() {
         fn f(point: (Int, Int)) -> Int
           match point
             (
-              x, y # unchecked
+              x,
+              y # unchecked
             ) when x > 0 -> x
             _ -> 0
           end
@@ -138,7 +140,8 @@ fn destructure_pattern_comment_anchors_to_element() {
         "
         (
           # sequence counter
-          seq, payload
+          seq,
+          payload
         ) = split(frame)
         ",
     );
@@ -151,7 +154,8 @@ fn for_pattern_comment_anchors_to_element() {
         fn f(pairs: List<(Int, Int)>) -> Int
           for (
             # coordinate pair
-            a, b
+            a,
+            b
           ) in pairs
             a + b
           end

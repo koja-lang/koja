@@ -28,7 +28,7 @@ impl Printer {
                     |seg| seg.span,
                     |p, seg| p.binary_segment_to_doc(seg),
                 );
-                self.element_list_to_doc("<<", ">>", entries, *span)
+                self.segment_list_to_doc("<<", ">>", entries, *span)
             }
             Pattern::Constructor {
                 name,

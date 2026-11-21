@@ -1,7 +1,12 @@
 test "encode64 matches the RFC 4648 vectors"
   vectors: List<(String, String)> = [
-    ("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"),
-    ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")
+    ("", ""),
+    ("f", "Zg=="),
+    ("fo", "Zm8="),
+    ("foo", "Zm9v"),
+    ("foob", "Zm9vYg=="),
+    ("fooba", "Zm9vYmE="),
+    ("foobar", "Zm9vYmFy")
   ]
 
   for vector in vectors
@@ -12,7 +17,10 @@ end
 
 test "decode64 reverses the RFC 4648 vectors"
   vectors: List<(String, String)> = [
-    ("", ""), ("Zg==", "f"), ("Zm8=", "fo"), ("Zm9v", "foo"),
+    ("", ""),
+    ("Zg==", "f"),
+    ("Zm8=", "fo"),
+    ("Zm9v", "foo"),
     ("Zm9vYmFy", "foobar")
   ]
 

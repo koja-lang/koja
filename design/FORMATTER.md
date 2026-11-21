@@ -30,10 +30,14 @@ violation of any rule is a bug, never a judgment call.
   columns stays long.
 - Broken field lists (constructions, parameter lists, enum struct variants)
   take one field per line and a trailing comma.
-- Broken element lists (list, map, and set literals, and binary and bits
-  literals) pack as many elements per line as fit, without a trailing
-  comma. The delimiters sit on their own lines.
-- Both stay inline without a trailing comma when they fit.
+- Broken element lists (list, map, set, and tuple literals) take one
+  element per line, without a trailing comma. The delimiters sit on their
+  own lines.
+- Broken segment lists (binary and bits literals) pack as many segments
+  per line as fit, without a trailing comma. The delimiters sit on their
+  own lines.
+- All three stay inline without a trailing comma when they fit. Width
+  alone decides. A list that fits collapses, however the author wrote it.
 - Binary and bits patterns break like the literals. A segment
   (`value::spec`) is atomic and never splits around its `::`.
 - Long operator chains pack operands per line and wrap with a 2 space
@@ -195,19 +199,29 @@ line, so the placement is always safe.
 **Comments inside bracketed constructs.** A comment inside a collection
 literal, a construction, a call argument list, or a parameter list keeps
 that construct broken (rule 4) and stays with its element. A broken field
-list is one field per line, so the comment rides its field. In an element
-list a comment breaks only its own line and packing resumes after it: a
-trailing comment ends the packed line after its element, and a leading
-comment takes its own line above the element that starts the next packed
-run. Rule 3 holds because no code follows a comment on its line.
+list or element list is one item per line, so the comment rides its item.
 
 ```koja
 nums = [
+  1,
+  2, # two
+  # header values start here
+  3
+]
+```
+
+In a segment list a comment breaks only its own line and packing resumes
+after it. A trailing comment ends the packed line after its segment, and a
+leading comment takes its own line above the segment that starts the next
+packed run. Rule 3 holds because no code follows a comment on its line.
+
+```koja
+frame = <<
   1, 2, # two
   3, 4, 5, 6,
   # header values start here
   7, 8
-]
+>>
 ```
 
 **Comments inside patterns.** A comment inside a list, tuple, enum,
@@ -223,7 +237,8 @@ arm.
 match packet
   [
     # version byte
-    version, flags
+    version,
+    flags
   ] -> decode(version, flags)
   _ -> drop()
 end
