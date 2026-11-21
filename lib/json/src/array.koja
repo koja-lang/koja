@@ -1,0 +1,14 @@
+@doc """
+A JSON array. A list literal builds one in a position that expects a
+JSON value.
+"""
+struct Array: ListLiteral<Value>
+  items: List<Value> = []
+
+  @doc """
+  Wraps the items of a list literal as a JSON array.
+  """
+  fn from_list(values: List<Value>) -> Array
+    Array{items: values}
+  end
+end

@@ -10,7 +10,7 @@ use super::super::ops::unary_type;
 use super::super::strings::resolve_string;
 use super::carrier::{
     CarrierSpec, Dispatch, dispatch_via_carrier, lookup_global_id, missing_root_diagnostic,
-    pick_carrier,
+    narrow_union_hint, pick_carrier,
 };
 
 const BOOL_SPEC: CarrierSpec = CarrierSpec {
@@ -78,6 +78,11 @@ pub(in super::super) fn resolve_scalar_literal(
     let Some(root_id) = lookup_global_id(resolver, spec.root_name) else {
         return missing_root_diagnostic(spec, expr.span, diagnostics);
     };
+    let Ok(narrowed) = narrow_union_hint(expected, root_id, spec, expr.span, resolver, diagnostics)
+    else {
+        return ResolvedType::Failed;
+    };
+    let expected = narrowed.as_ref();
     let carrier = pick_carrier(expected, root_id, spec, resolver);
     let inner_kind = std::mem::replace(
         &mut expr.kind,

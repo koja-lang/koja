@@ -6,7 +6,9 @@
 //! the tag byte: [`emit_union_switch`] projects the payload as the
 //! matching member and lets the caller build one arm per member.
 //! Every union conformance goes through that one switch so the
-//! control-flow shape is written once. [`emit_union_widen`] rides the
+//! control-flow shape is written once. A call that reaches a union
+//! through a protocol bound uses the same switch, with one call to
+//! the member's own impl per arm. [`emit_union_widen`] rides the
 //! same switch to re-tag a union value into a wider union, one
 //! [`emit_union_wrap`] per source member.
 
@@ -49,9 +51,11 @@ pub(super) struct UnionSwitch<'a> {
     pub(super) subject: UnionSubject<'a>,
 }
 
-/// Lower `union.format()` / `print()` / `inspect()` / `hash()`.
-/// Typecheck admits only these (plus `equals?`, intercepted earlier),
-/// so anything else here is a resolve bug.
+/// Lower a protocol call on a union receiver. `format` / `print` /
+/// `inspect` / `hash` are the universal functions, each with its own
+/// expansion (`equals?` is intercepted earlier). Any other function
+/// arrives through a bound the union discharged member by member, and
+/// lowers through [`lower_union_member_call`].
 pub(super) fn lower_union_conformance_call(
     receiver: &Expr,
     method: &str,
@@ -59,11 +63,10 @@ pub(super) fn lower_union_conformance_call(
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    assert!(
-        args.is_empty(),
-        "IR lower: union `{method}` reached lowering with {} args",
-        args.len()
-    );
+    let universal = args.is_empty() && matches!(method, "format" | "hash" | "inspect" | "print");
+    if !universal {
+        return lower_union_member_call(receiver, method, args, ctx, block);
+    }
     let structural = peel_alias(&receiver.resolution, ctx.registry);
     let ResolvedType::Union(members) = &structural else {
         panic!(
@@ -92,6 +95,62 @@ pub(super) fn lower_union_conformance_call(
         };
         emit_union_format(subject, ctx, block)
     })
+}
+
+/// Lower `union.method(args)` for a protocol every member implements.
+/// Typecheck admits the call only through a bound, and only when the
+/// protocol names `Self` in the receiver alone, so the arguments and
+/// the result have one type across all members. The arguments lower
+/// one time ahead of the switch, and each arm calls the member's own
+/// function with its payload as the receiver.
+fn lower_union_member_call(
+    receiver: &Expr,
+    method: &str,
+    args: &[Arg],
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let structural = peel_alias(&receiver.resolution, ctx.registry);
+    let ResolvedType::Union(members) = &structural else {
+        panic!(
+            "IR lower: union member call receiver resolved to `{structural:?}` \
+             (typecheck resolve invariant violation)",
+        );
+    };
+    let union_ty =
+        resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
+    let (value, mut current) = lower_expr(receiver, ctx, block)?;
+    let mut arg_values = Vec::with_capacity(args.len());
+    for arg in args {
+        let (arg_value, next) = lower_expr(&arg.value, ctx, current)?;
+        current = next;
+        arg_values.push(arg_value);
+    }
+    let arity = args.len() + 1;
+    let first = peel_alias(&members[0], ctx.registry);
+    let (_, result_ty) = conformance_method_symbol(&first, method, arity, ctx.registry, ctx.output);
+    let switch = UnionSwitch {
+        label: "union_call",
+        result_ty,
+        subject: UnionSubject {
+            members,
+            ty: &union_ty,
+            value,
+        },
+    };
+    let (result, after) = emit_union_switch(switch, ctx, current, |arm, ctx, block| {
+        let member = peel_alias(arm.member_ty, ctx.registry);
+        let mut call_args = Vec::with_capacity(arity);
+        call_args.push(arm.payload);
+        call_args.extend(arg_values.iter().copied());
+        let returned = emit_conformance_call(&member, method, call_args, ctx, block);
+        (returned, block)
+    });
+    drop_discarded_temp(ctx, after, value);
+    for arg_value in arg_values {
+        drop_discarded_temp(ctx, after, arg_value);
+    }
+    Ok((result, after))
 }
 
 /// Dispatch on the subject's tag. Arm `i` runs `arm` with the payload

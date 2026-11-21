@@ -5,47 +5,83 @@ end
 
 impl Encoding for EncodedPoint
   fn to_json(self) -> Value
-    value: Value = ["x": self.x.to_json(), "y": self.y.to_json()]
-    value
+    ["x": self.x.to_json(), "y": self.y.to_json()]
   end
 end
 
 test "encode null"
-  assert encode(Value.null()) == "null"
+  value: Value = NULL
+
+  assert encode(value) == "null"
+  assert encode(NULL) == "null"
 end
 
 test "encode true"
-  assert encode(Value.bool(true)) == "true"
+  value: Value = true
+  assert encode(value) == "true"
 end
 
 test "encode false"
-  assert encode(Value.bool(false)) == "false"
+  value: Value = false
+  assert encode(value) == "false"
 end
 
 test "encode integer"
-  assert encode(Value.int(42)) == "42"
+  value: Value = 42
+  assert encode(value) == "42"
 end
 
 test "encode string"
-  assert encode(Value.string("hello")) == "\"hello\""
+  value: Value = "hello"
+  assert encode(value) == "\"hello\""
 end
 
 test "encode empty array"
-  assert encode(Value.array([])) == "[]"
+  value: Value = []
+
+  assert encode(value) == "[]"
+  assert encode(Array{}) == "[]"
 end
 
 test "encode array with elements"
-  assert encode(Value.array([Value.int(1), Value.int(2), Value.int(3)])) ==
-    "[1,2,3]"
+  value: Value = [1, 2, 3]
+  assert encode(value) == "[1,2,3]"
 end
 
 test "encode empty object"
-  assert encode(Value.object([])) == "{}"
+  value: Value = [:]
+
+  assert encode(value) == "{}"
+  assert encode(Object{}) == "{}"
 end
 
 test "encode object"
-  assert encode(Value.object([Value.entry("name", Value.string("koja"))])) ==
-    "{\"name\":\"koja\"}"
+  value: Value = ["name": "koja"]
+  assert encode(value) == "{\"name\":\"koja\"}"
+end
+
+test "encode null in a literal"
+  value: Value = ["result": NULL, "items": [NULL, 1]]
+  assert encode(value) == "{\"result\":null,\"items\":[null,1]}"
+end
+
+test "encode a list of values"
+  values: List<Value> = [1, "a", NULL]
+  assert encode(values) == "[1,\"a\",null]"
+end
+
+test "encode writes the text of a number as is"
+  assert encode(Number{text: "1.50"}) == "1.50"
+  assert encode(Number{text: "1e2"}) == "1e2"
+end
+
+test "encode a variable inside a literal"
+  count = 3
+  name = "koja"
+  inner: Value = [true]
+  value: Value = ["count": count.to_json(), "name": name, "inner": inner]
+
+  assert encode(value) == "{\"count\":3,\"name\":\"koja\",\"inner\":[true]}"
 end
 
 test "encode protocol values"

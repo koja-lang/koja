@@ -267,7 +267,7 @@ fn user_code_can_call_json_package_apis() {
 #[test]
 fn json_encoder_and_decoder_types_are_private() {
     assert_script_fails_with(
-        "JSON.Encoder.encode(JSON.Value.Null)",
+        "JSON.Encoder.encode(JSON.NULL)",
         &["private struct `JSON.Encoder`"],
     );
     assert_script_fails_with(

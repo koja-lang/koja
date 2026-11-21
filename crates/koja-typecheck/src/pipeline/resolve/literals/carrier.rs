@@ -12,8 +12,9 @@
 //!   method resolution.
 //!
 //! [`CarrierSpec`] captures the protocol's identifying strings.
-//! [`pick_carrier`] decides which branch fires based on the
-//! expected-type hint. [`dispatch_via_carrier`] performs the
+//! [`narrow_union_hint`] reduces a union hint to the one member the
+//! literal builds. [`pick_carrier`] decides which branch fires based
+//! on the expected-type hint. [`dispatch_via_carrier`] performs the
 //! AST-rewrite-or-restore step. Per-shape resolvers
 //! ([`super::list`], [`super::map`], [`super::scalar`]) plug their
 //! literal-specific work into this spine.
@@ -29,6 +30,7 @@ use koja_ast::span::Span;
 
 use super::super::calls::resolve_method_call_expr;
 use super::super::ctx::Resolver;
+use super::super::types::{display_resolution, peel_alias};
 
 /// Per-protocol metadata. Drives diagnostic phrasing,
 /// registry lookups, and the synthesis-method name. Kept as a
@@ -83,6 +85,90 @@ impl LiteralCarrier {
 pub(super) fn lookup_global_id(resolver: &Resolver<'_>, name: &str) -> Option<GlobalRegistryId> {
     let ident = Identifier::single("Global", name);
     resolver.registry.lookup(&ident).map(|(id, _)| id)
+}
+
+/// Narrow a union hint to the one member the literal builds, so the
+/// literal resolves to that member and the surrounding slot widens it
+/// into the union. A hint that is not a union passes through.
+///
+/// The member that is the literal's default carrier wins. Without
+/// one, the single member that conforms to `Global.<protocol_name>`
+/// is the answer. No conforming member leaves the hint empty, and
+/// the literal then resolves to its default type for the slot to
+/// reject. Two or more conforming members is an error, reported
+/// here, and the caller fails the literal.
+pub(super) fn narrow_union_hint(
+    expected: Option<&ResolvedType>,
+    default_id: GlobalRegistryId,
+    spec: &CarrierSpec,
+    span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<Option<ResolvedType>, ()> {
+    let Some(hint) = expected else {
+        return Ok(None);
+    };
+    let ResolvedType::Union(members) = peel_alias(hint, resolver.registry) else {
+        return Ok(Some(hint.clone()));
+    };
+    let members: Vec<ResolvedType> = members
+        .iter()
+        .map(|member| peel_alias(member, resolver.registry))
+        .collect();
+    let is_default = |member: &&ResolvedType| {
+        matches!(
+            member,
+            ResolvedType::Named {
+                resolution: Resolution::Global(id),
+                ..
+            } if *id == default_id
+        )
+    };
+    if let Some(member) = members.iter().find(is_default) {
+        return Ok(Some(member.clone()));
+    }
+    let Some(protocol_id) = lookup_global_id(resolver, spec.protocol_name) else {
+        return Ok(None);
+    };
+    let conforms = |member: &&ResolvedType| {
+        let ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            type_args,
+        } = member
+        else {
+            return false;
+        };
+        resolver
+            .registry
+            .conformance_args(*id, protocol_id, type_args, resolver.bound_overlay)
+            .is_some()
+    };
+    let candidates: Vec<&ResolvedType> = members.iter().filter(conforms).collect();
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [member] => Ok(Some((*member).clone())),
+        _ => {
+            let names = candidates
+                .iter()
+                .map(|member| format!("`{}`", display_resolution(member, resolver.registry)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "{} is ambiguous for `{}`. More than one member implements `{}`",
+                    spec.missing_root_label,
+                    display_resolution(hint, resolver.registry),
+                    spec.protocol_name,
+                ),
+                format!(
+                    "the candidates are {names}. Call `{}` on the member you want",
+                    spec.from_method
+                ),
+                span,
+            ));
+            Err(())
+        }
+    }
 }
 
 /// Pick the carrier from the surrounding hint. The default carrier

@@ -27,7 +27,7 @@ use super::super::expr::resolve_expr_with_expected;
 use super::axis::{AxisLabel, infer_axis};
 use super::carrier::{
     CarrierSpec, Dispatch, LiteralCarrier, dispatch_via_carrier, lookup_global_id,
-    missing_root_diagnostic, pick_carrier,
+    missing_root_diagnostic, narrow_union_hint, pick_carrier,
 };
 
 const SPEC: CarrierSpec = CarrierSpec {
@@ -66,6 +66,11 @@ pub(in super::super) fn resolve_list_literal(
         return missing_root_diagnostic(&SPEC, span, diagnostics);
     };
 
+    let Ok(narrowed) = narrow_union_hint(expected, list_id, &SPEC, span, resolver, diagnostics)
+    else {
+        return ResolvedType::Failed;
+    };
+    let expected = narrowed.as_ref();
     let carrier = pick_carrier(expected, list_id, &SPEC, resolver);
     let element_hint = first_axis_hint(&carrier, expected);
 
@@ -75,7 +80,7 @@ pub(in super::super) fn resolve_list_literal(
     }
 
     let Some(element_ty) = infer_axis(
-        elements.iter(),
+        elements.iter_mut(),
         element_hint.as_ref(),
         AXIS,
         span,

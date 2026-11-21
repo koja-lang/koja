@@ -24,7 +24,7 @@ use super::super::types::verify_bounds;
 use super::axis::{AxisLabel, infer_axis};
 use super::carrier::{
     CarrierSpec, Dispatch, LiteralCarrier, dispatch_via_carrier, lookup_global_id,
-    missing_root_diagnostic, pick_carrier,
+    missing_root_diagnostic, narrow_union_hint, pick_carrier,
 };
 use crate::pipeline::unify::Substitution;
 
@@ -64,6 +64,11 @@ pub(in super::super) fn resolve_map_literal(
         return missing_root_diagnostic(&SPEC, span, diagnostics);
     };
 
+    let Ok(narrowed) = narrow_union_hint(expected, map_id, &SPEC, span, resolver, diagnostics)
+    else {
+        return ResolvedType::Failed;
+    };
+    let expected = narrowed.as_ref();
     let carrier = pick_carrier(expected, map_id, &SPEC, resolver);
     let (key_hint, value_hint) = entry_hints(&carrier, expected);
 
@@ -74,7 +79,7 @@ pub(in super::super) fn resolve_map_literal(
     }
 
     let Some(key_ty) = infer_axis(
-        entries.iter().map(|(k, _)| k),
+        entries.iter_mut().map(|(k, _)| k),
         key_hint.as_ref(),
         KEY_AXIS,
         span,
@@ -86,7 +91,7 @@ pub(in super::super) fn resolve_map_literal(
         return ResolvedType::Failed;
     };
     let Some(value_ty) = infer_axis(
-        entries.iter().map(|(_, v)| v),
+        entries.iter_mut().map(|(_, v)| v),
         value_hint.as_ref(),
         VALUE_AXIS,
         span,

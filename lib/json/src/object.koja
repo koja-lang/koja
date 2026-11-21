@@ -1,0 +1,31 @@
+@doc """
+A JSON object. `entries` holds the members in the order they were
+written, and that order is the order `JSON.encode` writes. A map
+literal builds one in a position that expects a JSON value.
+"""
+struct Object: MapLiteral<String, Value>
+  entries: List<(String, Value)> = []
+
+  @doc """
+  Wraps the ordered entries of a map literal as a JSON object.
+  """
+  fn from_entries(entries: List<(String, Value)>) -> Object
+    Object{entries: entries}
+  end
+
+  @doc """
+  Returns the value of `key`, or `None` when the object has no such
+  key. When a key occurs more than one time, the last entry wins.
+  """
+  fn get(self, key: String) -> Option<Value>
+    found: Option<Value> = Option.None
+
+    for (name, value) in self.entries
+      if name == key
+        found = Option.Some(value)
+      end
+    end
+
+    found
+  end
+end

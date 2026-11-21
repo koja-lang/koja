@@ -1,123 +1,13 @@
 @doc """
-Core JSON value type and convenience constructors.
+A JSON value. It is one of six types: `Null`, `Bool`, `Number`,
+`String`, `Array`, or `Object`.
+
+A literal builds a value in a position that expects one. A string or
+boolean literal stays a `String` or a `Bool`, a number literal builds
+a `Number`, a list literal builds an `Array`, and a map literal
+builds an `Object`. `JSON.NULL` is the null value.
+
+Read a value with `match` and a typed binding for each type the
+caller accepts.
 """
-enum Value
-  Null
-  Bool(Bool)
-  Int(Int)
-  Float(Float)
-  String(String)
-  Array(List<Value>)
-  Object(List<(String, Value)>)
-
-  @doc """
-  The JSON `null` value.
-  """
-  fn null -> Value
-    Value.Null
-  end
-
-  @doc """
-  Wraps a `Bool` as a JSON value.
-  """
-  fn bool(v: Bool) -> Value
-    Value.Bool(v)
-  end
-
-  @doc """
-  Wraps an `Int` as a JSON value.
-  """
-  fn int(n: Int) -> Value
-    Value.Int(n)
-  end
-
-  @doc """
-  Wraps a `Float` as a JSON value.
-  """
-  fn float(f: Float) -> Value
-    Value.Float(f)
-  end
-
-  @doc """
-  Wraps a `String` as a JSON value.
-  """
-  fn string(s: String) -> Value
-    Value.String(s)
-  end
-
-  @doc """
-  Wraps a list of values as a JSON array.
-  """
-  fn array(items: List<Value>) -> Value
-    Value.Array(items)
-  end
-
-  @doc """
-  Wraps a list of key-value entries as a JSON object. Entries keep
-  their list order when encoded.
-  """
-  fn object(entries: List<(String, Value)>) -> Value
-    Value.Object(entries)
-  end
-
-  @doc """
-  Builds one object entry, for use with `object`.
-  """
-  fn entry(key: String, value: Value) -> (String, Value)
-    (key, value)
-  end
-end
-
-impl BoolLiteral for Value
-  @doc """
-  Wraps a boolean literal as a JSON value.
-  """
-  fn from_bool(value: Bool) -> Self
-    Value.Bool(value)
-  end
-end
-
-impl FloatLiteral for Value
-  @doc """
-  Wraps a float literal as a JSON value.
-  """
-  fn from_float(value: Float) -> Self
-    Value.Float(value)
-  end
-end
-
-impl IntLiteral for Value
-  @doc """
-  Wraps an integer literal as a JSON value.
-  """
-  fn from_int(value: Int) -> Self
-    Value.Int(value)
-  end
-end
-
-impl ListLiteral<Value> for Value
-  @doc """
-  Wraps a list literal as a JSON array.
-  """
-  fn from_list(values: List<Value>) -> Self
-    Value.Array(values)
-  end
-end
-
-impl MapLiteral<String, Value> for Value
-  @doc """
-  Wraps ordered map-literal entries as a JSON object.
-  """
-  fn from_entries(entries: List<(String, Value)>) -> Self
-    Value.Object(entries)
-  end
-end
-
-impl StringLiteral for Value
-  @doc """
-  Wraps a string literal as a JSON value.
-  """
-  fn from_string(value: String) -> Self
-    Value.String(value)
-  end
-end
+type Value = Null | Bool | Number | String | Array | Object

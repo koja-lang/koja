@@ -14,11 +14,13 @@
 //!   const-`==` predicate) and a payload extract
 //!   ([`IRInstruction::UnionPayloadGet`]) that feeds the bound
 //!   local at the head of the body block.
+//! - A call through a protocol bound with a union receiver lowers to
+//!   one tag switch with a call to the member's own impl in each arm.
 //! - Each lowered union surfaces exactly one [`IRUnionDecl`] in the
 //!   program's union map keyed by the same mangled symbol the type
 //!   carries.
 
-use koja_ir::{IRInstruction, IRType};
+use koja_ir::{ConstValue, IRInstruction, IRType};
 
 mod common;
 
@@ -124,6 +126,88 @@ describe(Post{title: \"hi\"})
         sorted,
         vec![0, 1],
         "expected payload extracts to cover both canonical members [0, 1], got {payload_indices:?}",
+    );
+}
+
+#[test]
+fn bounded_call_on_union_lowers_to_one_member_call_per_arm() {
+    // `show<Post | Comment>` cannot name one `label`, so the call
+    // switches on the tag and each arm calls the member's own impl
+    // with the shared argument.
+    let source = "
+        protocol Label
+          fn label(self, prefix: String) -> String
+        end
+
+        struct Post: Label
+          title: String
+
+          fn label(self, prefix: String) -> String
+            prefix <> self.title
+          end
+        end
+
+        struct Comment: Label
+          body: String
+
+          fn label(self, prefix: String) -> String
+            prefix <> self.body
+          end
+        end
+
+        fn show<T: Label>(value: T) -> String
+          value.label(\"> \")
+        end
+
+        item: Post | Comment = Post{title: \"hi\"}
+        show(item)
+        ";
+    let script = lower(source);
+    let show_fn = script
+        .packages
+        .iter()
+        .filter(|p| p.package == PACKAGE)
+        .flat_map(|p| p.functions.values())
+        .find(|f| f.symbol.mangled().starts_with(&format!("{PACKAGE}.show")))
+        .expect("expected one monomorphized `show`");
+
+    let tag_count = all_instructions(&show_fn.blocks)
+        .filter(|i| matches!(i, IRInstruction::UnionTagGet { .. }))
+        .count();
+    assert_eq!(
+        tag_count, 1,
+        "expected one tag read for the dispatch, got {tag_count}"
+    );
+
+    let mut label_calls: Vec<(&str, usize)> = all_instructions(&show_fn.blocks)
+        .filter_map(|i| match i {
+            IRInstruction::Call { callee, args, .. } if callee.mangled().contains(".label") => {
+                Some((callee.mangled(), args.len()))
+            }
+            _ => None,
+        })
+        .collect();
+    label_calls.sort_unstable();
+    assert_eq!(
+        label_calls,
+        vec![("TestApp.Comment.label/2", 2), ("TestApp.Post.label/2", 2)],
+        "expected one `label` call per member, each with the payload and the argument",
+    );
+
+    let literal_count = all_instructions(&show_fn.blocks)
+        .filter(|i| {
+            matches!(
+                i,
+                IRInstruction::Const {
+                    value: ConstValue::String(_),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        literal_count, 1,
+        "expected the argument to lower one time ahead of the switch, got {literal_count}",
     );
 }
 

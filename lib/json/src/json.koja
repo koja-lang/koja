@@ -4,7 +4,8 @@ A protocol for types that have a JSON value representation.
 protocol Encoding
   @doc """
   Converts `self` to a JSON `Value` tree. `JSON.encode` calls this
-  before it writes text.
+  before it writes text. A `Value` conforms because each of its six
+  types does.
   """
   fn to_json(self) -> Value
 end
@@ -34,9 +35,21 @@ fn decode(input: String) -> Value ! String
   try Decoder.decode(input)
 end
 
-impl Encoding for Value
+@doc """
+Returns the value of `key` when `value` is an object that has the
+key. Returns `None` for an object with no such key and for a value
+that is not an object. See `Object.get`.
+"""
+fn get(value: Value, key: String) -> Option<Value>
+  match value
+    object: Object -> object.get(key)
+    _ -> Option.None
+  end
+end
+
+impl Encoding for Array
   @doc """
-  Returns this JSON value unchanged.
+  Returns this array as a JSON value.
   """
   fn to_json(self) -> Value
     self
@@ -48,25 +61,52 @@ impl Encoding for Bool
   Returns this boolean as a JSON value.
   """
   fn to_json(self) -> Value
-    Value.Bool(self)
+    self
   end
 end
 
 impl Encoding for Float
   @doc """
-  Returns this float as a JSON value.
+  Returns this float as a JSON number.
   """
   fn to_json(self) -> Value
-    Value.Float(self)
+    Number.from_float(self)
   end
 end
 
 impl Encoding for Int
   @doc """
-  Returns this integer as a JSON value.
+  Returns this integer as a JSON number.
   """
   fn to_json(self) -> Value
-    Value.Int(self)
+    Number.from_int(self)
+  end
+end
+
+impl Encoding for Null
+  @doc """
+  Returns this null as a JSON value.
+  """
+  fn to_json(self) -> Value
+    self
+  end
+end
+
+impl Encoding for Number
+  @doc """
+  Returns this number as a JSON value.
+  """
+  fn to_json(self) -> Value
+    self
+  end
+end
+
+impl Encoding for Object
+  @doc """
+  Returns this object as a JSON value.
+  """
+  fn to_json(self) -> Value
+    self
   end
 end
 
@@ -75,7 +115,7 @@ impl Encoding for String
   Returns this string as a JSON value.
   """
   fn to_json(self) -> Value
-    Value.String(self)
+    self
   end
 end
 
@@ -90,6 +130,6 @@ impl Encoding for List<T: Encoding>
       items = items.append(item.to_json())
     end
 
-    Value.Array(items)
+    Array{items: items}
   end
 end

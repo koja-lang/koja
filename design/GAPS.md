@@ -443,3 +443,179 @@ slot array, the shape `IndexMap` uses, and `next` walks the list. The
 interpreter already has that order. If it is not, the `Debug` and
 `Log.Text` renderers sort their keys so rendered text is stable, and
 the golden rule stays. Either way the `Map` doc should say which.
+
+---
+
+## A `type` alias cannot be recursive
+
+Found 2026-11-20 while turning `JSON.Value` from an enum into a union.
+The natural shape for a JSON array is `List<Value>` as a member of
+`Value` itself, as in `type Value = Null | Bool | List<Value> | ...`.
+`lift_signatures/type_aliases.rs` rejects that with "references itself
+(cycle)". An alias is transparent, `peel_alias` expands it in place,
+and the IR mangles a union from its members, so a member that names
+the alias never ends.
+
+Consequence: `JSON.Array` and `JSON.Object` are structs that hold the
+list. The struct is what breaks the cycle. A reader writes
+`array.items` where a native list would need no step, and a
+`List<JSON.Value>` does not flow into a `JSON.Value` slot.
+
+**Fix path:** a recursive alias needs a nominal handle in the IR, a
+union that is named and laid out by name the way a struct is. That is
+a real feature and not a relaxed check. Crystal modeled JSON as the
+recursive alias `JSON::Type`, dropped that alias from its standard
+library in 0.25.0, and moved the recursion into the `JSON::Any`
+struct. That is a reason to be sure before starting.
+
+---
+
+## No direct call on a union value
+
+Found 2026-11-20 with the union conformance rule. A union satisfies
+`T: Protocol` when every member conforms and the protocol dispatches
+on the receiver alone, and a call through the bound lowers to a switch
+over the members. The same call written on the value is still an
+error. `resolve/calls/structural.rs` admits only `equals?`, the
+`Debug` family, and `hash` on a union receiver.
+
+Consequence: `JSON.encode(value)` works for a `JSON.Value`, and a
+user protocol works through a generic function, but `value.label()`
+needs a `match` or a one-line generic wrapper.
+
+**Fix path:** resolve a method on a union receiver when exactly one
+protocol that the union satisfies declares it. The lowering exists
+already (`lower_union_member_call` in `koja-ir/src/lower/unions.rs`).
+The open question is whether an inherent function that every member
+happens to share should count. It should not, because then adding a
+member silently changes which calls compile.
+
+---
+
+## Union equality rejects a member operand
+
+Found 2026-11-20. `value == JSON.NULL` does not compile when `value`
+is a `JSON.Value`, and neither does `value.equals?(JSON.NULL)`:
+
+```
+cannot compare `JSON.Value` with `JSON.Null`. Union equality requires
+both sides to have the same type
+```
+
+`resolve_structural_eq` in `resolve/calls/structural.rs` resolves the
+argument with the union as its expected type and then demands
+`types_equivalent`. An assignment or an argument in the same position
+would widen the member.
+
+Consequence: a null check is a `match` with a `Null` arm, or a
+comparison against a local typed as the union. The same holds for any
+union and any member.
+
+**Fix path:** check the argument with `check_compatible_stamping` so a
+member, or a narrower union, widens into the receiver's type. A member
+on the left (`JSON.NULL == value`) takes the nominal `equals?` path and
+needs the mirrored rule there. The JSON work records this gap and
+makes no language change for it.
+
+---
+
+## Arms do not widen into an expected union
+
+Found 2026-11-20 in the first port to the union `JSON.Value`. The
+arms of a `match`, `if`, `cond`, or ternary must have one type.
+`join_two_arms` and `join_arm_tails` in `resolve/control_flow/mod.rs`
+compare the tails with `types_equivalent` and never look at the
+expected type, although each arm did resolve against it.
+
+```koja
+fn optional(text: Option<String>) -> JSON.Value
+  match text
+    Option.Some(value) -> value # String
+    Option.None -> JSON.NULL # Null, "arms have inconsistent types"
+  end
+end
+```
+
+Consequence: an arm that yields a member needs a conversion to the
+union. For JSON that is `.to_json()` on each arm. For a union with no
+such protocol it is a typed local in each arm. The mix of a string arm
+and a null arm is the most common shape in code that builds JSON, so
+this is the gap a caller meets first.
+
+A list literal with no hint has the same limit. The first entry sets
+the element type and a later member does not widen into it, so
+`[pet, Cat{}]` fails when `pet` is a `Pet` and passes with a
+`List<Pet>` annotation.
+
+**Fix path:** when the expected type is a union, check each tail
+against it with `check_compatible_stamping`, stamp the tail
+expression, and make the expected type the result of the join.
+Lowering already wraps a stamped expression. With no expected type the
+join stays strict, because a union inferred from the arms would hide
+type errors.
+
+---
+
+## A member does not widen inside a payload or a tuple argument
+
+Found 2026-11-20 in the remem port to the union `JSON.Value`. A
+member widens into a union at the top of a slot: an assignment, an
+argument, a return, an entry of a list or map literal. It does not
+widen one level down in two common shapes.
+
+```koja
+fn wrap(text: String) -> Option<JSON.Value>
+  Option.Some(text) # found `Option<String>`
+end
+
+fields: List<(String, JSON.Value)> = []
+fields = fields.append(("name", text)) # `T` cannot be both types
+```
+
+The variant constructor infers its type parameter from the payload
+and takes no hint from the expected type. The generic call unifies
+`T` with the tuple type of the argument and has no coercion step. The
+same tuple literal is accepted as an entry of a list literal, and
+through a typed local.
+
+Consequence: `Option.Some(value)` needs a `JSON.Value` local or
+`.to_json()` first, and so does a tuple passed to `append`. A test
+cannot write `JSON.get(body, "name") == Option.Some("Koja")`. The
+remem tests use a one-line helper that takes a `JSON.Value` and
+returns the `Option`.
+
+**Fix path:** pass the expected payload type down into a variant
+constructor when the expected type is known, and check each payload
+with `check_compatible_stamping`. For the generic call, when `T` is
+bound by the receiver, check the argument against the substituted
+parameter type and do not unify a second time.
+
+---
+
+## A constant of a union type cannot take a member value
+
+Found 2026-11-20. This compiles through typecheck and then panics the
+compiler in both backends, on 0.20.1 as well:
+
+```koja
+type Value = Null | Bool
+
+const NOTHING: Value = Null{}
+```
+
+```
+IR seal violation: script body LoadConst type has type `Union {...}`,
+expected `Struct(IRSymbol("Null"))`
+```
+
+The declared type of the constant is the union and the initializer
+keeps the member's type, so the widening that an assignment gets does
+not reach the constant's value.
+
+Consequence: `JSON.NULL` is typed `JSON.Null` and not `JSON.Value`.
+That is the better type for it in any case, but the compiler should
+reject or accept the declaration and never panic.
+
+**Fix path:** not investigated past the reproduction. The constant
+initializer most likely skips the `Coercion::UnionWiden` stamp or the
+constant lowering ignores it.

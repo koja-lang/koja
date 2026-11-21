@@ -9,13 +9,12 @@ priv struct Encoder
 
   priv fn encode_value(value: Value) -> String
     match value
-      Value.Null -> "null"
-      Value.Bool(b) -> b ? "true" : "false"
-      Value.Int(n) -> "#{n}"
-      Value.Float(f) -> "#{f}"
-      Value.String(s) -> Encoder.encode_string(s)
-      Value.Array(items) -> Encoder.encode_array(items)
-      Value.Object(entries) -> Encoder.encode_object(entries)
+      _null: Null -> "null"
+      flag: Bool -> flag ? "true" : "false"
+      number: Number -> number.text
+      text: String -> Encoder.encode_string(text)
+      array: Array -> Encoder.encode_array(array.items)
+      object: Object -> Encoder.encode_object(object.entries)
     end
   end
 
@@ -77,30 +76,27 @@ priv struct Encoder
 
   priv fn encode_value_pretty(value: Value, indent: Int) -> String
     match value
-      Value.Null ->
+      _null: Null ->
         "null"
 
-      Value.Bool(b) ->
-        if b
+      flag: Bool ->
+        if flag
           "true"
         else
           "false"
         end
 
-      Value.Int(n) ->
-        "#{n}"
+      number: Number ->
+        number.text
 
-      Value.Float(f) ->
-        "#{f}"
+      text: String ->
+        Encoder.encode_string(text)
 
-      Value.String(s) ->
-        Encoder.encode_string(s)
+      array: Array ->
+        Encoder.encode_array_pretty(array.items, indent)
 
-      Value.Array(items) ->
-        Encoder.encode_array_pretty(items, indent)
-
-      Value.Object(entries) ->
-        Encoder.encode_object_pretty(entries, indent)
+      object: Object ->
+        Encoder.encode_object_pretty(object.entries, indent)
     end
   end
 

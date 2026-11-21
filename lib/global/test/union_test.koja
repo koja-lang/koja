@@ -1,0 +1,129 @@
+protocol UnionLabel
+  fn label(self) -> String
+
+  fn loud(self) -> String
+    self.label() <> "!"
+  end
+
+  fn tagged(self, prefix: String, count: Int) -> String
+end
+
+struct UnionDog: UnionLabel
+  name: String
+
+  fn label(self) -> String
+    "dog #{self.name}"
+  end
+
+  fn tagged(self, prefix: String, count: Int) -> String
+    "#{prefix}:#{self.name}:#{count}"
+  end
+end
+
+struct UnionCat: UnionLabel
+  lives: Int
+
+  fn label(self) -> String
+    "cat with #{self.lives} lives"
+  end
+
+  fn tagged(self, prefix: String, count: Int) -> String
+    "#{prefix}:cat:#{count + self.lives}"
+  end
+end
+
+struct UnionBox<T>
+  items: List<T>
+end
+
+impl UnionLabel for UnionBox<T: UnionLabel>
+  fn label(self) -> String
+    out = "["
+
+    for item in self.items
+      out = out <> item.label() <> ";"
+    end
+
+    out <> "]"
+  end
+
+  fn tagged(self, prefix: String, count: Int) -> String
+    "#{prefix}:box:#{count}"
+  end
+end
+
+type UnionPet = UnionDog | UnionCat
+
+struct UnionTest
+  priv fn show<T: UnionLabel>(value: T) -> String
+    value.label()
+  end
+
+  priv fn shout<T: UnionLabel>(value: T) -> String
+    value.loud()
+  end
+
+  priv fn tag<T: UnionLabel>(value: T, prefix: String) -> String
+    value.tagged(prefix <> "-", 2)
+  end
+
+  test "a bound dispatches on the member a union holds"
+    dog: UnionPet = UnionDog{name: "Rex"}
+    cat: UnionPet = UnionCat{lives: 9}
+
+    assert UnionTest.show(dog) == "dog Rex"
+    assert UnionTest.show(cat) == "cat with 9 lives"
+  end
+
+  test "a default function runs through the member"
+    cat: UnionPet = UnionCat{lives: 9}
+
+    assert UnionTest.shout(cat) == "cat with 9 lives!"
+  end
+
+  test "arguments reach the function of the member"
+    dog: UnionPet = UnionDog{name: "Fido"}
+    cat: UnionPet = UnionCat{lives: 3}
+
+    assert UnionTest.tag(dog, "d") == "d-:Fido:2"
+    assert UnionTest.tag(cat, "c") == "c-:cat:5"
+  end
+
+  test "a union with no alias dispatches the same way"
+    bare: UnionCat | UnionDog = UnionDog{name: "Rex"}
+
+    assert UnionTest.shout(bare) == "dog Rex!"
+  end
+
+  test "a union is the element of a conforming generic type"
+    dog: UnionPet = UnionDog{name: "Rex"}
+    pets: List<UnionPet> = [dog, UnionCat{lives: 1}]
+
+    assert UnionTest.show(UnionBox{items: pets}) ==
+      "[dog Rex;cat with 1 lives;]"
+  end
+
+  test "list entries widen into a union element type"
+    mixed: List<Int | String> = [1, "a"]
+    one: Int | String = 1
+    text: Int | String = "a"
+
+    assert mixed == [one, text]
+  end
+
+  test "map values widen into a union value type"
+    lookup: Map<String, Int | String> = ["a": 1, "b": "two"]
+    two: Int | String = "two"
+
+    assert lookup.get("b") == Option.Some(two)
+  end
+
+  test "numeric list entries follow the argument rules"
+    small: Int8 = 5
+    narrowed: List<Int8> = [1, 2]
+    widened: List<Int> = [small, 2]
+
+    assert narrowed.length() == 2
+    assert widened == [5, 2]
+  end
+end

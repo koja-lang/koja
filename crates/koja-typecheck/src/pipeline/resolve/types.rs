@@ -439,17 +439,47 @@ pub(super) fn verify_bounds(
                 .get(index)
                 .map(String::as_str)
                 .unwrap_or("?");
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "type `{}` does not implement protocol `{bound_label}` \
-                     (required by type parameter `{param_name}` in `{}`)",
-                    display_resolution(inferred, registry),
-                    callee.label,
-                ),
-                span,
-            ));
+            let message = format!(
+                "type `{}` does not implement protocol `{bound_label}` \
+                 (required by type parameter `{param_name}` in `{}`)",
+                display_resolution(inferred, registry),
+                callee.label,
+            );
+            diagnostics.push(
+                match union_bound_hint(inferred, &instantiated_bound, &bound_label, ctx) {
+                    Some(hint) => Diagnostic::error_with_hint(message, hint, span),
+                    None => Diagnostic::error(message, span),
+                },
+            );
         }
     }
+}
+
+/// Say why a union fails a bound. Either one member lacks the
+/// protocol, or every member has it and the protocol cannot dispatch
+/// on a union value. `None` for a type that is not a union.
+fn union_bound_hint(
+    inferred: &ResolvedType,
+    bound: &ResolvedProtocolBound,
+    bound_label: &str,
+    ctx: BoundContext<'_>,
+) -> Option<String> {
+    let ResolvedType::Union(members) = peel_alias(inferred, ctx.registry) else {
+        return None;
+    };
+    let missing = members
+        .iter()
+        .find(|member| !ctx.registry.bound_satisfied(member, bound, ctx.overlay));
+    Some(match missing {
+        Some(member) => format!(
+            "`{}` does not implement `{bound_label}`",
+            display_resolution(member, ctx.registry),
+        ),
+        None => format!(
+            "a union conforms to a protocol only when every function takes `self` and \
+             names `Self` in no other position, and `{bound_label}` does not"
+        ),
+    })
 }
 
 /// Return a concrete bound decision for supported type heads,

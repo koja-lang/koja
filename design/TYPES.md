@@ -68,6 +68,13 @@ named `type` declaration may give that union a stable name without changing its
 member-based semantics. Values widen into a compatible union explicitly in the
 sealed program, and pattern matching must remain exhaustive.
 
+A literal in a union position builds one member, and the choice is static.
+The member that is the literal's default type wins. Without it, the single
+member that conforms to the literal's protocol receives the literal. Two
+conforming members is an error, never a guess. A union therefore needs no
+literal conformance of its own, which it could not hold anyway, because a
+union owns no functions.
+
 ## Functions and closures
 
 Named functions and closures share function types. A closure captures values
@@ -86,6 +93,15 @@ without runtime type erasure.
 Protocols define behavior rather than data identity. Bounds constrain generic
 parameters, and protocol calls resolve statically. Koja has no dynamic protocol
 objects or vtable-based dispatch.
+
+A union satisfies a bound when every member does and the protocol dispatches
+on the receiver alone. Every function must take `self` and name `Self` in no
+other position. The tag of the receiver is the one thing that picks a member
+impl, so a static function has nothing to read, a `Self` parameter could hold
+a different member, and a `Self` result would differ by arm. The call lowers
+to a closed switch over the members, which is a `match` the compiler writes,
+not a vtable. A direct call on a union value stays an error. The bound is the
+place where the program states that every member must conform.
 
 `Self` names the implementing type inside protocol and implementation
 contexts. Direct functions belong to type declarations or `extend` blocks.
