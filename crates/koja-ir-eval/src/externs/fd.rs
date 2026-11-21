@@ -20,8 +20,6 @@
 //! The generated handlers narrow `Value::Int` on the way out
 //! (`as i32`) at the C ABI boundary.
 
-use std::ptr;
-
 use koja_runtime_core::{Interest, IoWait, deadline_from_user_millis};
 
 use crate::error::RuntimeError;
@@ -31,7 +29,7 @@ use crate::scheduler;
 use crate::value::Value;
 
 unsafe extern "C" {
-    fn koja_fd_read(fd: i32, count: i64, timeout_ms: i64) -> *mut u8;
+    fn koja_fd_read(fd: i32, buffer: *mut u8, count: i64, timeout_ms: i64) -> i64;
     fn koja_fd_write(fd: i32, data: *mut u8, len: i64, timeout_ms: i64) -> i64;
 }
 
@@ -43,43 +41,43 @@ pass_through_externs! {
     file_mkdir => fn koja_file_mkdir(path: CPtr) -> Int64;
     file_mkdir_p => fn koja_file_mkdir_p(path: CPtr) -> Int64;
     file_open => fn koja_file_open(path: CPtr, mode: Int64) -> Int32;
-    file_read_all => fn koja_file_read_all(path: CPtr) -> CPtr;
+    file_read_all => fn koja_file_read_all(path: CPtr, out: CPtr) -> Int64;
     file_rename => fn koja_file_rename(src: CPtr, dst: CPtr) -> Int64;
     file_rmdir => fn koja_file_rmdir(path: CPtr) -> Int64;
     file_write_all => fn koja_file_write_all(path: CPtr, content: CPtr, len: Int64) -> Int64;
 }
 
-/// `koja_fd_read(fd, count, timeout_ms)`: wait for `fd` to be readable,
-/// then delegate to the native reader (which owns the koja-string
-/// marshaling). Returns the length-prefixed string pointer, or null on
-/// error, interrupt, or timeout (with `TimedOut` as the last error).
+/// Handles `koja_fd_read(fd, buffer, count, timeout_ms)`. Waits for
+/// `fd` to be readable, then delegates to the native reader, which
+/// fills the caller's `buffer`. Returns the number of bytes read, or
+/// the failure value of an error, interrupt, or timeout.
 pub(super) async fn fd_read(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd), Value::Int(count), Value::Int(timeout_ms)] = args else {
+    let [
+        Value::Int(fd),
+        Value::CPtr(buffer),
+        Value::Int(count),
+        Value::Int(timeout_ms),
+    ] = args
+    else {
         return Err(type_mismatch(
             "koja_fd_read",
-            "(fd: Int32, count: Int64, timeout_ms: Int64)",
+            "(fd: Int32, buffer: CPtr, count: Int64, timeout_ms: Int64)",
             args,
         ));
     };
     let deadline = deadline_from_user_millis(*timeout_ms);
-    match reactor::io_block(*fd as i32, Interest::Readable, deadline).await {
-        IoWait::Ready => {}
-        IoWait::Interrupted => {
-            reactor::note_interrupted();
-            return Ok(Value::CPtr(ptr::null_mut()));
-        }
-        IoWait::TimedOut => {
-            reactor::note_timed_out();
-            return Ok(Value::CPtr(ptr::null_mut()));
-        }
+    let wait = reactor::io_block(*fd as i32, Interest::Readable, deadline).await;
+    if let Some(failed) = reactor::wait_failure(wait) {
+        return Ok(Value::Int(failed));
     }
-    let ptr = unsafe { koja_fd_read(*fd as i32, *count, -1) };
-    Ok(Value::CPtr(ptr))
+    let read = unsafe { koja_fd_read(*fd as i32, *buffer, *count, -1) };
+    Ok(Value::Int(read))
 }
 
-/// `koja_fd_write(fd, data, len, timeout_ms)`: wait for `fd` to be
-/// writable, then delegate to the native writer. Returns the bytes
-/// written, or -1 on error, interrupt, or timeout.
+/// Handles `koja_fd_write(fd, data, len, timeout_ms)`. Waits for `fd`
+/// to be writable, then delegates to the native writer. Returns the
+/// number of bytes written, or the failure value of an error,
+/// interrupt, or timeout.
 pub(super) async fn fd_write(args: &[Value]) -> Result<Value, RuntimeError> {
     let [
         Value::Int(fd),
@@ -95,16 +93,9 @@ pub(super) async fn fd_write(args: &[Value]) -> Result<Value, RuntimeError> {
         ));
     };
     let deadline = deadline_from_user_millis(*timeout_ms);
-    match reactor::io_block(*fd as i32, Interest::Writable, deadline).await {
-        IoWait::Ready => {}
-        IoWait::Interrupted => {
-            reactor::note_interrupted();
-            return Ok(Value::Int(-1));
-        }
-        IoWait::TimedOut => {
-            reactor::note_timed_out();
-            return Ok(Value::Int(-1));
-        }
+    let wait = reactor::io_block(*fd as i32, Interest::Writable, deadline).await;
+    if let Some(failed) = reactor::wait_failure(wait) {
+        return Ok(Value::Int(failed));
     }
     let written = unsafe { koja_fd_write(*fd as i32, *data, *len, -1) };
     Ok(Value::Int(written))

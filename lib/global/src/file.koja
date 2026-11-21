@@ -29,7 +29,7 @@ struct File
     cs.free()
 
     if result < 0
-      fail FileError.last()
+      fail FileError.from_failure(result)
     end
   end
 
@@ -75,7 +75,7 @@ struct File
     cs.free()
 
     if result < 0
-      fail FileError.last()
+      fail FileError.from_failure(result)
     end
   end
 
@@ -89,7 +89,7 @@ struct File
     cs.free()
 
     if result < 0
-      fail FileError.last()
+      fail FileError.from_failure(result)
     end
   end
 
@@ -116,7 +116,7 @@ struct File
     cs.free()
 
     if fd < 0
-      fail FileError.last()
+      fail FileError.from_failure(fd)
     end
 
     IO.Descriptor{raw: fd}
@@ -137,13 +137,17 @@ struct File
   """
   fn read_binary(path: String) -> Binary ! FileError | IOError
     cs = try path_cstring(path)
-    ptr = koja_file_read_all(cs.ptr)
+    out: CPtr<CPtr<UInt8>> = CPtr.alloc(1)
+    result = koja_file_read_all(cs.ptr, out)
     cs.free()
 
-    if ptr.null?()
-      fail last_error()
+    if result < 0
+      out.free()
+      fail from_failure(result)
     end
 
+    ptr = out.read()
+    out.free()
     RuntimeBlock.adopt_binary(ptr)
   end
 
@@ -168,7 +172,7 @@ struct File
     dst_cs.free()
 
     if result < 0
-      fail FileError.last()
+      fail FileError.from_failure(result)
     end
   end
 
@@ -182,7 +186,7 @@ struct File
     cs.free()
 
     if result < 0
-      fail FileError.last()
+      fail FileError.from_failure(result)
     end
   end
 
@@ -207,23 +211,23 @@ struct File
     path_cs.free()
 
     if result < 0
-      fail last_error()
+      fail from_failure(result)
     end
   end
 
-  priv fn last_error -> FileError | IOError
+  priv fn from_failure(result: Int) -> FileError | IOError
     # `read_binary` and `write` each wrap one runtime call that opens
-    # the path and then streams it, so the code can come from either
-    # domain. Stream causes are checked first and anything else,
-    # including `Unknown`, lands in the path domain.
+    # the path and then streams it, so the code in the failed `result`
+    # can come from either domain. Stream causes are checked first and
+    # anything else, including `Unknown`, lands in the path domain.
 
-    match IOError.from_code(koja_last_error_code())
+    match IOError.from_code(-result)
       Option.Some(error) ->
         stream: FileError | IOError = error
         stream
 
       Option.None ->
-        path: FileError | IOError = FileError.last()
+        path: FileError | IOError = FileError.from_failure(result)
         path
     end
   end
@@ -231,9 +235,6 @@ struct File
   priv fn path_cstring(path: String) -> CString ! FileError
     path.to_cstring() rescue _ -> fail FileError.InvalidPath
   end
-
-  @extern "C"
-  priv fn koja_last_error_code -> Int32
 
   @extern "C"
   priv fn koja_file_delete(path: CPtr<UInt8>) -> Int64
@@ -254,7 +255,7 @@ struct File
   priv fn koja_file_open(path: CPtr<UInt8>, mode: Int64) -> Int32
 
   @extern "C"
-  priv fn koja_file_read_all(path: CPtr<UInt8>) -> CPtr<UInt8>
+  priv fn koja_file_read_all(path: CPtr<UInt8>, out: CPtr<CPtr<UInt8>>) -> Int64
 
   @extern "C"
   priv fn koja_file_rename(src: CPtr<UInt8>, dst: CPtr<UInt8>) -> Int64

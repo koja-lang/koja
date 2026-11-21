@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Koja.version()` returns the version of the toolchain that compiled the program, the same string `koja --version` prints.
 - `IO.Writer.write_all(data, options)` writes all of `data`. It is a default body on the protocol, so `IO.Descriptor`, `TCPSocket`, and every other writer have it. It calls `write` until the destination has accepted every byte. `options.timeout` bounds each `write`, not the whole call, and a failure can come after some bytes are written. The contract of `write` now says that a call with data writes at least one byte or fails.
 - `TCPSocket.set_nodelay(enabled)` and `Socket.set_nodelay(enabled)` turn the `TCP_NODELAY` option on or off, and fail with `Socket.Error`. A new connection keeps the system default, which is off. A package that writes a message and then waits for the reply turns it on after `connect` or `accept`.
+- `Socket.Error.Closed` means the socket is no longer open, the same meaning as `IO.Error.Closed`. `accept`, `bind`, `listen`, and `connect` on a closed socket fail with it, and a `TCPServer` whose listener is closed reports it. Before, a closed socket gave `Socket.Error.Unknown(0)`. An exhaustive `match` on `Socket.Error` needs one more arm.
 - `TLSConfig.with_alpn(protocols)` names the application protocols a client offers during the TLS handshake, as in `TLSConfig.client().with_alpn(["h2", "http/1.1"])`. `TCPSocket.alpn()` and `TLSSession.alpn()` return the protocol the server selected as an `Option<String>`, with `Option.None` when it selected none and on a connection without TLS. The list is the new field `TLSConfig.alpn`, which is empty by default. A name that is empty or longer than 255 bytes fails the client handshake with the new variant `TLSError.ProtocolNameInvalid`, so an exhaustive `match` on `TLSError` needs one more arm. A server handshake ignores the list.
 - `HTTP.Version` names the HTTP version of a message: `HTTP1_0`, `HTTP1_1`, or `HTTP2`.
 - `HTTP.Method` gains `Connect`, `Query`, and `Trace`, so an exhaustive `match` needs three more arms.
@@ -41,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change.** The parsers reject messages that `HTTP.Parser` accepted. These are `Malformed`: a `Content-Length` that is not a number, two `Content-Length` headers that differ, `Content-Length` with `Transfer-Encoding`, an HTTP/1.1 request without exactly one `Host` header, a space before the colon of a header, a bare CR or LF in the head, and a request target with a `#` or an invalid path. The parsers drop the reason phrase of a response and the trailers of a chunked body.
 - **Breaking change.** `Response.serialize()` returns `Binary`. The status line is always `HTTP/1.1` with `status.reason()`.
 - **Breaking change.** The `HTTP` client functions fail with `HTTP.Error | Socket.Error | IO.Error | TLSError`, so a network failure keeps its own type. `HTTP.Error` is now `BodyTooLarge`, `InvalidUrl(String)`, `Parse(Parser.Error)`, or `Timeout`. A union has no `message()`, so `rescue e -> fail e.message()` becomes a `match` on the type of `e`.
+- **Breaking change.** `IO.Error.last()`, `File.Error.last()`, `Socket.Error.last()`, and `IO.Error.from_errno()` are gone. Each one read a value that a different failed call could replace first. Every function that can fail already returns its error, so match on that error. `from_code` on the three enums stays but is no longer in the docs.
 - The `HTTP` client reads the response as bytes, so a binary body arrives whole and a multibyte character split across two reads no longer fails. It turns `TCP_NODELAY` on, skips a 1xx response other than 101, and fails with `HTTP.Error.BodyTooLarge` for a body over 16 MiB.
 
 ### Fixed
@@ -51,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A compiled `for` loop over a `List` no longer copies the list on each step. `List.map`, `filter`, and `reduce` are faster for the same reason.
 - A `for` loop over a `String` runs in linear time. Before, each step scanned the whole string. `String.downcase`, `upcase`, `codepoints`, and the other functions that walk a string are faster for the same reason.
 - A compiled program stops at startup with a clear message when a command-line argument is not valid UTF-8. Before, the argument became a `String` with invalid contents.
+- `Socket.connect`, `TCPSocket.connect`, and the `HTTP` client report the real cause of a failed connection, such as `Socket.Error.ConnectionRefused`. Before, a compiled program could get `Socket.Error.Unknown`.
+- A process that receives a message always takes on the `Process.Context` of the sender. Before, a compiled program could give that context to a different process, so a `Trace` span could join the wrong trace.
+- A failed call on a file, a descriptor, a socket, or a TLS connection always reports its own cause. Before, a program with many processes could get the cause of a different failed call, such as `File.Error.NotFound` in place of `File.Error.AlreadyExists`.
 
 ## [0.20.1] - 2026-11-06
 

@@ -2,11 +2,13 @@
 //!
 //! Drives the real scheduler + reactor through the runtime's `#[no_mangle]`
 //! C surface and checks that a bounded wait ends with `TimedOut` (cause
-//! code 18) instead of parking forever. Three waits are covered: a read on
-//! a peer that never writes, an accept on a listener no client reaches,
-//! and a connect to a TEST-NET address (RFC 5737) that no router forwards,
-//! so the SYN goes unanswered. A host with no route at all fails that
-//! connect at once with an unreachable error, which the test accepts.
+//! code 18) instead of parking forever. Each call returns the negated
+//! cause code. The test covers three waits. The first is a read on a
+//! peer that never writes. The second is an accept on a listener no
+//! client reaches. The third is a connect to a TEST-NET address
+//! (RFC 5737) that no router forwards, so the SYN goes unanswered. A
+//! host with no route at all fails that connect at once with an
+//! unreachable error, which the test accepts.
 //!
 //! As with `scheduler_stress`, the runtime is a process-global singleton,
 //! so this file contains exactly one `#[test]`.
@@ -23,7 +25,7 @@ use common::{koja_rt_main_done, spawn_simple};
 extern crate koja_runtime;
 
 unsafe extern "C" {
-    fn koja_fd_read(fd: i32, count: i64, timeout_ms: i64) -> *const u8;
+    fn koja_fd_read(fd: i32, buffer: *mut u8, count: i64, timeout_ms: i64) -> i64;
     fn koja_socket_accept(fd: i32, timeout_ms: i64) -> i32;
     fn koja_socket_connect(
         fd: i32,
@@ -33,7 +35,6 @@ unsafe extern "C" {
         timeout_ms: i64,
     ) -> i64;
     fn koja_socket_create(sock_type: i64) -> i32;
-    fn koja_last_error_code() -> i32;
 }
 
 const SOCK_STREAM: i64 = 1;
@@ -77,21 +78,23 @@ fn idle_listener_fd() -> i32 {
 
 extern "C" fn body(_state: *const u8) {
     let started = Instant::now();
-    let read = unsafe { koja_fd_read(silent_peer_fd(), 16, TIMEOUT.as_millis() as i64) };
+    let mut buffer = [0u8; 16];
+    let read = unsafe {
+        koja_fd_read(
+            silent_peer_fd(),
+            buffer.as_mut_ptr(),
+            buffer.len() as i64,
+            TIMEOUT.as_millis() as i64,
+        )
+    };
     READ_ELAPSED_MS.store(started.elapsed().as_millis() as i64, Ordering::SeqCst);
-    if read.is_null() {
-        READ_CODE.store(
-            i64::from(unsafe { koja_last_error_code() }),
-            Ordering::SeqCst,
-        );
+    if read < 0 {
+        READ_CODE.store(-read, Ordering::SeqCst);
     }
 
     let accepted = unsafe { koja_socket_accept(idle_listener_fd(), TIMEOUT.as_millis() as i64) };
     if accepted < 0 {
-        ACCEPT_CODE.store(
-            i64::from(unsafe { koja_last_error_code() }),
-            Ordering::SeqCst,
-        );
+        ACCEPT_CODE.store(-i64::from(accepted), Ordering::SeqCst);
     }
 
     let fd = unsafe { koja_socket_create(SOCK_STREAM) };
@@ -107,10 +110,7 @@ extern "C" fn body(_state: *const u8) {
     };
     CONNECT_ELAPSED_MS.store(started.elapsed().as_millis() as i64, Ordering::SeqCst);
     if connected < 0 {
-        CONNECT_CODE.store(
-            i64::from(unsafe { koja_last_error_code() }),
-            Ordering::SeqCst,
-        );
+        CONNECT_CODE.store(-connected, Ordering::SeqCst);
     }
 }
 

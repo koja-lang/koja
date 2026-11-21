@@ -35,8 +35,8 @@ struct Socket
 
     client_fd = koja_socket_accept(self.descriptor.raw, timeout_ms(timeout))
 
-    if client_fd == -1
-      fail SocketError.last()
+    if client_fd < 0
+      fail SocketError.from_failure(client_fd)
     end
 
     IO.Descriptor{raw: client_fd}
@@ -53,8 +53,8 @@ struct Socket
       addr.port,
     )
 
-    if result == -1
-      fail SocketError.last()
+    if result < 0
+      fail SocketError.from_failure(result)
     end
 
     self
@@ -83,8 +83,8 @@ struct Socket
       timeout_ms(timeout),
     )
 
-    if result == -1
-      fail SocketError.last()
+    if result < 0
+      fail SocketError.from_failure(result)
     end
 
     self
@@ -102,8 +102,8 @@ struct Socket
 
     fd = koja_socket_create(sock_type)
 
-    if fd == -1
-      fail SocketError.last()
+    if fd < 0
+      fail SocketError.from_failure(fd)
     end
 
     Socket{descriptor: IO.Descriptor{raw: fd}}
@@ -115,8 +115,8 @@ struct Socket
   fn listen(self, backlog: Int) -> Socket ! SocketError
     result = koja_socket_listen(self.descriptor.raw, backlog)
 
-    if result == -1
-      fail SocketError.last()
+    if result < 0
+      fail SocketError.from_failure(result)
     end
 
     self
@@ -128,7 +128,7 @@ struct Socket
   """
   fn recv_from(self, count: Int) -> (Binary, SocketAddress) ! SocketError
     (data, ip_bytes, port) = self.recv_from_raw(count)
-      rescue _ -> fail SocketError.last()
+      rescue result -> fail SocketError.from_failure(result)
     (data, SocketAddress{ip: ip_address_from_bytes(ip_bytes), port: port})
   end
 
@@ -137,7 +137,8 @@ struct Socket
   `SocketError.NameNotFound` when the name does not resolve.
   """
   fn resolve(hostname: String) -> List<IPAddress> ! SocketError
-    addresses = Socket.resolve_raw(hostname) rescue _ -> fail SocketError.last()
+    addresses = Socket.resolve_raw(hostname)
+      rescue result -> fail SocketError.from_failure(result)
     addresses.map(bytes -> ip_address_from_bytes(bytes))
   end
 
@@ -163,8 +164,8 @@ struct Socket
       addr.port,
     )
 
-    if result == -1
-      fail SocketError.last()
+    if result < 0
+      fail SocketError.from_failure(result)
     end
 
     result
@@ -180,8 +181,8 @@ struct Socket
       enabled ? 1 : 0,
     )
 
-    if result == -1
-      fail SocketError.last()
+    if result < 0
+      fail SocketError.from_failure(result)
     end
 
     self
@@ -193,8 +194,8 @@ struct Socket
   fn set_reuse_addr(self) -> Socket ! SocketError
     result = koja_socket_setsockopt_reuse(self.descriptor.raw)
 
-    if result == -1
-      fail SocketError.last()
+    if result < 0
+      fail SocketError.from_failure(result)
     end
 
     self
@@ -208,13 +209,10 @@ struct Socket
   end
 
   @intrinsic
-  priv fn last_error -> String
+  priv fn recv_from_raw(self, count: Int) -> (Binary, Binary, Int) ! Int
 
   @intrinsic
-  priv fn recv_from_raw(self, count: Int) -> (Binary, Binary, Int) ! String
-
-  @intrinsic
-  priv fn resolve_raw(hostname: String) -> List<Binary> ! String
+  priv fn resolve_raw(hostname: String) -> List<Binary> ! Int
 
   @extern "C"
   priv fn koja_socket_accept(fd: Int32, timeout_ms: Int64) -> Int32

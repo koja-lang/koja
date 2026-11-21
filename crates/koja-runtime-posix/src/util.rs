@@ -1,10 +1,9 @@
 //! Shared helpers used across multiple runtime modules.
 
-use std::cell::RefCell;
 use std::io;
 use std::ptr;
 
-use crate::ffi::EBADF;
+use crate::ffi::{EBADF, last_os_error};
 use crate::memory;
 use crate::panic::exit_before_entry;
 
@@ -261,40 +260,11 @@ pub unsafe fn string_payload_bytes<'a>(payload: *const u8) -> &'a [u8] {
     unsafe { std::slice::from_raw_parts(payload, byte_length) }
 }
 
-thread_local! {
-    static LAST_IO_ERROR: RefCell<Option<LastError>> = const { RefCell::new(None) };
-}
-
-/// The recorded outcome of the most recent failed I/O call: a display
-/// message plus a stable cause code (see [`error_kind_code`]).
-pub struct LastError {
-    code: i32,
-    message: String,
-}
-
-impl LastError {
-    /// DNS resolution failures, which reach the runtime as plain strings
-    /// rather than `io::Error` kinds.
-    pub fn name_not_found(message: &str) -> Self {
-        LastError {
-            code: ERROR_CODE_NAME_NOT_FOUND,
-            message: message.to_string(),
-        }
-    }
-}
-
-impl From<io::Error> for LastError {
-    fn from(e: io::Error) -> Self {
-        LastError {
-            code: cause_code(&e),
-            message: e.to_string(),
-        }
-    }
-}
-
-/// Stable cause code for an `io::Error`: the mapped `ErrorKind` code
-/// when known, otherwise the raw OS errno negated (so the Koja side can
-/// surface it as `Unknown(errno)` without conflating the two spaces).
+/// Returns the stable cause code for an `io::Error`. A kind in the table
+/// of [`error_kind_code`] has its own code. Any other error is
+/// [`ERRNO_BASE`] plus the raw OS errno, which the Koja side shows as
+/// `Unknown(errno)`. An error with no errno is [`ERRNO_BASE`] alone.
+///
 /// `EBADF` has no `ErrorKind` of its own and is the `Closed` cause. The
 /// reactor wakes a waiter whose fd another process closed so it
 /// observes exactly this errno on its retry.
@@ -305,28 +275,8 @@ fn cause_code(e: &io::Error) -> i32 {
     }
     match e.raw_os_error() {
         Some(EBADF) => ERROR_CODE_CLOSED,
-        Some(raw) => -raw,
-        None => 0,
-    }
-}
-
-impl From<&str> for LastError {
-    fn from(message: &str) -> Self {
-        LastError {
-            code: 0,
-            message: message.to_string(),
-        }
-    }
-}
-
-/// A path that is not valid UTF-8 cannot name a file, so it is the
-/// `InvalidPath` cause.
-impl From<std::str::Utf8Error> for LastError {
-    fn from(e: std::str::Utf8Error) -> Self {
-        LastError {
-            code: ERROR_CODE_INVALID_PATH,
-            message: e.to_string(),
-        }
+        Some(raw) => ERRNO_BASE + raw,
+        None => ERRNO_BASE,
     }
 }
 
@@ -334,13 +284,24 @@ impl From<std::str::Utf8Error> for LastError {
 /// Each sits in its alphabetical slot of the table in [`error_kind_code`].
 const ERROR_CODE_CLOSED: i32 = 4;
 const ERROR_CODE_INVALID_PATH: i32 = 11;
-pub const ERROR_CODE_NAME_NOT_FOUND: i32 = 13;
+const ERROR_CODE_NAME_NOT_FOUND: i32 = 13;
+
+/// The first cause code past the table. A cause with no code of its own
+/// is `ERRNO_BASE` plus the raw OS errno, so the two ranges never meet.
+const ERRNO_BASE: i32 = 1000;
+
+/// The failure values for the causes that have no `io::Error`. A path
+/// that is not valid UTF-8 cannot name a file, DNS reports a failure
+/// outside `errno`, and a bad argument has no errno at all.
+pub(crate) const FAILURE_INVALID_PATH: i64 = -(ERROR_CODE_INVALID_PATH as i64);
+pub(crate) const FAILURE_NAME_NOT_FOUND: i64 = -(ERROR_CODE_NAME_NOT_FOUND as i64);
+pub(crate) const FAILURE_NO_ERRNO: i64 = -(ERRNO_BASE as i64);
 
 /// Maps `io::ErrorKind` to the stable cause codes consumed by the Koja
 /// stdlib. The table is alphabetical by cause name, and each Koja enum
 /// (`IO.Error` and `File.Error` in `lib/global`, `Socket.Error` in
 /// `lib/net`) reads its own subset of it. Keep every side in sync. A 0
-/// means "unmapped" and the Koja side falls back to `Unknown(code)`.
+/// means the kind has no code, and [`cause_code`] then uses the errno.
 ///
 /// `WouldBlock` has no code because `block_until_ready` parks and
 /// retries on `EAGAIN`, so it never reaches Koja code.
@@ -398,39 +359,22 @@ pub unsafe fn alloc_koja_string(bytes: &[u8]) -> *const u8 {
     }
 }
 
-/// Returns the error message for the most recent failed I/O call.
-#[unsafe(no_mangle)]
-pub extern "C" fn koja_last_error() -> *const u8 {
-    LAST_IO_ERROR.with(|cell| {
-        let last = cell.borrow();
-        match last.as_ref() {
-            Some(e) => unsafe { alloc_koja_string(e.message.as_bytes()) },
-            None => unsafe { alloc_koja_string(b"unknown error") },
-        }
-    })
+/// Returns the negated cause code of `e`. A failed runtime call
+/// returns this value, so the cause reaches the caller with the result
+/// and no later call has to ask for it. A success value is never
+/// negative.
+pub fn failure(e: &io::Error) -> i64 {
+    -i64::from(cause_code(e))
 }
 
-/// Returns the stable cause code for the most recent failed I/O call
-/// (see [`error_kind_code`]), or 0 when no code was recorded.
+/// Returns the [`failure`] value for the current C `errno`. Used after
+/// a foreign library such as BoringSSL fails a syscall outside the
+/// runtime's own I/O paths. The caller must make this call before any
+/// point where its process can yield, because `errno` belongs to the
+/// worker thread.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_last_error_code() -> i32 {
-    LAST_IO_ERROR.with(|cell| cell.borrow().as_ref().map_or(0, |e| e.code))
-}
-
-/// Returns the stable cause code for the current C `errno`. Used after
-/// foreign libraries (e.g. BoringSSL) fail a syscall outside the
-/// runtime's own I/O paths, where `LAST_IO_ERROR` was never set.
-#[unsafe(no_mangle)]
-pub extern "C" fn koja_errno_code() -> i32 {
-    cause_code(&io::Error::last_os_error())
-}
-
-/// Stores the error of the most recent failed I/O call in the
-/// thread-local `LAST_IO_ERROR` slot.
-pub fn set_last_error(e: impl Into<LastError>) {
-    LAST_IO_ERROR.with(|cell| {
-        *cell.borrow_mut() = Some(e.into());
-    });
+pub extern "C" fn koja_errno_failure() -> i32 {
+    failure(&last_os_error()) as i32
 }
 
 /// Matches the LLVM layout `{ ptr, i64, i64 }` used by `List<T>`.

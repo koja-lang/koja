@@ -4,7 +4,6 @@ use std::ffi::{CStr, c_char};
 use std::fs::{self, OpenOptions};
 use std::os::fd::IntoRawFd;
 use std::path::Path;
-use std::ptr;
 use std::slice;
 
 use koja_runtime_core::{IoWait, deadline_from_user_millis};
@@ -12,62 +11,61 @@ use koja_runtime_core::{IoWait, deadline_from_user_millis};
 use crate::ffi::{libc_read, libc_write};
 use crate::reactor::{Interest, block_until_ready, io_block, release_fd_and_close};
 use crate::signals;
-use crate::util::{alloc_binary, set_last_error};
+use crate::util::{FAILURE_INVALID_PATH, FAILURE_NO_ERRNO, alloc_binary, failure};
 
-/// Decodes a NUL-terminated C path pointer into `&str`, recording the
-/// decode failure in the thread-local last-error slot on invalid UTF-8.
+/// Decodes a NUL-terminated C path pointer into `&str`. A path that is
+/// not valid UTF-8 is the `InvalidPath` cause, and the `Err` holds its
+/// [`failure`] value for the caller to return.
 ///
 /// # Safety
 /// `ptr` must point to a valid NUL-terminated string.
-unsafe fn cstr_path<'a>(ptr: *const u8) -> Result<&'a str, ()> {
-    match unsafe { CStr::from_ptr(ptr as *const c_char) }.to_str() {
-        Ok(s) => Ok(s),
-        Err(e) => {
-            set_last_error(e);
-            Err(())
-        }
-    }
+unsafe fn cstr_path<'a>(ptr: *const u8) -> Result<&'a str, i64> {
+    unsafe { CStr::from_ptr(ptr as *const c_char) }
+        .to_str()
+        .map_err(|_| FAILURE_INVALID_PATH)
 }
 
-/// Closes a raw file descriptor. Returns 0 on success, -1 on error.
-/// The reactor owns the close so its registration teardown and the
-/// `close(2)` syscall stay atomic with respect to concurrent parkers.
+/// Closes a raw file descriptor. Returns 0, or the [`failure`] value of
+/// the error. The reactor owns the close so its registration teardown
+/// and the `close(2)` syscall stay atomic with respect to concurrent
+/// parkers.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_fd_close(fd: i32) -> i32 {
-    if let Err(error) = release_fd_and_close(fd) {
-        set_last_error(error);
-        return -1;
+    match release_fd_and_close(fd) {
+        Ok(()) => 0,
+        Err(e) => failure(&e) as i32,
     }
-    0
 }
 
-/// Reads up to `count` bytes from a raw file descriptor. If the fd is
-/// non-blocking (sockets), suspends the process until data is available
-/// or `timeout_ms` passes (negative for no limit), which fails with
-/// `TimedOut`. Returns a length-prefixed Binary pointer, or null on error.
+/// Reads up to `count` bytes from a raw file descriptor into `buffer`.
+/// If the fd is non-blocking (sockets), suspends the process until data
+/// is available or `timeout_ms` passes (negative for no limit), which
+/// fails with `TimedOut`. Returns the number of bytes read, or the
+/// [`failure`] value of the error.
+///
+/// # Safety
+/// `buffer` must point to at least `count` writable bytes.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_fd_read(fd: i32, count: i64, timeout_ms: i64) -> *const u8 {
-    let mut buf = vec![0u8; count as usize];
+pub unsafe extern "C" fn koja_fd_read(
+    fd: i32,
+    buffer: *mut u8,
+    count: i64,
+    timeout_ms: i64,
+) -> i64 {
     let deadline = deadline_from_user_millis(timeout_ms);
     match block_until_ready(fd, Interest::Readable, deadline, || unsafe {
-        libc_read(fd, buf.as_mut_ptr(), buf.len())
+        libc_read(fd, buffer, count as usize)
     }) {
-        Ok(n) => {
-            buf.truncate(n as usize);
-            alloc_binary(&buf)
-        }
-        Err(e) => {
-            set_last_error(e);
-            ptr::null()
-        }
+        Ok(n) => n as i64,
+        Err(e) => failure(&e),
     }
 }
 
 /// Writes `data_len` bytes from `data_ptr` to a raw file descriptor.
 /// If the fd is non-blocking (sockets), suspends the process until the
 /// write buffer has space or `timeout_ms` passes (negative for no
-/// limit), which fails with `TimedOut`. Returns bytes written, or -1 on
-/// error.
+/// limit), which fails with `TimedOut`. Returns the number of bytes
+/// written, or the [`failure`] value of the error.
 ///
 /// # Safety
 /// `data_ptr` must point to at least `data_len` readable bytes.
@@ -88,27 +86,25 @@ pub unsafe extern "C" fn koja_fd_write(
             if (fd == 1 || fd == 2) && e.raw_os_error() == Some(libc::EPIPE) {
                 signals::die_from_sigpipe();
             }
-            set_last_error(e);
-            -1
+            failure(&e)
         }
     }
 }
 
-/// Deletes the file at `path`. Returns 0 on success, -1 on error.
+/// Deletes the file at `path`. Returns 0, or the [`failure`] value of
+/// the error.
 ///
 /// # Safety
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_file_delete(path_ptr: *const u8) -> i64 {
-    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
-        return -1;
+    let path = match unsafe { cstr_path(path_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
     match fs::remove_file(path) {
         Ok(()) => 0,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
@@ -137,70 +133,69 @@ pub unsafe extern "C" fn koja_file_is_dir(path_ptr: *const u8) -> i64 {
 }
 
 /// Creates a single directory. Errors if the parent is missing or the
-/// path already exists. Returns 0 on success, -1 on error.
+/// path already exists. Returns 0, or the [`failure`] value of the
+/// error.
 ///
 /// # Safety
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_file_mkdir(path_ptr: *const u8) -> i64 {
-    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
-        return -1;
+    let path = match unsafe { cstr_path(path_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
     match fs::create_dir(path) {
         Ok(()) => 0,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
 /// Creates a directory and any missing parents (`mkdir -p`). An already
-/// existing directory succeeds. Returns 0 on success, -1 on error.
+/// existing directory succeeds. Returns 0, or the [`failure`] value of
+/// the error.
 ///
 /// # Safety
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_file_mkdir_p(path_ptr: *const u8) -> i64 {
-    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
-        return -1;
+    let path = match unsafe { cstr_path(path_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
     match fs::create_dir_all(path) {
         Ok(()) => 0,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
-/// Removes an empty directory. Returns 0 on success, -1 on error.
+/// Removes an empty directory. Returns 0, or the [`failure`] value of
+/// the error.
 ///
 /// # Safety
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_file_rmdir(path_ptr: *const u8) -> i64 {
-    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
-        return -1;
+    let path = match unsafe { cstr_path(path_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
     match fs::remove_dir(path) {
         Ok(()) => 0,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
-/// Opens a file. `mode`: 0 = read, 1 = write (create/truncate), 2 = append.
-/// Returns fd on success, -1 on error.
+/// Opens a file. A `mode` of 0 is read, 1 is write (create or
+/// truncate), and 2 is append. Returns the fd, or the [`failure`] value
+/// of the error.
 ///
 /// # Safety
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_file_open(path_ptr: *const u8, mode: i64) -> i32 {
-    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
-        return -1;
+    let path = match unsafe { cstr_path(path_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid as i32,
     };
 
     let file = match mode {
@@ -211,62 +206,61 @@ pub unsafe extern "C" fn koja_file_open(path_ptr: *const u8, mode: i64) -> i32 {
             .truncate(true)
             .open(path),
         2 => OpenOptions::new().append(true).create(true).open(path),
-        _ => {
-            set_last_error("invalid file open mode");
-            return -1;
-        }
+        _ => return FAILURE_NO_ERRNO as i32,
     };
 
     match file {
         Ok(f) => f.into_raw_fd(),
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e) as i32,
     }
 }
 
 /// Reads the entire contents of a file as a length-prefixed Binary.
+/// Writes the Binary pointer through `out` and returns 0. On an error
+/// it returns the [`failure`] value and does not write `out`.
 ///
 /// # Safety
-/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string, and
+/// `out` must point to a writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_file_read_all(path_ptr: *const u8) -> *const u8 {
-    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
-        return ptr::null();
+pub unsafe extern "C" fn koja_file_read_all(path_ptr: *const u8, out: *mut *const u8) -> i64 {
+    let path = match unsafe { cstr_path(path_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
 
     match fs::read(path) {
-        Ok(bytes) => alloc_binary(&bytes),
-        Err(e) => {
-            set_last_error(e);
-            ptr::null()
+        Ok(bytes) => {
+            unsafe { *out = alloc_binary(&bytes) };
+            0
         }
+        Err(e) => failure(&e),
     }
 }
 
-/// Renames `src` to `dst`. Returns 0 on success, -1 on error.
+/// Renames `src` to `dst`. Returns 0, or the [`failure`] value of the
+/// error.
 ///
 /// # Safety
 /// Both pointers must point to valid NUL-terminated UTF-8 strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_file_rename(src_ptr: *const u8, dst_ptr: *const u8) -> i64 {
-    let Ok(src) = (unsafe { cstr_path(src_ptr) }) else {
-        return -1;
+    let src = match unsafe { cstr_path(src_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
-    let Ok(dst) = (unsafe { cstr_path(dst_ptr) }) else {
-        return -1;
+    let dst = match unsafe { cstr_path(dst_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
     match fs::rename(src, dst) {
         Ok(()) => 0,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
 /// Writes `content` to the file at `path`, creating or truncating it.
+/// Returns 0, or the [`failure`] value of the error.
 ///
 /// # Safety
 /// `path_ptr` must be a NUL-terminated UTF-8 string and `content_ptr`
@@ -277,16 +271,14 @@ pub unsafe extern "C" fn koja_file_write_all(
     content_ptr: *const u8,
     content_len: i64,
 ) -> i64 {
-    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
-        return -1;
+    let path = match unsafe { cstr_path(path_ptr) } {
+        Ok(path) => path,
+        Err(invalid) => return invalid,
     };
     let data = unsafe { slice::from_raw_parts(content_ptr, content_len as usize) };
     match fs::write(path, data) {
         Ok(()) => 0,
-        Err(e) => {
-            set_last_error(e);
-            -1
-        }
+        Err(e) => failure(&e),
     }
 }
 
@@ -313,7 +305,7 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::util::{error_kind_code, koja_last_error_code};
+    use crate::util::error_kind_code;
 
     #[test]
     fn write_to_closed_pipe_fails_with_broken_pipe() {
@@ -330,10 +322,9 @@ mod tests {
         let data = b"x";
         let written = unsafe { koja_fd_write(write_end, data.as_ptr(), data.len() as i64, -1) };
 
-        assert_eq!(written, -1);
         assert_eq!(
-            koja_last_error_code(),
-            error_kind_code(io::ErrorKind::BrokenPipe)
+            written,
+            -i64::from(error_kind_code(io::ErrorKind::BrokenPipe))
         );
         unsafe { libc::close(write_end) };
     }

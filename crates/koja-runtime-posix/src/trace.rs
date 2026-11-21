@@ -22,7 +22,7 @@ use koja_runtime_core::span_ids::SpanIds;
 use koja_runtime_core::wire::OwnedPayload;
 
 use crate::memory;
-use crate::scheduler::{CURRENT_PID, TABLE};
+use crate::scheduler::{TABLE, current_pid};
 use crate::system::fill_random;
 
 /// A span record the runtime holds on behalf of `Trace`: the Koja
@@ -73,7 +73,7 @@ thread_local! {
 
 /// Runs `f` over the calling process's open span stack.
 fn with_spans<R>(f: impl FnOnce(&mut Vec<Option<SpanRecord>>) -> R) -> R {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     // The calling process is the slot's `on_cpu` claim holder for the
     // whole call, which is what `with_execution` requires.
     unsafe { TABLE.with_execution(pid, |execution| f(&mut execution.spans)) }
@@ -88,7 +88,7 @@ fn with_spans<R>(f: impl FnOnce(&mut Vec<Option<SpanRecord>>) -> R) -> R {
 /// `context` must point to `CONTEXT_SIZE` (32) readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_rt_trace_install(context: *const u8) {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     let context = unsafe { ptr::read_unaligned(context.cast::<Context>()) };
     TABLE.set_context(pid, context);
 }

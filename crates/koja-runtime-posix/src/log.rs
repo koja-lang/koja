@@ -18,7 +18,7 @@ use std::ptr;
 use koja_runtime_core::wire::OwnedPayload;
 
 use crate::memory;
-use crate::scheduler::{CURRENT_PID, TABLE};
+use crate::scheduler::{TABLE, current_pid};
 
 /// A by-pointer glue the runtime calls over payload bytes: the drop
 /// shim releases them, the copy shim severs their heap shares in
@@ -92,7 +92,7 @@ impl LogConfig {
 
 /// Runs `f` over the calling process's stored configuration.
 fn with_log<R>(f: impl FnOnce(&mut Option<LogConfig>) -> R) -> R {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     // The calling process is the slot's `on_cpu` claim holder for the
     // whole call, which is what `with_execution` requires.
     unsafe { TABLE.with_execution(pid, |execution| f(&mut execution.log)) }
@@ -104,7 +104,7 @@ fn with_log<R>(f: impl FnOnce(&mut Option<LogConfig>) -> R) -> R {
 /// process that never configured. Called by `koja_rt_spawn` before
 /// the child is registered.
 pub(crate) fn inherited_config() -> Option<LogConfig> {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     if pid <= 0 {
         return None;
     }
@@ -120,7 +120,7 @@ pub(crate) fn inherited_config() -> Option<LogConfig> {
 /// The calling process's log floor word.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_log_level() -> i64 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.log_level(pid) as i64
 }
 
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn koja_rt_log_configure(
 ) {
     let config = unsafe { LogConfig::copy_in(payload, len as usize, drop_glue, copy_glue) };
     let previous = with_log(|log| log.replace(config));
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.set_log_level(pid, level as u64);
     // Release the old configuration off the execution borrow.
     drop(previous);
@@ -164,13 +164,13 @@ pub extern "C" fn koja_rt_log_config(out: *mut u8, out_cap: i64) -> i64 {
 /// `1`, or returns `0` when it already was.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_log_enter() -> i64 {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     i64::from(TABLE.log_enter(pid))
 }
 
 /// Clears the mark `koja_rt_log_enter` set.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_log_leave() {
-    let pid = CURRENT_PID.with(|c| c.get());
+    let pid = current_pid();
     TABLE.log_leave(pid);
 }

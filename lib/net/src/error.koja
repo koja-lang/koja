@@ -4,10 +4,13 @@ alias Net.Socket.Error as SocketError
 Why connection setup failed. Variants name causes, not operations.
 The caller already knows which call failed, so these say why.
 
-`Interrupted` means a system message such as a lifecycle event
-arrived while the process waited. The caller must return to its run
-loop so that message is handled, and must not retry the call first.
-`Unknown` carries the raw OS errno for causes outside the mapped set.
+`Closed` means the socket is no longer open, either because this
+process already closed it or because another process closed it while
+this one waited. `Interrupted` means a system message such as a
+lifecycle event arrived while the process waited. The caller must
+return to its run loop so that message is handled, and must not retry
+the call first. `Unknown` carries the raw OS errno for causes outside
+the mapped set.
 
 Produced by `bind`, `listen`, `accept`, `connect`, and name
 resolution on `TCPSocket`, `TCPListener`, and `UDPSocket`. Once a
@@ -17,6 +20,7 @@ signatures return the union `Socket.Error | TLSError`.
 """
 enum Socket.Error
   AddressInUse
+  Closed
   ConnectionAborted
   ConnectionRefused
   HostUnreachable
@@ -27,16 +31,21 @@ enum Socket.Error
   TimedOut
   Unknown(Int)
 
-  @doc """
-  Maps a runtime cause code to the connection cause it names, or
-  `Option.None` when the code belongs to another domain. Mostly
-  internal.
-  """
+  # The runtime adds this base to a raw OS errno that has no cause code
+  # of its own. Mirrors `ERRNO_BASE` in
+  # `crates/koja-runtime-posix/src/util.rs`.
+  priv const ERRNO_BASE: Int = 1000
+
+  # Maps a runtime cause code to the connection cause it names, or
+  # `Option.None` when the code belongs to another domain. Public so
+  # the three error enums keep one shape. Not for callers to use.
+  @doc false
   fn from_code(code: Int) -> Option<SocketError>
     # Mirrors `error_kind_code` in `crates/koja-runtime-posix/src/util.rs`.
 
     match code
       1 -> Option.Some(SocketError.AddressInUse)
+      4 -> Option.Some(SocketError.Closed)
       5 -> Option.Some(SocketError.ConnectionAborted)
       6 -> Option.Some(SocketError.ConnectionRefused)
       9 -> Option.Some(SocketError.HostUnreachable)
@@ -49,12 +58,12 @@ enum Socket.Error
     end
   end
 
-  @doc """
-  Builds the error for the most recent failed runtime connection
-  call. Mostly internal. Prefer matching returned errors.
-  """
-  fn last -> SocketError
-    SocketError.from_code_or_unknown(koja_last_error_code())
+  # Builds the error from the negative value a failed runtime call
+  # returns. Public only because `Socket` calls it. Not for callers to
+  # use.
+  @doc false
+  fn from_failure(result: Int) -> SocketError
+    SocketError.from_code_or_unknown(-result)
   end
 
   @doc """
@@ -63,6 +72,7 @@ enum Socket.Error
   fn message(self) -> String
     match self
       SocketError.AddressInUse -> "address already in use"
+      SocketError.Closed -> "socket is closed"
       SocketError.ConnectionAborted -> "connection aborted"
       SocketError.ConnectionRefused -> "connection refused"
       SocketError.HostUnreachable -> "host unreachable"
@@ -76,14 +86,14 @@ enum Socket.Error
   end
 
   priv fn from_code_or_unknown(code: Int) -> SocketError
-    # Negative codes are raw OS errno values for unmapped causes.
+    # A code above `ERRNO_BASE` is the base plus the raw OS errno of an
+    # unmapped cause. A code equal to the base is a failure with no errno.
+
+    errno = code > SocketError.ERRNO_BASE ? code - SocketError.ERRNO_BASE : 0
 
     match SocketError.from_code(code)
       Option.Some(error) -> error
-      Option.None -> SocketError.Unknown(code < 0 ? 0 - code : 0)
+      Option.None -> SocketError.Unknown(errno)
     end
   end
-
-  @extern "C"
-  priv fn koja_last_error_code -> Int32
 end

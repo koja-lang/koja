@@ -535,9 +535,11 @@ struct TLSSession
     end
   end
 
-  priv fn handshake_failure(ssl: CPtr<UInt8>, err: Int) -> IOError | TLSError
-    # Maps a failed handshake to its cause: certificate verification
-    # first, then the SSL error itself.
+  priv fn handshake_failure(ssl: CPtr<UInt8>, err: Int, cause: Int)
+    -> IOError | TLSError
+
+    # Maps a failed handshake to its cause. Certificate verification
+    # comes first, then the SSL error itself.
 
     verify = ssl_get_verify_result(ssl)
 
@@ -548,7 +550,7 @@ struct TLSSession
       return failed
     end
 
-    io_failure(err)
+    io_failure(err, cause)
   end
 
   priv fn deadline_for(timeout: Option<Duration>) -> Option<Instant>
@@ -570,9 +572,10 @@ struct TLSSession
     end
 
     err: Int = ssl_get_error(ssl, ret)
+    cause: Int = koja_errno_failure()
 
     if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
-      failure = handshake_failure(ssl, err)
+      failure = handshake_failure(ssl, err, cause)
       ssl_free(ssl)
       ssl_ctx_free(ctx)
       fail failure
@@ -591,8 +594,10 @@ struct TLSSession
     try handshake_loop(ssl, ctx, descriptor, client, deadline)
   end
 
-  priv fn io_failure(err: Int) -> IOError | TLSError
+  priv fn io_failure(err: Int, cause: Int) -> IOError | TLSError
     # Maps an `SSL_get_error` code from a failed read/write/handshake.
+    # `cause` is the `koja_errno_failure` value the caller read directly
+    # after the SSL call, before any other call could change `errno`.
 
     if err == SSL_ERROR_ZERO_RETURN
       closed: IOError | TLSError = TLSError.PeerClosed
@@ -600,7 +605,7 @@ struct TLSSession
     end
 
     if err == SSL_ERROR_SYSCALL
-      return syscall_failure()
+      return syscall_failure(cause)
     end
 
     failed: IOError | TLSError = TLSError.ProtocolFailed
@@ -674,29 +679,30 @@ struct TLSSession
     end
 
     err: Int = ssl_get_error(ssl, ret)
+    cause: Int = koja_errno_failure()
 
     if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
-      fail io_failure(err)
+      fail io_failure(err, cause)
     end
 
     try wait_ready(descriptor, err, deadline)
     try read_loop(ssl, descriptor, buf, count, deadline)
   end
 
-  priv fn syscall_failure -> IOError | TLSError
+  priv fn syscall_failure(cause: Int) -> IOError | TLSError
     # Maps an `SSL_ERROR_SYSCALL` to the underlying socket cause, or
     # `PeerClosed` when the peer dropped the connection without a
     # close_notify (errno is untouched in that case).
 
-    cause = IOError.from_errno()
+    error = IOError.from_failure(cause)
 
-    match cause
+    match error
       IOError.Unknown(code) when code == 0 ->
         closed: IOError | TLSError = TLSError.PeerClosed
         closed
 
       _ ->
-        widened: IOError | TLSError = cause
+        widened: IOError | TLSError = error
         widened
     end
   end
@@ -800,9 +806,10 @@ struct TLSSession
     end
 
     err: Int = ssl_get_error(ssl, ret)
+    cause: Int = koja_errno_failure()
 
     if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
-      fail io_failure(err)
+      fail io_failure(err, cause)
     end
 
     try wait_ready(descriptor, err, deadline)
@@ -820,6 +827,9 @@ struct TLSSession
 
   @extern "C" @link "ssl:EVP_PKEY_free"
   priv fn evp_pkey_free(key: CPtr<UInt8>)
+
+  @extern "C"
+  priv fn koja_errno_failure -> Int32
 
   @extern "C" @link "ssl:PEM_read_bio_PrivateKey"
   priv fn pem_read_bio_private_key(
