@@ -117,3 +117,62 @@ pet: Pet = Cat{name: "Tom"}
 # The locals stay live after the arms use them.
 IO.puts(cat.name)
 IO.puts(dog.name)
+
+# A union alias can name itself in a type argument. Each nested list
+# is a full value of the alias.
+type Value = Bool | Int | String | List<Value>
+
+fn render(value: Value) -> String
+  match value
+    truth: Bool ->
+      truth ? "true" : "false"
+
+    number: Int ->
+      "#{number}"
+
+    text: String ->
+      "\"" <> text <> "\""
+
+    items: List<Value> ->
+      "[" <> String.join(items.map(item -> render(item)), ", ") <> "]"
+  end
+end
+
+inner: List<Value> = [1, "two", true]
+nested: Value = [inner, 3, [4, [5, "six"]]]
+IO.puts(render(nested))
+nested.print()
+
+same: Value = [inner, 3, [4, [5, "six"]]]
+other: Value = [inner, 3, [4, [5, "seven"]]]
+(nested == same).print()
+(nested == other).print()
+(nested != other).print()
+
+# Two aliases can name each other.
+type Even = Int | List<Odd>
+type Odd = String | List<Even>
+
+fn size_even(even: Even) -> Int
+  match even
+    _n: Int -> 1
+    items: List<Odd> ->
+      items.reduce(0, fn (sum: Int, item: Odd) -> Int sum + size_odd(item) end)
+  end
+end
+
+fn size_odd(odd: Odd) -> Int
+  match odd
+    _s: String -> 1
+    items: List<Even> ->
+      items.reduce(
+        0,
+        fn (sum: Int, item: Even) -> Int sum + size_even(item) end,
+      )
+  end
+end
+
+odds: List<Odd> = ["x", [1, 2, ["y", "z"]]]
+even: Even = odds
+size_even(even).print()
+even.print()

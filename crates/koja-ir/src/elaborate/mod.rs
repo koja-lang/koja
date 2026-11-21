@@ -80,7 +80,7 @@ use std::collections::BTreeSet;
 
 use delivery::DeliveryKind;
 
-use crate::declarations::find_in;
+use crate::declarations::{find_in, union_members_in};
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
@@ -191,6 +191,16 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
         IRType::Tuple(elements) => elements
             .iter()
             .any(|element| needs_drop_seen(element, packages, visited)),
+        // The members of a named union can hold the union again.
+        IRType::NamedUnion(symbol) => {
+            if !visited.insert(symbol.clone()) {
+                return false;
+            }
+            union_members_in(packages, ty)
+                .unwrap_or_default()
+                .iter()
+                .any(|member| needs_drop_seen(member, packages, visited))
+        }
         IRType::Union { members, .. } => members
             .iter()
             .any(|member| needs_drop_seen(member, packages, visited)),
@@ -261,7 +271,11 @@ fn is_inline_managed(ty: &IRType) -> bool {
 fn is_aggregate(ty: &IRType) -> bool {
     matches!(
         ty,
-        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. }
+        IRType::Enum(_)
+            | IRType::NamedUnion(_)
+            | IRType::Struct(_)
+            | IRType::Tuple(_)
+            | IRType::Union { .. }
     )
 }
 
@@ -433,7 +447,9 @@ fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
         }
         IRType::Map { key, value } => vec![key.as_ref().clone(), value.as_ref().clone()],
         IRType::Tuple(elements) => elements.clone(),
-        IRType::Union { members, .. } => members.clone(),
+        IRType::NamedUnion(_) | IRType::Union { .. } => {
+            union_members_in(packages, ty).unwrap_or_default().to_vec()
+        }
         IRType::Struct(symbol) => find_struct(packages, symbol)
             .map(|decl| decl.fields.iter().map(|f| f.ir_type.clone()).collect())
             .unwrap_or_default(),
@@ -567,7 +583,7 @@ fn glue_owner(packages: &[IRPackage], ty: &IRType) -> String {
         IRType::Struct(symbol) => packages
             .iter()
             .find(|package| package.structs.contains_key(symbol.mangled())),
-        IRType::Union { mangled, .. } => packages
+        IRType::NamedUnion(mangled) | IRType::Union { mangled, .. } => packages
             .iter()
             .find(|package| package.unions.contains_key(mangled.mangled())),
         _ => return "Global".to_string(),

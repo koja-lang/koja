@@ -1227,6 +1227,34 @@ a: Setting = "auto" # a String
 b: Setting = 3 # a Count, through Count.from_int
 ```
 
+#### Recursive Unions
+
+A `type` alias of a union can name itself in a type argument of `List`, `Map`, `Set`, or a generic struct or enum:
+
+```koja
+type Value = Bool | Int | String | List<Value> | Map<String, Value>
+
+fn count(value: Value) -> Int
+  match value
+    items: List<Value> ->
+      items.reduce(0, fn (sum: Int, item: Value) -> Int sum + count(item) end)
+
+    fields: Map<String, Value> ->
+      fields.length()
+
+    _ ->
+      1
+  end
+end
+
+config: Value = ["name": "koja", "tags": ["fast", "small"]]
+count([1, [2, [3, true]]]) # 4
+```
+
+Two aliases can name each other the same way. An alias cannot name itself as a direct member, as in `type Chain = Int | Chain`, or through a tuple, a function type, or a `CPtr`. Only a union alias can be recursive, so `type Rows = List<Rows>` is an error.
+
+A recursive alias is a type of its own. Two recursive aliases with the same members are different types, and a value of one does not flow into a position that expects the other.
+
 ### Tuples
 
 An anonymous, fixed-size grouping of values. Tuples are structural. Two tuple types are the same type exactly when their element types match, position by position.

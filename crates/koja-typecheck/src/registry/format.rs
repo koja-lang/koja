@@ -59,8 +59,11 @@ fn format_kind(kind: &GlobalKind, type_params: &[String], registry: &GlobalRegis
         GlobalKind::Struct(None) => "struct".to_string(),
         GlobalKind::Struct(Some(def)) => format_struct(def, type_params, registry),
         GlobalKind::TypeAlias(None) => "type alias <unlifted>".to_string(),
-        GlobalKind::TypeAlias(Some(expansion)) => {
-            format!("type = {}", format_resolved(expansion, registry))
+        GlobalKind::TypeAlias(Some(definition)) => {
+            format!(
+                "type = {}",
+                format_resolved(&definition.expansion, registry)
+            )
         }
     }
 }

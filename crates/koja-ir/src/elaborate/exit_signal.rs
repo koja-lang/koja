@@ -6,6 +6,7 @@
 //! `IOReady`, `M` may also be *exactly* `ExitSignal`, in which case the
 //! reshape skips the `UnionWrap`.
 
+use crate::package::IRPackage;
 use crate::types::IRType;
 
 use super::delivery::{Injection, inject_union_member};
@@ -21,8 +22,11 @@ fn is_exit_signal(member: &IRType) -> bool {
 /// The `ExitSignal` type inside the message `M` and how it becomes
 /// `M`: direct when `M` is `ExitSignal`, a union wrap when `M` is a
 /// union with an `ExitSignal` member. `None` otherwise.
-pub(super) fn resolve(message_type: &IRType) -> Option<(IRType, Injection)> {
+pub(super) fn resolve(
+    message_type: &IRType,
+    packages: &[IRPackage],
+) -> Option<(IRType, Injection)> {
     is_exit_signal(message_type)
         .then(|| (message_type.clone(), Injection::Direct))
-        .or_else(|| inject_union_member(message_type, is_exit_signal))
+        .or_else(|| inject_union_member(message_type, is_exit_signal, packages))
 }

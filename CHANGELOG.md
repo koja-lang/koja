@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A union satisfies a protocol bound when every member implements the protocol, so a `Cat | Dog` value can go to `fn show<T: Label>(value: T)`. A call through the bound runs the function of the member the value holds. The protocol must take `self` in every function and name `Self` in no other position.
 - A literal in a position that expects a union builds one member of it. `"text"` is the `String` member and `true` is the `Bool` member. Without such a member, the literal goes to the one member that implements its literal protocol, and it is an error when two members do.
 - Each entry of a list or map literal flows into the expected element type the way an argument does. `List<Int | String> = [1, "a"]`, `List<UInt8> = [1, 2, 3]`, and a `List<Shape>` literal that holds a `Circle` and a `Square` now compile.
+- A `type` alias of a union can name itself in a type argument of `List`, `Map`, `Set`, or a generic struct or enum, as in `type Value = Int | String | List<Value>`. Two aliases can name each other the same way. A recursive alias is a type of its own, so two recursive aliases with the same members are different types.
 - `JSON.NULL` is the JSON `null` value, of the new type `JSON.Null`.
 - `JSON.Number` holds a JSON number as its text. `to_int()` and `to_float()` convert it and fail with `NumericConversionError`. `to_int()` accepts a number with a fraction of zero, so `1.0` and `1e2` are integers.
 - `JSON.get(value, key)` returns the value of a key in a JSON object as an `Option<JSON.Value>`, and `Option.None` when the value is not an object. `JSON.Object.get(key)` does the same for an object.
@@ -62,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A compiled program can hold a struct constant of a recursive type, as in `const LEAF: Node = Node{value: 1, next: Option.None}` where `Node` has a `next: Option<Node>` field.
 - `==` and `!=` compare a union with one of its members on either side, as in `pet == Cat{name: "Tom"}` and `tom == pet` where `pet` is a `Cat | Dog`. A narrower union compares with a wider one the same way.
 - The arms of an `if`, a `cond`, a `match`, a `receive`, or a `?:` can yield different members of a union when the position expects that union, as in `pet: Pet = likes_cats ? cat : dog`.
+- A struct can hold a union that names the struct, as in `struct Node` with a `next: Int | Node` field.
 
 ## [0.20.1] - 2026-11-06
 

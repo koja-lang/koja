@@ -22,6 +22,10 @@ use crate::pipeline::resolve::types::types_equivalent;
 /// The per-protocol conformance records a target entry carries.
 type ConformanceMap = BTreeMap<GlobalRegistryId, Vec<Conformance>>;
 
+/// The obligation that an alias satisfies a protocol bound, while a
+/// check of it is in progress. The alias id comes first.
+type AliasGoal = (GlobalRegistryId, ResolvedProtocolBound);
+
 impl GlobalRegistry {
     /// Record a [`Conformance`] of `target_id` to `protocol_id`.
     /// Returns the previously-recorded record when the new one
@@ -119,6 +123,27 @@ impl GlobalRegistry {
         overlay: Option<&BoundOverlay>,
         expected_protocol_args: Option<&[ResolvedType]>,
     ) -> Option<&Conformance> {
+        self.lookup_conformance_in(
+            target_id,
+            protocol_id,
+            target_args,
+            overlay,
+            expected_protocol_args,
+            &mut Vec::new(),
+        )
+    }
+
+    /// [`Self::lookup_conformance_with`] inside a check that has
+    /// `goals` in progress.
+    fn lookup_conformance_in(
+        &self,
+        target_id: GlobalRegistryId,
+        protocol_id: GlobalRegistryId,
+        target_args: &[ResolvedType],
+        overlay: Option<&BoundOverlay>,
+        expected_protocol_args: Option<&[ResolvedType]>,
+        goals: &mut Vec<AliasGoal>,
+    ) -> Option<&Conformance> {
         self.conformance_records(target_id, protocol_id)?
             .iter()
             .find(|record| {
@@ -126,9 +151,14 @@ impl GlobalRegistry {
                     ConformanceScope::Concrete(args) => {
                         self.type_args_equivalent(args, target_args)
                     }
-                    ConformanceScope::Parameterized { bounds } => {
-                        self.conformance_bounds_satisfied(target_id, bounds, target_args, overlay)
-                    }
+                    ConformanceScope::Parameterized { bounds } => self
+                        .conformance_bounds_satisfied(
+                            target_id,
+                            bounds,
+                            target_args,
+                            overlay,
+                            goals,
+                        ),
                 };
                 scope_matches
                     && expected_protocol_args.is_none_or(|expected| {
@@ -154,6 +184,7 @@ impl GlobalRegistry {
         bounds: &[Vec<ResolvedProtocolBound>],
         target_args: &[ResolvedType],
         overlay: Option<&BoundOverlay>,
+        goals: &mut Vec<AliasGoal>,
     ) -> bool {
         let substitution = crate::pipeline::unify::Substitution::from_args(target_id, target_args);
         bounds.iter().zip(target_args).all(|(slot_bounds, arg)| {
@@ -166,7 +197,7 @@ impl GlobalRegistry {
                         .collect(),
                     protocol_id: bound.protocol_id,
                 };
-                self.bound_satisfied(arg, &instantiated, overlay)
+                self.bound_satisfied_in(arg, &instantiated, overlay, goals)
             })
         })
     }
@@ -184,20 +215,34 @@ impl GlobalRegistry {
         bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
     ) -> bool {
+        self.bound_satisfied_in(ty, bound, overlay, &mut Vec::new())
+    }
+
+    /// [`Self::bound_satisfied`] inside a check that has `goals` in
+    /// progress.
+    fn bound_satisfied_in(
+        &self,
+        ty: &ResolvedType,
+        bound: &ResolvedProtocolBound,
+        overlay: Option<&BoundOverlay>,
+        goals: &mut Vec<AliasGoal>,
+    ) -> bool {
         match ty {
             ResolvedType::Named {
                 resolution: Resolution::Global(target_id),
                 type_args,
             } => {
                 if let Some(expansion) = self.alias_expansion(*target_id) {
-                    return self.bound_satisfied(&expansion, bound, overlay);
+                    return self
+                        .alias_bound_satisfied(*target_id, &expansion, bound, overlay, goals);
                 }
-                self.lookup_conformance_with(
+                self.lookup_conformance_in(
                     *target_id,
                     bound.protocol_id,
                     type_args,
                     overlay,
                     Some(&bound.args),
+                    goals,
                 )
                 .is_some()
             }
@@ -206,10 +251,33 @@ impl GlobalRegistry {
                 ..
             } => self.type_param_bound_granted(*owner, *index, bound, overlay),
             ResolvedType::Anonymous(_) | ResolvedType::Union(_) => {
-                self.structural_bound_satisfied(ty, bound, overlay)
+                self.structural_bound_satisfied(ty, bound, overlay, goals)
             }
             _ => false,
         }
+    }
+
+    /// Whether the expansion of the alias `alias_id` discharges
+    /// `bound`. The expansion of a recursive alias names the alias,
+    /// so the check reaches the same obligation again. That inner
+    /// obligation holds. The outer check still fails if any other
+    /// part of the expansion does not conform.
+    fn alias_bound_satisfied(
+        &self,
+        alias_id: GlobalRegistryId,
+        expansion: &ResolvedType,
+        bound: &ResolvedProtocolBound,
+        overlay: Option<&BoundOverlay>,
+        goals: &mut Vec<AliasGoal>,
+    ) -> bool {
+        let goal = (alias_id, bound.clone());
+        if goals.contains(&goal) {
+            return true;
+        }
+        goals.push(goal);
+        let satisfied = self.bound_satisfied_in(expansion, bound, overlay, goals);
+        goals.pop();
+        satisfied
     }
 
     /// The protocol bounds one type-param slot carries. These are the
@@ -273,14 +341,15 @@ impl GlobalRegistry {
         ty: &ResolvedType,
         bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
+        goals: &mut Vec<AliasGoal>,
     ) -> bool {
         let Some(entry) = self.get(bound.protocol_id) else {
             return false;
         };
-        let all_satisfy = |parts: &[ResolvedType]| {
+        let mut all_satisfy = |parts: &[ResolvedType]| {
             parts
                 .iter()
-                .all(|part| self.bound_satisfied(part, bound, overlay))
+                .all(|part| self.bound_satisfied_in(part, bound, overlay, goals))
         };
         let global_name = (bound.args.is_empty()
             && entry.identifier.package() == "Global"

@@ -16,6 +16,7 @@
 //! same way hand-lowered bodies do.
 
 use crate::cfg::CFGBuilder;
+use crate::declarations::union_members_in;
 use crate::enum_decl::{EnumPayloadInit, IRVariantPayload};
 use crate::function::{
     BranchTarget, IRBasicBlock, IRBlockId, IRIndirectSlot, IRInstruction, IRSymbol, IRTerminator,
@@ -72,7 +73,10 @@ pub(super) fn copy_body(ty: &IRType, packages: &[IRPackage], mode: CopyMode) -> 
         IRType::Struct(symbol) => synthesizer.struct_copy(symbol, packages),
         IRType::Enum(symbol) => synthesizer.enum_copy(ty, symbol, packages),
         IRType::Tuple(elements) => synthesizer.tuple_copy(elements, packages),
-        IRType::Union { members, .. } => synthesizer.union_copy(ty, members, packages),
+        IRType::NamedUnion(_) | IRType::Union { .. } => {
+            let members = union_members_in(packages, ty).unwrap_or_default();
+            synthesizer.union_copy(ty, members, packages)
+        }
         other => panic!("elaborate synthesis: copy_body on non-aggregate {other:?}"),
     }
     synthesizer.finish()
@@ -86,7 +90,10 @@ pub(super) fn drop_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBlock
         IRType::Struct(symbol) => synthesizer.struct_drop(symbol, packages),
         IRType::Enum(symbol) => synthesizer.enum_drop(symbol, packages),
         IRType::Tuple(elements) => synthesizer.tuple_drop(elements, packages),
-        IRType::Union { members, .. } => synthesizer.union_drop(ty, members, packages),
+        IRType::NamedUnion(_) | IRType::Union { .. } => {
+            let members = union_members_in(packages, ty).unwrap_or_default();
+            synthesizer.union_drop(ty, members, packages)
+        }
         other => panic!("elaborate synthesis: drop_body on non-aggregate {other:?}"),
     }
     synthesizer.finish()

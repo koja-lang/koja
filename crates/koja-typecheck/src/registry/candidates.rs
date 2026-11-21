@@ -181,8 +181,8 @@ impl GlobalRegistry {
                     kind: CandidateKind::Struct,
                     label,
                 },
-                GlobalKind::TypeAlias(Some(expansion)) => Candidate {
-                    detail: CandidateDetail::Type(expansion),
+                GlobalKind::TypeAlias(Some(definition)) => Candidate {
+                    detail: CandidateDetail::Type(&definition.expansion),
                     kind: CandidateKind::TypeAlias,
                     label,
                 },

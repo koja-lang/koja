@@ -10,10 +10,11 @@
 //! [`check_value_leaks`] for values such as field defaults.
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind};
-use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution};
 use koja_ast::span::Span;
 use koja_ast::visit::{self, Visitor};
 
+use crate::pipeline::resolve::types::collect_type_ids;
 use crate::registry::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedVariantData, VisibilityScope,
 };
@@ -55,7 +56,9 @@ pub(crate) fn check_reference_visibility(
 
 /// Reject every public declaration whose signature surface mentions a
 /// same-package `priv` type. Runs right after `lift_signatures`, so
-/// every surface is a stamped [`ResolvedType`] with registry ids.
+/// every surface is a stamped
+/// [`ResolvedType`](koja_ast::identifier::ResolvedType) with registry
+/// ids.
 /// Cross-package private mentions are not re-checked here. The
 /// reference gate already diagnosed them during lift. Field defaults
 /// are the value half of this rule and resolve later, so
@@ -200,7 +203,7 @@ fn collect_surface_ids(entry: &RegistryEntry, ids: &mut Vec<GlobalRegistryId>) {
                 collect_type_ids(&field.ty, ids);
             }
         }
-        GlobalKind::TypeAlias(Some(expansion)) => collect_type_ids(expansion, ids),
+        GlobalKind::TypeAlias(Some(definition)) => collect_type_ids(&definition.expansion, ids),
         GlobalKind::Builtin(_)
         | GlobalKind::Constant(None)
         | GlobalKind::Enum(None)
@@ -215,40 +218,6 @@ fn collect_surface_ids(entry: &RegistryEntry, ids: &mut Vec<GlobalRegistryId>) {
                 collect_type_ids(arg, ids);
             }
         }
-    }
-}
-
-/// Append every `Resolution::Global` id reachable in `ty`.
-fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId>) {
-    match ty {
-        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            for param in params {
-                collect_type_ids(param, ids);
-            }
-            collect_type_ids(ret, ids);
-        }
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            for element in elements {
-                collect_type_ids(element, ids);
-            }
-        }
-        ResolvedType::Named {
-            resolution,
-            type_args,
-        } => {
-            if let Resolution::Global(id) = resolution {
-                ids.push(*id);
-            }
-            for arg in type_args {
-                collect_type_ids(arg, ids);
-            }
-        }
-        ResolvedType::Union(members) => {
-            for member in members {
-                collect_type_ids(member, ids);
-            }
-        }
-        ResolvedType::Failed | ResolvedType::Unresolved => {}
     }
 }
 

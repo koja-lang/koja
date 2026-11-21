@@ -19,6 +19,10 @@
 //! - Each lowered union surfaces exactly one [`IRUnionDecl`] in the
 //!   program's union map keyed by the same mangled symbol the type
 //!   carries.
+//! - The union of a recursive `type` alias lowers to
+//!   `IRType::NamedUnion` with the alias name, and its members live
+//!   on the decl.
+//! - A struct that holds its own union inline gets a boxed field.
 
 use koja_ir::{ConstValue, IRInstruction, IRType};
 
@@ -274,5 +278,101 @@ one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
         members.len(),
         2,
         "expected canonical member list to retain both members, got {members:?}",
+    );
+}
+
+#[test]
+fn recursive_alias_lowers_to_one_named_union() {
+    // `by_name` names the alias and `spelled` writes its union out.
+    // Both lower to the same `IRType::NamedUnion`, and one decl keyed
+    // by the alias name holds the members.
+    let source = "
+type Value = Int | List<Value>
+
+fn by_name(value: Value) -> Int
+  match value
+    _ -> 0
+  end
+end
+
+fn spelled(value: Int | List<Value>) -> Int
+  match value
+    _ -> 0
+  end
+end
+
+nested: Value = [1, [2]]
+by_name(nested) + spelled(nested)
+";
+    let script = lower(source);
+
+    let by_name = &script_function(&script, "by_name").params[0].ty;
+    let spelled = &script_function(&script, "spelled").params[0].ty;
+    let IRType::NamedUnion(symbol) = by_name else {
+        panic!("expected `by_name`'s param to lower to IRType::NamedUnion, got {by_name:?}");
+    };
+    assert_eq!(symbol.mangled(), format!("{PACKAGE}.Value"));
+    assert_eq!(
+        by_name, spelled,
+        "expected the union written out to lower to the alias's named union",
+    );
+
+    let decls: Vec<_> = script
+        .packages
+        .iter()
+        .filter(|p| p.package == PACKAGE)
+        .flat_map(|p| p.unions.values())
+        .collect();
+    assert_eq!(
+        decls.len(),
+        1,
+        "expected exactly one IRUnionDecl for `Value` in `{PACKAGE}`, got {decls:?}",
+    );
+    let decl = decls[0];
+    assert_eq!(&decl.symbol, symbol);
+    assert_eq!(
+        decl.members,
+        vec![IRType::Int64, IRType::List(Box::new(by_name.clone()))],
+        "expected the list member to name the union again",
+    );
+    // The widest member is the 24-byte list `{ buf_ptr, len, cap }`.
+    assert_eq!(decl.max_payload_size, 24);
+}
+
+#[test]
+fn struct_that_holds_its_own_union_gets_a_boxed_field() {
+    // `Node` holds `Int | Node` inline, so the struct would hold
+    // itself. The cycle breaker boxes the field, and the union is
+    // sized after that.
+    let source = "
+struct Node
+  next: Link
+end
+
+type Link = Int | Node
+
+fn depth(link: Link) -> Int
+  match link
+    _n: Int -> 0
+    node: Node -> 1 + depth(node.next)
+  end
+end
+
+depth(Node{next: Node{next: 3}})
+";
+    let script = lower(source);
+
+    let node = script
+        .struct_decl(&format!("{PACKAGE}.Node"))
+        .expect("`Node` struct decl");
+    let IRType::Indirect(inner) = &node.fields[0].ir_type else {
+        panic!(
+            "expected `Node.next` to be boxed, got {:?}",
+            node.fields[0].ir_type
+        );
+    };
+    assert!(
+        matches!(inner.as_ref(), IRType::Union { .. }),
+        "expected a structural union behind the box, got {inner:?}",
     );
 }

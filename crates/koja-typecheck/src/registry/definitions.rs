@@ -2,8 +2,9 @@
 //! payloads by `lift_signatures`. The registry's storage / insert
 //! API lives in [`super`]. This module is the per-decl
 //! "what-is-the-shape-of-X" surface: `FunctionSignature`,
-//! `StructDefinition`, `EnumDefinition`, `ProtocolDefinition`, and
-//! the small `Resolved*` leaves they are built from.
+//! `StructDefinition`, `EnumDefinition`, `ProtocolDefinition`,
+//! `TypeAliasDefinition`, and the small `Resolved*` leaves they are
+//! built from.
 //!
 //! Splitting these out keeps [`super`] focused on the
 //! [`super::GlobalRegistry`] container itself. Downstream consumers
@@ -350,6 +351,24 @@ pub struct ResolvedProtocolMethod {
 pub struct ConstantDefinition {
     pub ty: ResolvedType,
     pub value: Expr,
+}
+
+/// What a `type X = ...` alias stands for, stamped by
+/// `lift_type_aliases`.
+///
+/// `expansion` is the canonical [`ResolvedType`] of the right-hand
+/// side. For `type Pet = Cat | Dog | Fish` that is a canonical
+/// [`ResolvedType::Union`], but any shape is permissible.
+///
+/// `recursive` is true for a union that names its own alias inside a
+/// type argument, as in `type Tree = Int | List<Tree>`. Such an alias
+/// is a type with a name of its own, because its union cannot be
+/// written out in full. The cycle sweep of `lift_type_aliases` sets
+/// the flag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeAliasDefinition {
+    pub expansion: ResolvedType,
+    pub recursive: bool,
 }
 
 impl StructDefinition {

@@ -26,7 +26,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use koja_graph::Graph;
-use koja_ir::{IREnumDecl, IRPackage, IRStructField, IRSymbol, IRType, IRVariantPayload};
+use koja_ir::{
+    IREnumDecl, IRPackage, IRStructField, IRSymbol, IRType, IRVariantPayload, union_members_in,
+};
 
 /// Topologically sort every enum decl across `packages` so an enum
 /// whose payload references another enum lands after it. See the
@@ -38,7 +40,7 @@ pub(crate) fn enums_in_dependency_order(packages: &[IRPackage]) -> Vec<&IREnumDe
     let mut graph: Graph<&IRSymbol> = Graph::new();
     for (symbol, decl) in &enum_index {
         graph.add_node(symbol);
-        for dependency in enum_dependencies(decl, &struct_field_index) {
+        for dependency in enum_dependencies(decl, &struct_field_index, packages) {
             if let Some((target, _)) = enum_index.get_key_value(&dependency) {
                 graph.add_edge(symbol, target);
             }
@@ -83,10 +85,18 @@ fn build_struct_field_index(packages: &[IRPackage]) -> BTreeMap<IRSymbol, &[IRSt
 fn enum_dependencies(
     decl: &IREnumDecl,
     struct_field_index: &BTreeMap<IRSymbol, &[IRStructField]>,
+    packages: &[IRPackage],
 ) -> BTreeSet<IRSymbol> {
     let mut deps: BTreeSet<IRSymbol> = BTreeSet::new();
+    let mut named_unions_seen: BTreeSet<IRSymbol> = BTreeSet::new();
     for variant in &decl.variants {
-        collect_payload_enum_refs(&variant.payload, struct_field_index, &mut deps);
+        collect_payload_enum_refs(
+            &variant.payload,
+            struct_field_index,
+            packages,
+            &mut named_unions_seen,
+            &mut deps,
+        );
     }
     deps
 }
@@ -94,17 +104,25 @@ fn enum_dependencies(
 fn collect_payload_enum_refs(
     payload: &IRVariantPayload,
     struct_field_index: &BTreeMap<IRSymbol, &[IRStructField]>,
+    packages: &[IRPackage],
+    named_unions_seen: &mut BTreeSet<IRSymbol>,
     deps: &mut BTreeSet<IRSymbol>,
 ) {
     match payload {
         IRVariantPayload::Struct(fields) => {
             for field in fields {
-                collect_type_enum_refs(&field.ir_type, struct_field_index, deps);
+                collect_type_enum_refs(
+                    &field.ir_type,
+                    struct_field_index,
+                    packages,
+                    named_unions_seen,
+                    deps,
+                );
             }
         }
         IRVariantPayload::Tuple(types) => {
             for ty in types {
-                collect_type_enum_refs(ty, struct_field_index, deps);
+                collect_type_enum_refs(ty, struct_field_index, packages, named_unions_seen, deps);
             }
         }
         IRVariantPayload::Unit => {}
@@ -114,6 +132,8 @@ fn collect_payload_enum_refs(
 fn collect_type_enum_refs(
     ty: &IRType,
     struct_field_index: &BTreeMap<IRSymbol, &[IRStructField]>,
+    packages: &[IRPackage],
+    named_unions_seen: &mut BTreeSet<IRSymbol>,
     deps: &mut BTreeSet<IRSymbol>,
 ) {
     match ty {
@@ -125,18 +145,52 @@ fn collect_type_enum_refs(
             // depends on any inner enum being bodied.
             if let Some(fields) = struct_field_index.get(symbol) {
                 for field in *fields {
-                    collect_type_enum_refs(&field.ir_type, struct_field_index, deps);
+                    collect_type_enum_refs(
+                        &field.ir_type,
+                        struct_field_index,
+                        packages,
+                        named_unions_seen,
+                        deps,
+                    );
                 }
             }
         }
         IRType::Tuple(elements) => {
             for element in elements {
-                collect_type_enum_refs(element, struct_field_index, deps);
+                collect_type_enum_refs(
+                    element,
+                    struct_field_index,
+                    packages,
+                    named_unions_seen,
+                    deps,
+                );
+            }
+        }
+        // The members of a named union can hold the union again, so
+        // the walk enters each named union one time.
+        IRType::NamedUnion(symbol) => {
+            if !named_unions_seen.insert(symbol.clone()) {
+                return;
+            }
+            for member in union_members_in(packages, ty).unwrap_or_default() {
+                collect_type_enum_refs(
+                    member,
+                    struct_field_index,
+                    packages,
+                    named_unions_seen,
+                    deps,
+                );
             }
         }
         IRType::Union { members, .. } => {
             for member in members {
-                collect_type_enum_refs(member, struct_field_index, deps);
+                collect_type_enum_refs(
+                    member,
+                    struct_field_index,
+                    packages,
+                    named_unions_seen,
+                    deps,
+                );
             }
         }
         // For heap-pointer payloads, the inner type lives behind a

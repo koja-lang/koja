@@ -19,7 +19,8 @@ use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
 use koja_typecheck::{
-    BuiltinShape, CheckedPackage, FunctionDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
+    BuiltinShape, CheckedPackage, FunctionDefinition, FunctionSignature, GlobalKind,
+    GlobalRegistry, recursive_alias,
 };
 
 use crate::constant::IRConstantValue;
@@ -33,6 +34,7 @@ use crate::mangling::{mangled_type_name, source_function_symbol, union_mangle};
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
+use crate::union_decl::IRUnionDecl;
 
 use super::body::{finalize_open_flow, lower_body};
 use super::constants::lower_constant_pool_entry;
@@ -59,6 +61,7 @@ pub(crate) fn lower_package(
     let mut enums: BTreeMap<IRSymbol, IREnumDecl> = BTreeMap::new();
     let mut functions: BTreeMap<IRSymbol, IRFunction> = BTreeMap::new();
     let mut structs: BTreeMap<IRSymbol, IRStructDecl> = BTreeMap::new();
+    let mut unions: BTreeMap<IRSymbol, IRUnionDecl> = BTreeMap::new();
     for file in &pkg.files {
         let def_file = file.path.as_deref();
         for item in &file.items {
@@ -150,6 +153,15 @@ pub(crate) fn lower_package(
                         &mut functions,
                     );
                 }
+                // Only a recursive alias has a declaration. Every
+                // other alias lowers to its expansion at each use.
+                Item::TypeAlias(alias) => {
+                    let identifier = Identifier::single(&pkg.package, alias.name.text.clone());
+                    let symbol = IRSymbol::from_identifier(&identifier);
+                    if let Some(decl) = output.named_unions.get(&symbol) {
+                        unions.insert(symbol, decl.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -163,7 +175,7 @@ pub(crate) fn lower_package(
         functions,
         package: pkg.package.clone(),
         structs,
-        unions: BTreeMap::new(),
+        unions,
     }
 }
 
@@ -569,6 +581,11 @@ pub(crate) fn resolved_type_to_ir_type(
              (type_args: {type_args:?})",
         ),
         ResolvedType::Union(members) => {
+            // The union of a recursive alias written out is that
+            // alias, so both spellings lower to one type.
+            if let Some(alias_id) = recursive_alias(ty, registry) {
+                return global_to_ir_type(alias_id, &[], registry, instantiations);
+            }
             let ir_members: Vec<IRType> = members
                 .iter()
                 .map(|m| resolved_type_to_ir_type(m, registry, instantiations))
@@ -581,6 +598,40 @@ pub(crate) fn resolved_type_to_ir_type(
         ResolvedType::Failed | ResolvedType::Unresolved => {
             panic!("IR lower: resolved_type_to_ir_type received {ty:?} (seal violation)")
         }
+    }
+}
+
+/// Declare the union of each recursive alias in `registry` into
+/// `output.named_unions`. This runs before any function lowers, so
+/// every later lookup of an [`IRType::NamedUnion`] finds its members.
+/// A member that names the alias again lowers to the same
+/// `NamedUnion`, so the walk ends. `discover_unions` sets the payload
+/// size after the type cycles are broken.
+pub(crate) fn lower_named_unions(registry: &GlobalRegistry, output: &mut LowerOutput) {
+    let mut aliases: Vec<GlobalRegistryId> = registry
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| registry.is_recursive_alias(*id))
+        .collect();
+    aliases.sort();
+    for id in aliases {
+        let Some(ResolvedType::Union(members)) = registry.alias_expansion(id) else {
+            panic!("IR lower: recursive alias {id} is not a union (lift invariant violation)");
+        };
+        let symbol = match global_to_ir_type(id, &[], registry, &mut output.instantiations) {
+            IRType::NamedUnion(symbol) => symbol,
+            other => panic!("IR lower: recursive alias {id} lowered to `{other:?}`"),
+        };
+        let members = members
+            .iter()
+            .map(|member| resolved_type_to_ir_type(member, registry, &mut output.instantiations))
+            .collect();
+        let decl = IRUnionDecl {
+            max_payload_size: 0,
+            members,
+            symbol: symbol.clone(),
+        };
+        output.named_unions.insert(symbol, decl);
     }
 }
 
@@ -597,7 +648,7 @@ fn global_to_ir_type(
     // `Named { Global(alias_id) }` in the typecheck output to keep
     // diagnostics reading `X`, not the expansion. At IR-lower time
     // the lowerer must follow them so backends see the underlying shape.
-    if let GlobalKind::TypeAlias(Some(expansion)) = &entry.kind {
+    if let GlobalKind::TypeAlias(Some(definition)) = &entry.kind {
         assert!(
             type_args.is_empty(),
             "IR lower: parameterized type aliases not yet supported \
@@ -605,7 +656,12 @@ fn global_to_ir_type(
             entry.identifier,
             type_args.len(),
         );
-        return resolved_type_to_ir_type(expansion, registry, instantiations);
+        // A recursive alias has no finite expansion. It lowers by
+        // name, and `lower_named_unions` declares its members.
+        if definition.recursive {
+            return IRType::NamedUnion(IRSymbol::from_identifier(&entry.identifier));
+        }
+        return resolved_type_to_ir_type(&definition.expansion, registry, instantiations);
     }
     // Builtins lower structurally from their registry-stamped shape.
     // User-style stdlib structs (`Timestamp`, `Duration`, etc. from

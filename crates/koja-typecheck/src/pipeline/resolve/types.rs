@@ -7,6 +7,8 @@
 //! ([`GlobalRegistry::primitive`]) since both `lift_signatures` and
 //! `resolve` produce them.
 
+use std::collections::BTreeSet;
+
 use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -152,6 +154,10 @@ pub(crate) fn canonical_union(
 /// types pass through unchanged. Cycles are bounded by a small
 /// recursion cap. `lift_type_aliases` rejects cycles up front, so
 /// hitting the cap here is a registry invariant violation.
+///
+/// A recursive alias peels to its union one time. The members of that
+/// union still name the alias, so a caller that walks into them must
+/// not peel without end. See [`recursive_alias`].
 pub fn peel_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> ResolvedType {
     peel_alias_capped(ty, registry, 32)
 }
@@ -174,6 +180,86 @@ fn peel_alias_capped(ty: &ResolvedType, registry: &GlobalRegistry, fuel: usize) 
         return ty.clone();
     };
     peel_alias_capped(&expansion, registry, fuel - 1)
+}
+
+/// The recursive alias that names `ty`. `ty` can be the alias, an
+/// alias of it, or its union written out. `None` for any other type.
+///
+/// A recursive alias is a type with a name of its own. Two of them
+/// are different types also when they have the same shape, because
+/// each union names its own alias. Two that have the identical union
+/// are one type, and the alias declared first names it.
+pub fn recursive_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
+    recursive_alias_of_union(&peel_alias(ty, registry), registry)
+}
+
+/// [`recursive_alias`] for a type that is already peeled. A recursive
+/// alias reaches itself from its own union, so only the aliases that
+/// `peeled` reaches can match.
+fn recursive_alias_of_union(
+    peeled: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> Option<GlobalRegistryId> {
+    if !matches!(peeled, ResolvedType::Union(_)) {
+        return None;
+    }
+    reachable_aliases(peeled, registry)
+        .into_iter()
+        .filter(|id| registry.is_recursive_alias(*id))
+        .find(|id| registry.alias_expansion(*id).as_ref() == Some(peeled))
+}
+
+/// Every alias that `ty` names, directly or through the expansion of
+/// another alias, in id order. With `type A = Int | List<B>` and
+/// `type B = String | List<A>`, the union of `A` names only `B`, and
+/// the expansion of `B` leads back to `A`.
+fn reachable_aliases(ty: &ResolvedType, registry: &GlobalRegistry) -> BTreeSet<GlobalRegistryId> {
+    let mut reached = BTreeSet::new();
+    let mut pending = Vec::new();
+    collect_type_ids(ty, &mut pending);
+    while let Some(id) = pending.pop() {
+        let Some(expansion) = registry.alias_expansion(id) else {
+            continue;
+        };
+        if reached.insert(id) {
+            collect_type_ids(&expansion, &mut pending);
+        }
+    }
+    reached
+}
+
+/// Append every `Resolution::Global` id reachable in `ty`.
+pub(crate) fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId>) {
+    match ty {
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            for param in params {
+                collect_type_ids(param, ids);
+            }
+            collect_type_ids(ret, ids);
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            for element in elements {
+                collect_type_ids(element, ids);
+            }
+        }
+        ResolvedType::Named {
+            resolution,
+            type_args,
+        } => {
+            if let Resolution::Global(id) = resolution {
+                ids.push(*id);
+            }
+            for arg in type_args {
+                collect_type_ids(arg, ids);
+            }
+        }
+        ResolvedType::Union(members) => {
+            for member in members {
+                collect_type_ids(member, ids);
+            }
+        }
+        ResolvedType::Failed | ResolvedType::Unresolved => {}
+    }
 }
 
 /// Two resolved types interchangeable at struct-field / call-arg /
@@ -203,6 +289,14 @@ pub(crate) fn types_equivalent(
     let b_peeled = peel_alias(b, registry);
     if a_peeled == b_peeled {
         return true;
+    }
+    // A recursive alias compares by name, so it is equivalent only to
+    // the identical union above. A walk into its members would reach
+    // the alias again and never end.
+    if recursive_alias_of_union(&a_peeled, registry).is_some()
+        || recursive_alias_of_union(&b_peeled, registry).is_some()
+    {
+        return false;
     }
     match (&a_peeled, &b_peeled) {
         (

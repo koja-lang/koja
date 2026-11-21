@@ -14,6 +14,7 @@
 //! [`super::exit_signal`] each supply the one kind-specific step,
 //! which is how the bare payload becomes `M` (see [`Injection`]).
 
+use crate::declarations::union_members_in;
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::function::{
     BranchTarget, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRSymbol, IRTerminator,
@@ -66,10 +67,10 @@ impl DeliveryKind {
 
     /// The bare payload type inside the business message `M`, and how
     /// it becomes `M`. `None` when `M` does not include the payload.
-    fn resolve(self, message_type: &IRType) -> Option<(IRType, Injection)> {
+    fn resolve(self, message_type: &IRType, packages: &[IRPackage]) -> Option<(IRType, Injection)> {
         match self {
-            Self::ExitSignal => exit_signal::resolve(message_type),
-            Self::IoReady => io_ready::resolve(message_type),
+            Self::ExitSignal => exit_signal::resolve(message_type, packages),
+            Self::IoReady => io_ready::resolve(message_type, packages),
         }
     }
 
@@ -274,10 +275,9 @@ fn gather(packages: &[IRPackage], kind: DeliveryKind) -> Vec<ArmPlan> {
 pub(super) fn inject_union_member(
     message_type: &IRType,
     is_payload: fn(&IRType) -> bool,
+    packages: &[IRPackage],
 ) -> Option<(IRType, Injection)> {
-    let IRType::Union { members, .. } = message_type else {
-        return None;
-    };
+    let members = union_members_in(packages, message_type)?;
     let member_index = members.iter().position(is_payload)?;
     let injection = Injection::UnionWrap {
         member_index: member_index as u8,
@@ -288,7 +288,7 @@ pub(super) fn inject_union_member(
 
 fn resolve(packages: &[IRPackage], arms: &[ReceiveArm], kind: DeliveryKind) -> Option<Synthesis> {
     let business = resolve_business_envelope(packages, arms, kind.tag())?;
-    let (payload_type, injection) = kind.resolve(&business.message_type)?;
+    let (payload_type, injection) = kind.resolve(&business.message_type, packages)?;
     Some(Synthesis {
         business,
         injection,

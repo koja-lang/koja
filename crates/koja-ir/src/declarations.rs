@@ -14,7 +14,8 @@ use crate::enum_decl::IREnumDecl;
 use crate::function::{IRFunction, IRSymbol};
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
-use crate::union_decl::IRUnionDecl;
+use crate::types::IRType;
+use crate::union_decl::{IRUnionDecl, union_members};
 
 /// Read-only declaration indexes over a package set, keyed by
 /// symbol.
@@ -78,6 +79,24 @@ impl<'a> Declarations<'a> {
     pub(crate) fn union_decl(&self, symbol: &IRSymbol) -> Option<&'a IRUnionDecl> {
         self.unions.get(symbol).copied()
     }
+
+    /// The members of the union type `ty`. See [`union_members`].
+    pub(crate) fn union_members<'t>(&self, ty: &'t IRType) -> Option<&'t [IRType]>
+    where
+        'a: 't,
+    {
+        union_members(ty, |symbol| self.union_decl(symbol))
+    }
+}
+
+/// The members of the union type `ty` in canonical order, or `None`
+/// when `ty` is not a union. A named union keeps its members on its
+/// declaration, which this finds in `packages`. For a pass or a
+/// backend that holds the packages and no [`Declarations`].
+pub fn union_members_in<'a>(packages: &'a [IRPackage], ty: &'a IRType) -> Option<&'a [IRType]> {
+    union_members(ty, |symbol| {
+        find_in(packages, |package| &package.unions, symbol.mangled())
+    })
 }
 
 /// Find `mangled` in the per-package map that `select` picks,
