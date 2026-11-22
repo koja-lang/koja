@@ -8,64 +8,6 @@ alias Net.TLSError
 const API_ROOT: String = "https://api.github.com"
 
 @doc """
-A GitHub user profile, decoded from `GET /users/{login}`. Optional
-profile fields decode as `""` when the user has not set them.
-"""
-struct GitHub.User
-  bio: String
-  blog: String
-  company: String
-  created_at: String
-  followers: Int
-  following: Int
-  location: String
-  login: String
-  name: String
-  public_repos: Int
-
-  fn from_json(value: Value) -> GitHub.User
-    GitHub.User{
-      bio: Fields.text(value, "bio"),
-      blog: Fields.text(value, "blog"),
-      company: Fields.text(value, "company"),
-      created_at: Fields.text(value, "created_at"),
-      followers: Fields.number(value, "followers"),
-      following: Fields.number(value, "following"),
-      location: Fields.text(value, "location"),
-      login: Fields.text(value, "login"),
-      name: Fields.text(value, "name"),
-      public_repos: Fields.number(value, "public_repos"),
-    }
-  end
-end
-
-@doc """
-A repository summary, decoded from the repository objects returned
-by `GET /repos/{owner}/{repo}` and `GET /users/{login}/repos`.
-"""
-struct GitHub.Repo
-  description: String
-  fork: Bool
-  forks: Int
-  full_name: String
-  language: String
-  stars: Int
-  updated_at: String
-
-  fn from_json(value: Value) -> GitHub.Repo
-    GitHub.Repo{
-      description: Fields.text(value, "description"),
-      fork: Fields.flag(value, "fork"),
-      forks: Fields.number(value, "forks_count"),
-      full_name: Fields.text(value, "full_name"),
-      language: Fields.text(value, "language"),
-      stars: Fields.number(value, "stargazers_count"),
-      updated_at: Fields.text(value, "updated_at"),
-    }
-  end
-end
-
-@doc """
 A minimal GitHub REST API client over the stdlib HTTPS stack:
 `HTTP.request` rides `TCPSocket.connect_tls`, which verifies the
 api.github.com certificate against the system trust store.
@@ -73,23 +15,23 @@ api.github.com certificate against the system trust store.
 Requests are unauthenticated by default (60 requests/hour); set
 `GITHUB_TOKEN` to send an `Authorization` header and raise the limit.
 """
-struct GitHub
+struct Client
   @doc """
   Fetches a repository by its `owner/name` path.
   """
-  fn repo(full_name: String) -> GitHub.Repo ! String
+  fn repo(full_name: String) -> Repo ! String
     value = try fetch("/repos/#{full_name}")
-    GitHub.Repo.from_json(value)
+    Repo.from_json(value)
   end
 
   @doc """
   Fetches a user's repositories, most recently updated first.
   """
-  fn repos(login: String) -> List<GitHub.Repo> ! String
+  fn repos(login: String) -> List<Repo> ! String
     value = try fetch("/users/#{login}/repos?sort=updated&per_page=20")
 
     match value
-      items: List<Value> -> items.map(item -> GitHub.Repo.from_json(item))
+      items: List<Value> -> items.map(item -> Repo.from_json(item))
       _ -> fail "expected a JSON array of repositories"
     end
   end
@@ -97,9 +39,9 @@ struct GitHub
   @doc """
   Fetches a user profile by login.
   """
-  fn user(login: String) -> GitHub.User ! String
+  fn user(login: String) -> User ! String
     value = try fetch("/users/#{login}")
-    GitHub.User.from_json(value)
+    User.from_json(value)
   end
 
   priv fn decode(body: String) -> Value ! String

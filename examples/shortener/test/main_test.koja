@@ -27,6 +27,7 @@ test "Link encoding serializes every field"
   encoded = JSON.encode(link)
 
   assert encoded.contains?("\"code\":\"abc123\""), encoded
+  assert encoded.contains?("\"created_at\":\"2026-01-01T00:00:00Z\""), encoded
   assert encoded.contains?("\"hits\":7"), encoded
   assert encoded.contains?("\"short_path\":\"/abc123\""), encoded
 end

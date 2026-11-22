@@ -1,9 +1,9 @@
 # Shortener
 
 A URL shortener written in Koja, and a complete end-to-end CRUD
-service. It serves HTTP on `Net.TCPServer` + `HTTP.Parser`, routes
-requests through [Trail](https://github.com/koja-lang/trail), and
-reads and writes `JSON`. Links live in PostgreSQL, reached through
+service. It serves HTTP on `Net.TCPServer` + `HTTP.Request.Parser`,
+routes requests through [Trail](https://github.com/koja-lang/trail),
+and reads and writes `JSON`. Links live in PostgreSQL, reached through
 the [Postgres](https://github.com/hpopp/postgres-koja) package, a
 pure-Koja driver speaking the v3 wire protocol (no C driver, no FFI),
 with connections managed by the
@@ -19,8 +19,9 @@ It doubles as a tour of the things that make Koja great.
   socket as a `TCPEvent.Connected` message. Nothing polls.
 - **Process per connection.** `App` hands every socket to a one-shot
   `Worker` process, so slow clients and concurrent requests never
-  block each other. Workers speak HTTP keep-alive, framing requests
-  off the socket with a buffered reader.
+  block each other. Workers speak HTTP keep-alive. The parser frames
+  each request, by length or chunked, and the worker refuses a body
+  over 1 MiB.
 - **Signal-driven lifecycle.** `handle_signal` receives `Lifecycle`
   events, so Ctrl-C (`Interrupt`) and SIGTERM (`Shutdown`) exit with
   the right code.
@@ -44,21 +45,22 @@ It doubles as a tour of the things that make Koja great.
   backoff timer if Postgres is down.
 - **Git dependencies.** The driver, the pool, and the router are
   declared in `koja.toml` by GitHub tag (for example
-  `trail = { github = "koja-lang/trail", tag = "v0.1.0" }`) and pinned
+  `trail = { github = "koja-lang/trail", tag = "v0.2.0" }`) and pinned
   to exact commits by the committed `koja.lock`.
 
 ## Layout
 
 ```
-api-docs/         -- Bruno collection covering every route
-db/init.sql       -- schema, applied automatically by the compose stack
+api-docs/          -- Bruno collection covering every route
+db/init.sql        -- schema, applied automatically by the compose stack
+docker-compose.yml -- Postgres 16 on host port 5433
 src/
-  app.koja        -- entry process, per-connection workers, keep-alive
-  config.koja     -- env-driven runtime configuration
-  json_util.koja  -- request-body parsing / response encoding helpers
-  links.koja      -- LinkStore, CRUD queries over the Postgres driver
-  router.koja     -- route table, handlers, and the JSON error shape
-test/             -- unit tests (no database required)
+  app.koja         -- entry process, per-connection workers, keep-alive
+  config.koja      -- env-driven runtime configuration
+  json_util.koja   -- reads the `url` field of a JSON request body
+  links.koja       -- Link and its JSON encoding, LinkStore CRUD queries
+  router.koja      -- route table, handlers, and the JSON error shape
+test/              -- unit tests (no database required)
 ```
 
 ## Running
@@ -93,7 +95,7 @@ curl -s 'localhost:8080/links?limit=20&offset=40'
 curl -s localhost:8080/links/<code>
 
 # repoint and delete
-curl -s -X PUT localhost:8080/links/<code> -d '{"url": "https://koja.dev"}'
+curl -s -X PUT localhost:8080/links/<code> -d '{"url": "https://kojalang.org"}'
 curl -s -X DELETE localhost:8080/links/<code>
 
 # follow a short link (302, counts the hit)
@@ -120,14 +122,15 @@ collection with a request per route.
 All settings come from the environment, with defaults matching the
 compose stack.
 
-| Variable      | Default     | Purpose           |
-| ------------- | ----------- | ----------------- |
-| `PORT`        | `8080`      | HTTP listen port  |
-| `DB_HOST`     | `127.0.0.1` | Postgres host     |
-| `DB_PORT`     | `5433`      | Postgres port     |
-| `DB_USER`     | `postgres`  | Postgres user     |
-| `DB_PASSWORD` | `shortener` | Postgres password |
-| `DB_NAME`     | `shortener` | Database name     |
+| Variable             | Default     | Purpose                           |
+| -------------------- | ----------- | --------------------------------- |
+| `DB_HOST`            | `127.0.0.1` | Postgres host                     |
+| `DB_NAME`            | `shortener` | Database name                     |
+| `DB_PASSWORD`        | `shortener` | Postgres password                 |
+| `DB_PORT`            | `5433`      | Postgres port                     |
+| `DB_STATEMENT_CACHE` | `256`       | Statement cache size, `0` for off |
+| `DB_USER`            | `postgres`  | Postgres user                     |
+| `PORT`               | `8080`      | HTTP listen port                  |
 
 The compose database authenticates with SCRAM-SHA-256 (the postgres
 image's default when a password is set), which the driver negotiates

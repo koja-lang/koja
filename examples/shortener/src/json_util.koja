@@ -1,5 +1,3 @@
-alias JSON.Value
-
 @doc """
 JSON request helpers.
 """
@@ -11,11 +9,11 @@ struct JsonUtil
   fn parse_url(body: String) -> String ! String
     decoded = JSON.decode(body) rescue _ -> fail "body is not valid JSON"
 
-    match field(decoded, "url")
+    match JSON.get(decoded, "url")
       Option.None ->
         fail "missing \"url\" field"
 
-      Option.Some(Value.String(url)) ->
+      Option.Some(url: String) ->
         if url.empty?()
           fail "\"url\" must not be empty"
         end
@@ -25,21 +23,5 @@ struct JsonUtil
       Option.Some(_) ->
         fail "\"url\" must be a string"
     end
-  end
-
-  priv fn field(value: Value, key: String) -> Option<Value>
-    entries =
-      match value
-        Value.Object(object_entries) -> object_entries
-        _ -> return Option.None
-      end
-
-    for (entry_key, entry_value) in entries
-      if entry_key == key
-        return Option.Some(entry_value)
-      end
-    end
-
-    Option.None
   end
 end

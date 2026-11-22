@@ -1,4 +1,3 @@
-alias HTTP.Headers
 alias HTTP.Response
 alias HTTP.Status
 alias JSON.Value
@@ -35,7 +34,7 @@ enum Error
     match self
       Error.Database(_) -> Status.internal_server_error()
       Error.NotFound(_) -> Status.not_found()
-      Error.Unavailable(_) -> Status.new(503, "Service Unavailable")
+      Error.Unavailable(_) -> Status.new(503)
       Error.Validation(_) -> Status.bad_request()
     end
   end
@@ -76,11 +75,9 @@ Builds a JSON error response without a `Conn`, for a request the
 """
 fn error_response(status: Status, message: String) -> Response
   text = JSON.encode(error_body(status, message), pretty())
-  headers =
-    Headers.new()
-    .set("Content-Type", "application/json")
-    .set("Content-Length", "#{text.byte_length()}")
-  Response{body: text, headers: headers, status: status, version: "HTTP/1.1"}
+  response = Response.new(status, text)
+  response.headers = response.headers.set("Content-Type", "application/json")
+  response
 end
 
 # --- handlers ---
@@ -115,7 +112,7 @@ priv fn create_link(pool: Pool<Connection>, c: Conn) -> Conn
 end
 
 priv fn do_create(pool: Pool<Connection>, c: Conn) -> Conn ! Error
-  url = JsonUtil.parse_url(c.body) rescue m -> fail Error.Validation(m)
+  url = try url_field(c)
   link = try with_db(pool, db -> LinkStore.create(db, url))
   json(c, Status.created(), link)
 end
@@ -136,7 +133,7 @@ end
 
 priv fn do_update(pool: Pool<Connection>, c: Conn) -> Conn ! Error
   code = code_param(c)
-  url = JsonUtil.parse_url(c.body) rescue m -> fail Error.Validation(m)
+  url = try url_field(c)
   link = try with_db(pool, db -> LinkStore.update(db, code, url))
   json(c, Status.ok(), try found(link, code))
 end
@@ -166,7 +163,7 @@ priv fn do_redirect(pool: Pool<Connection>, c: Conn) -> Conn ! Error
 
   match target
     Option.Some(url) ->
-      c.resp(Status.new(302, "Found"), "").put_resp_header("Location", url)
+      c.resp(Status.new(302), "").put_resp_header("Location", url)
 
     Option.None ->
       fail Error.NotFound("no link with code #{code}")
@@ -203,6 +200,15 @@ end
 
 priv fn code_param(c: Conn) -> String
   c.param("code").or("")
+end
+
+# Reads the `url` field of a JSON request body. The body arrives as
+# bytes, so it is decoded as UTF-8 first.
+priv fn url_field(c: Conn) -> String ! Error
+  body = c.body.to_string()
+    rescue _ -> fail Error.Validation("body is not valid UTF-8")
+
+  JsonUtil.parse_url(body) rescue m -> fail Error.Validation(m)
 end
 
 # Parses and bounds the pagination params. `limit` defaults to
@@ -262,8 +268,8 @@ end
 
 priv fn error_body(status: Status, message: String) -> Value
   [
-    "error": status.reason.to_json(),
-    "message": message.to_json(),
+    "error": status.reason(),
+    "message": message,
     "status": status.code.to_json()
   ]
 end

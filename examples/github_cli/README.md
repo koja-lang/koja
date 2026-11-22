@@ -1,4 +1,4 @@
-# gh
+# GitHub CLI
 
 A tiny GitHub CLI written in Koja — and a minimal example of the
 stdlib HTTPS stack end to end: `HTTP.request` over
@@ -15,8 +15,10 @@ dispatch, print, return a `StopReason` (exit code 0 or 1).
 src/
   app.koja     -- entry process: argv in, exit code out
   cli.koja     -- command dispatch and text rendering (pure)
-  github.koja  -- GitHub REST client: GitHub.User / GitHub.Repo / GitHub.fetch
+  client.koja  -- GitHub REST client: Client.user / repos / repo
   fields.koja  -- field access over decoded JSON.Value trees
+  repo.koja    -- Repo, decoded from a repository object
+  user.koja    -- User, decoded from a user profile
 test/          -- offline tests against canned API payloads
 ```
 

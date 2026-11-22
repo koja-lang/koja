@@ -17,12 +17,18 @@ struct Link: JSON.Encoding
   """
   fn to_json(self) -> JSON.Value
     [
-      "code": self.code.to_json(),
-      "created_at": self.created_at.to_json(),
+      "code": self.code,
+      "created_at": self.created_at_iso(),
       "hits": self.hits.to_json(),
-      "short_path": ("/" <> self.code).to_json(),
-      "url": self.url.to_json()
+      "short_path": ("/" <> self.code),
+      "url": self.url
     ]
+  end
+
+  # Returns `created_at` as ISO 8601 to the second. Postgres sends
+  # `2026-06-07 20:00:00.123456+00`, and the session time zone is UTC.
+  priv fn created_at_iso(self) -> String
+    self.created_at.slice(Range{start: 0, stop: 18}).replace(" ", "T") <> "Z"
   end
 end
 

@@ -1,5 +1,3 @@
-alias Gh.GitHub.Repo
-alias Gh.GitHub.User
 alias Test.require
 
 # Trimmed-down captures of real GitHub API payloads; `null` and

@@ -1,0 +1,27 @@
+alias JSON.Value
+
+@doc """
+A repository summary, decoded from the repository objects returned
+by `GET /repos/{owner}/{repo}` and `GET /users/{login}/repos`.
+"""
+struct Repo
+  description: String
+  fork: Bool
+  forks: Int
+  full_name: String
+  language: String
+  stars: Int
+  updated_at: String
+
+  fn from_json(value: Value) -> Repo
+    Repo{
+      description: Fields.text(value, "description"),
+      fork: Fields.flag(value, "fork"),
+      forks: Fields.number(value, "forks_count"),
+      full_name: Fields.text(value, "full_name"),
+      language: Fields.text(value, "language"),
+      stars: Fields.number(value, "stargazers_count"),
+      updated_at: Fields.text(value, "updated_at"),
+    }
+  end
+end

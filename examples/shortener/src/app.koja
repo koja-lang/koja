@@ -1,7 +1,7 @@
-alias HTTP.Parser
 alias HTTP.Request
 alias HTTP.Response
 alias HTTP.Status
+alias HTTP.Version
 alias Net.TCPServer
 alias Net.TCPServer.Config as TCPServerConfig
 alias Net.TCPServer.Event as TCPEvent
@@ -17,10 +17,12 @@ alias Trail.Router
 
 const POOL_SIZE: Int = 10
 
-# Bytes pulled per socket read, and how many requests one connection
-# may issue before the worker closes it.
+# Bytes pulled per socket read, how many requests one connection may
+# issue before the worker closes it, and the largest request body the
+# worker accepts.
 const READ_CHUNK: Int = 8192
 const MAX_REQUESTS_PER_CONNECTION: Int = 1000
+const MAX_BODY_BYTES: Int = 1_048_576
 
 @doc """
 The URL-shortener entry process. `start` loads config from the
@@ -111,7 +113,8 @@ end
 A one-shot process that owns a single client connection. Its `run`
 loop reads requests off the socket (HTTP keep-alive), dispatches each
 one through the router, and writes the response. The worker exits
-when the client closes, a read or write fails, the request asks for
+when the client closes, a read or write fails, a request is not valid
+HTTP or has a body over `MAX_BODY_BYTES`, the request asks for
 `Connection: close`, or the per-connection request budget is spent.
 """
 struct Worker: Process<Worker, (), ()>
@@ -127,108 +130,127 @@ struct Worker: Process<Worker, (), ()>
   end
 
   fn run(self) -> StopReason
-    self.serve("", MAX_REQUESTS_PER_CONNECTION)
+    budget = MAX_REQUESTS_PER_CONNECTION
+    parser = Request.Parser.new()
+
+    while budget > 0
+      (parser, read) = self.read_request(parser)
+
+      match read
+        Read.Closed ->
+          break
+
+        Read.Rejected(status, message) ->
+          _ = self.send(error_response(status, message), false)
+          break
+
+        Read.Request(request) ->
+          keep = wants_keep_alive?(request) and budget > 1
+
+          if not (self.send(self.router.dispatch(request), keep) and keep)
+            break
+          end
+
+          budget = budget - 1
+      end
+    end
+
+    self.close()
+    StopReason.Normal
   end
 
-  priv fn serve(self, buffered: String, budget: Int) -> StopReason
-    match read_request(self.client, buffered)
-      Option.None ->
-        self.close()
-        StopReason.Normal
-
-      Option.Some(framed) ->
-        (request, leftover) = framed
-        (response, keep) = self.respond(request)
-        keep = keep and budget > 1
-        response = with_connection(response, keep ? "keep-alive" : "close")
-
-        match self.client.write(response.serialize())
-          Result.Ok(_) when keep ->
-            self.serve(leftover, budget - 1)
-
-          _ ->
-            self.close()
-            StopReason.Normal
-        end
-    end
-  end
-
-  # Parses and routes one raw request. Returns the response paired
-  # with whether the client wants the connection kept open.
-  priv fn respond(self, raw: String) -> (Response, Bool)
-    match Parser.parse_request(raw)
-      Result.Err(_) ->
-        (error_response(Status.bad_request(), "malformed request"), false)
-      Result.Ok(req) -> (self.router.dispatch(req), wants_keep_alive?(req))
-    end
+  # The answer for a request body over `MAX_BODY_BYTES`.
+  priv fn body_too_large -> Read
+    Read.Rejected(Status.new(413), "request body is too large")
   end
 
   priv fn close(self)
     _ = self.client.close()
   end
-end
 
-# Reads from `client` until `buffered` holds one complete HTTP request
-# (headers plus `Content-Length` bytes of body). Returns the framed
-# request paired with any bytes that arrived after it (pipelining), or
-# `Option.None` when the client closes or the read fails.
-priv fn read_request(client: TCPSocket, buffered: String)
-  -> Option<(String, String)>
+  # The answer for a request that is not valid HTTP.
+  priv fn malformed -> Read
+    Read.Rejected(Status.bad_request(), "malformed request")
+  end
 
-  match split_request(buffered)
-    Option.Some(framed) ->
-      Option.Some(framed)
+  # Reads one request from the client through `parser` and joins its
+  # body. Returns the parser, which keeps the bytes of a pipelined
+  # request, and what the read gave. The parser holds no body, so the
+  # worker counts the body bytes and enforces `MAX_BODY_BYTES`.
+  priv fn read_request(self, parser: Request.Parser) -> (Request.Parser, Read)
+    body: Binary = <<>>
+    request: Option<Request> = Option.None
 
-    Option.None ->
-      match client.read_string(READ_CHUNK)
-        Result.Ok(chunk) when not chunk.empty?() ->
-          read_request(client, buffered <> chunk)
-        _ -> Option.None
+    loop
+      event =
+        match parser.next()
+          Result.Ok((advanced, found)) ->
+            parser = advanced
+            found
+
+          Result.Err(_) ->
+            return (parser, Worker.malformed())
+        end
+
+      match event
+        Option.Some(Request.Parser.Event.Request(head)) ->
+          if head.headers.content_length().or(0) > MAX_BODY_BYTES
+            return (parser, Worker.body_too_large())
+          end
+
+          request = Option.Some(head)
+
+        Option.Some(Request.Parser.Event.Data(piece)) ->
+          if body.byte_size() + piece.byte_size() > MAX_BODY_BYTES
+            return (parser, Worker.body_too_large())
+          end
+
+          body = body <> piece
+
+        Option.Some(Request.Parser.Event.End) ->
+          break
+
+        Option.None ->
+          match self.client.read(READ_CHUNK)
+            Result.Ok(chunk) when chunk.byte_size() > 0 ->
+              parser = parser.feed(chunk)
+            _ -> return (parser, Read.Closed)
+          end
       end
-  end
-end
-
-# Splits `buffer` into one complete request and the leftover bytes, or
-# returns None when the request is still incomplete.
-priv fn split_request(buffer: String) -> Option<(String, String)>
-  parts = buffer.split("\r\n\r\n")
-
-  if parts.length() < 2
-    return Option.None
-  end
-
-  header_text =
-    match parts.get(0)
-      Option.Some(text) -> text
-      Option.None -> ""
     end
 
-  total = header_text.length() + 4 + content_length(header_text)
-
-  if buffer.length() < total
-    return Option.None
+    # The parser returns `End` only after a `Request`.
+    complete = request.unwrap()
+    complete.body = body
+    (parser, Read.Request(complete))
   end
 
-  request = buffer.slice(Range{start: 0, stop: total - 1})
-  leftover = buffer.length() == total
-    ? ""
-    : buffer.slice(Range{start: total, stop: buffer.length() - 1})
+  # Writes the whole response with its `Connection` header. Returns
+  # false when the write failed, which means the client is gone.
+  priv fn send(self, response: Response, keep: Bool) -> Bool
+    response = with_connection(response, keep ? "keep-alive" : "close")
 
-  Option.Some((request, leftover))
+    match self.client.write_all(response.serialize())
+      Result.Ok(_) -> true
+      Result.Err(_) -> false
+    end
+  end
 end
 
-priv fn content_length(header_text: String) -> Int
-  header_text.split("\r\n")
-    .find(line -> line.downcase().starts_with?("content-length:"))
-    .then(line -> line.split(":").get(1))
-    .then(value -> value.trim().to_int().ok())
-    .or(0)
+# What one read of a request gave. `Closed` means the client closed
+# the connection or a read failed. `Rejected` carries the status and
+# the message of the answer for a request that the worker refuses.
+# `Request` carries a complete request with its body joined.
+priv enum Read
+  Closed
+  Rejected(Status, String)
+  Request(Request)
 end
 
 # HTTP/1.1 defaults to keep-alive and HTTP/1.0 to close, but an
 # explicit Connection header overrides either.
 priv fn wants_keep_alive?(req: Request) -> Bool
-  fallback = req.version == "HTTP/1.1"
+  fallback = req.version == Version.HTTP1_1
 
   match req.headers.get("Connection")
     Option.None ->

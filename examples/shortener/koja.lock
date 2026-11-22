@@ -14,6 +14,6 @@ source = "git+https://github.com/hpopp/postgres-koja"
 
 [[package]]
 name = "trail"
-requirement = "tag = v0.1.0"
-rev = "658bbc97c7ef9dfea1c3c5052239e1b56733d02b"
+requirement = "tag = v0.2.0"
+rev = "2134fa69d22d8fe27ccb016671dbd11583cd8632"
 source = "git+https://github.com/koja-lang/trail"

@@ -18,8 +18,8 @@ docs {
   # Delete Link
 
   Removes the link with the given `code`. Returns an empty `204 No Content`
-  on success. Deleting is idempotent from the client's view, but a code
-  that was never created returns `404`.
+  on success. A second delete of the same code returns `404`, the same as
+  a code that was never created.
 
   **Response 204** has no body.
 

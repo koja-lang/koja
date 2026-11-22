@@ -1,11 +1,8 @@
-alias Gh.GitHub.Repo
-alias Gh.GitHub.User
-
 @doc """
 Argument dispatch and plain-text rendering. `dispatch` maps argv to
 an API call and returns the text to print, so the whole surface is
 testable without a network: rendering is pure, and only `dispatch`
-touches `GitHub`.
+touches `Client`.
 """
 struct Cli
   @doc """
@@ -146,19 +143,19 @@ struct Cli
 
   priv fn run_repo(args: List<String>) -> String ! String
     full_name = try require_arg(args, "<owner/name>")
-    repo = try GitHub.repo(full_name)
+    repo = try Client.repo(full_name)
     render_repo(repo)
   end
 
   priv fn run_repos(args: List<String>) -> String ! String
     login = try require_arg(args, "<login>")
-    repos = try GitHub.repos(login)
+    repos = try Client.repos(login)
     render_repos(login, repos)
   end
 
   priv fn run_user(args: List<String>) -> String ! String
     login = try require_arg(args, "<login>")
-    user = try GitHub.user(login)
+    user = try Client.user(login)
     render_user(user)
   end
 end
