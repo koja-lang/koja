@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `==` and `!=` compare a union with one of its members on either side, as in `pet == Cat{name: "Tom"}` and `tom == pet` where `pet` is a `Cat | Dog`. A narrower union compares with a wider one the same way.
 - The arms of an `if`, a `cond`, a `match`, a `receive`, or a `?:` can yield different members of a union when the position expects that union, as in `pet: Pet = likes_cats ? cat : dog`.
 - A struct can hold a union that names the struct, as in `struct Node` with a `next: Int | Node` field.
+- A block closure checks its last expression against its declared return type, the way a function does. A member widens into a declared union, as in `fn (cat: Cat) -> Pet cat end`, and a value of another type is a compile error.
+- A function can end with a `return` statement, as in a `fn answer -> Int` whose only statement is `return 42`.
 
 ## [0.20.1] - 2026-11-06
 

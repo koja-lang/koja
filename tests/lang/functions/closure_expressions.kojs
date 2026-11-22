@@ -6,6 +6,16 @@ fn apply_str(x: String, f: fn (String) -> String) -> String
   f(x)
 end
 
+struct Cat
+  name: String
+end
+
+struct Dog
+  name: String
+end
+
+type Pet = Cat | Dog
+
 # closure as inline argument with capture
 base = 100
 apply(5, fn (x: Int) -> Int x + base end).print()
@@ -27,3 +37,28 @@ apply(1, fn (x: Int) -> Int x + a + b + c end).print()
 
 # closure that ignores its parameter
 apply(999, fn (x: Int) -> Int 42 end).print()
+
+# closure whose last expression widens into its declared union
+cats = [Cat{name: "Tom"}, Cat{name: "Kit"}]
+pets: List<Pet> = cats.map(fn (cat: Cat) -> Pet cat end)
+pets.print()
+
+# closure whose last expression widens a sized number
+small: Int32 = 7
+
+widen = fn (n: Int32) -> Int n end
+
+apply(widen(small), inc).print()
+
+# closure that ends with a return
+clamp =
+  fn (n: Int) -> Int
+    if n > 10
+      return 10
+    end
+
+    return n
+  end
+
+apply(25, clamp).print()
+apply(3, clamp).print()

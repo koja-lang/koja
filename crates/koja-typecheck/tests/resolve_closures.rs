@@ -7,14 +7,17 @@
 //! capture of outer locals, nested closures, and "value-of-fn-type"
 //! storage in a local binding.
 
-use koja_ast::ast::{ClosureParam, ExprKind, Statement};
+use koja_ast::ast::{ClosureParam, Expr, ExprKind, Statement};
+use koja_ast::coercion::Coercion;
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::util::dedent;
+use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    diagnostic_messages, function_body, global_leaf, last_expr, typecheck_script as typecheck,
+    assert_script_fails_with, diagnostic_messages, function_body, global_leaf, last_expr,
+    package_leaf, script_body, typecheck_script as typecheck,
     typecheck_script_fail as typecheck_fail,
 };
 
@@ -273,4 +276,143 @@ fn closure_capture_of_heap_local_resolves_through_string() {
     let closure = &args[0].value;
     let expected = fn_type(vec![int], string);
     assert_eq!(closure.resolution, expected);
+}
+
+/// The last expression of the block closure that the last statement
+/// of the script assigns to a local.
+fn closure_last_expr(checked: &CheckedProgram) -> &Expr {
+    let Some(Statement::Assignment { value, .. }) = script_body(checked).last() else {
+        panic!("expected the script to end with an assignment");
+    };
+    let ExprKind::Closure { body, .. } = &value.kind else {
+        panic!("expected a block closure, got {:?}", value.kind);
+    };
+    last_expr(body)
+}
+
+#[test]
+fn annotated_closure_widens_a_member_into_its_union_return() {
+    let source = "
+        struct Cat
+          name: String
+        end
+
+        struct Dog
+          name: String
+        end
+
+        type Pet = Cat | Dog
+
+        adopt = fn (name: String) -> Pet
+          Cat{name: name}
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(
+        closure_last_expr(&checked).coercion,
+        Some(Coercion::UnionWiden(pet)),
+    );
+}
+
+#[test]
+fn annotated_closure_widens_a_sized_number_into_its_return() {
+    let source = "
+        widen = fn (n: Int32) -> Int
+          n
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let int = global_leaf(&checked, "Int");
+    assert_eq!(
+        closure_last_expr(&checked).coercion,
+        Some(Coercion::NumericWiden(int)),
+    );
+}
+
+#[test]
+fn annotated_closure_rejects_a_last_expression_of_another_type() {
+    // A closure has no name, so the message has no `on` part. There
+    // is one diagnostic, because the local still gets the annotated
+    // function type.
+    let source = "
+        label = fn (n: Int) -> String
+          n
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec!["return type mismatch. Expected `String`, found `Int`"],
+    );
+}
+
+#[test]
+fn annotated_closure_with_an_empty_body_diagnoses() {
+    let source = "
+        nothing = fn () -> Int
+        end
+        ";
+
+    assert_script_fails_with(source, &["return type mismatch", "empty body"]);
+}
+
+#[test]
+fn annotated_closure_that_ends_with_an_assignment_diagnoses() {
+    let source = "
+        bump = fn (n: Int) -> Int
+          m = n + 1
+        end
+        ";
+
+    assert_script_fails_with(source, &["return type mismatch", "non-expression"]);
+}
+
+#[test]
+fn annotated_closure_that_ends_with_an_if_without_else_diagnoses() {
+    let source = "
+        pick = fn (flag: Bool) -> Int
+          if flag
+            1
+          end
+        end
+        ";
+
+    assert_script_fails_with(source, &["return type mismatch", "found `Unit`"]);
+}
+
+#[test]
+fn annotated_closure_can_end_with_a_return() {
+    let source = "
+        answer = fn () -> Int
+          return 42
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn annotated_closure_can_end_with_a_call_that_never_returns() {
+    let source = "
+        stop = fn (n: Int) -> Int
+          Kernel.panic(\"no\")
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn unit_closure_discards_its_last_value() {
+    let source = "
+        ignore = fn (n: Int) -> ()
+          n
+        end
+        ";
+
+    typecheck(&dedent(source));
 }
