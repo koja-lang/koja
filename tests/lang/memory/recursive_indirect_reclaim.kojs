@@ -57,15 +57,65 @@ fn exercise_overwrite -> Int
   end
 end
 
+struct Box<T>
+  value: T
+end
+
+# A recursive alias holds itself in a list, in a map, and in a boxed
+# struct field. A copy shares all three, and the two owners must
+# release every block exactly once.
+type Doc = Int | String | List<Doc> | Map<String, Doc> | Box<Doc>
+
+fn build_doc(depth: Int) -> Doc
+  if depth == 0
+    return "leaf"
+  end
+
+  inner = build_doc(depth - 1)
+  fields: Map<String, Doc> = Map.new()
+  fields = fields.put("inner", inner)
+  box: Box<Doc> = Box{value: inner}
+  items: List<Doc> = [depth, fields, box]
+  items
+end
+
+fn count_fields(fields: Map<String, Doc>) -> Int
+  sum = 0
+
+  for (_, item) in fields
+    sum += count_doc(item)
+  end
+
+  sum
+end
+
+fn count_doc(doc: Doc) -> Int
+  match doc
+    items: List<Doc> ->
+      items.reduce(0, fn (sum: Int, item: Doc) -> Int sum + count_doc(item) end)
+    fields: Map<String, Doc> -> count_fields(fields)
+    box: Box<Doc> -> count_doc(box.value)
+    _ -> 1
+  end
+end
+
+fn exercise_alias -> Int
+  doc = build_doc(3)
+  copy = doc
+  count_doc(doc) + count_doc(copy)
+end
+
 _ = exercise()
 _ = exercise_shared()
 _ = exercise_overwrite()
+_ = exercise_alias()
 start = Rt.koja_rt_live_blocks()
 i = 0
 total = 0
 
 loop
-  total += exercise() + exercise_shared() + exercise_overwrite()
+  total += exercise() + exercise_shared() + exercise_overwrite() +
+    exercise_alias()
   i += 1
 
   if i == 100
@@ -77,4 +127,4 @@ finish = Rt.koja_rt_live_blocks()
 (finish == start
   ? "recursive indirect reclaim: ok"
   : "recursive indirect reclaim: LEAK").print()
-(total == 13000).print()
+(total == 16000).print()

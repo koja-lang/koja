@@ -44,6 +44,7 @@ mod yield_checks;
 
 pub use binary_packing::pack_integer_segment;
 pub use constant::IRConstantValue;
+pub use declarations::union_members_in;
 pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 pub use error::LowerError;
 pub use extern_attrs::IRExternAttrs;

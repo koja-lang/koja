@@ -111,6 +111,7 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Map { key, value } => {
             format!("Map_${}.{}$", mangle_type(key), mangle_type(value))
         }
+        IRType::NamedUnion(symbol) => symbol.mangled().to_string(),
         IRType::Set(inner) => format!("Set_${}$", mangle_type(inner)),
         IRType::String => "String".to_string(),
         IRType::Struct(symbol) => symbol.mangled().to_string(),
@@ -252,7 +253,9 @@ pub fn closure_site_id(body: &IRSymbol) -> u64 {
 /// package-less, the same treatment [`union_mangle`] gives unions.
 fn glue_base(ty: &IRType) -> IRSymbol {
     match ty {
-        IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.clone(),
+        IRType::Enum(symbol) | IRType::NamedUnion(symbol) | IRType::Struct(symbol) => {
+            symbol.clone()
+        }
         IRType::Union { mangled, .. } => mangled.clone(),
         other => IRSymbol::synthetic(mangle_type(other)),
     }

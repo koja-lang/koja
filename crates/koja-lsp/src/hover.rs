@@ -92,10 +92,10 @@ fn global_hover(
         GlobalKind::Constant(Some(def)) => {
             format!("const {name}: {}", format_resolved_type(&def.ty, registry))
         }
-        GlobalKind::TypeAlias(Some(expansion)) => {
+        GlobalKind::TypeAlias(Some(definition)) => {
             format!(
                 "type {name} = {}",
-                format_resolved_type(expansion, registry)
+                format_resolved_type(&definition.expansion, registry)
             )
         }
         GlobalKind::Struct(None)

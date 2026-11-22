@@ -14,7 +14,7 @@ use crate::elaborate::elaborate;
 use crate::error::LowerError;
 use crate::function::{FunctionKind, IRBasicBlock, IRSymbol};
 use crate::generics;
-use crate::lower::{LowerOutput, lower_package};
+use crate::lower::{LowerOutput, lower_named_unions, lower_package};
 use crate::merge;
 use crate::package::IRPackage;
 use crate::tail_calls::rewrite_tail_calls;
@@ -99,23 +99,26 @@ pub(crate) fn instantiate(
 }
 
 /// Lower every checked package behind a seeded `Global` package and
-/// coalesce the fragments by package name.
+/// coalesce the fragments by package name. The named unions lower
+/// first, because a function in any package can name one.
 pub(crate) fn lower_packages(checked: &CheckedProgram, output: &mut LowerOutput) -> Vec<IRPackage> {
     let mut packages = Vec::with_capacity(checked.packages.len() + 1);
     packages.push(empty_global_stdlib_package());
+    lower_named_unions(&checked.registry, output);
     for pkg in &checked.packages {
         packages.push(lower_package(pkg, &checked.registry, output));
     }
     merge::coalesce(packages)
 }
 
-/// The post-instantiation rewrites. Union discovery runs first, then
-/// type cycle breaking, tail-call rewriting, yield insertion, and
-/// elaboration. `body` is a script's inline top-level body. Programs
-/// pass an empty one.
+/// The post-instantiation rewrites. Type cycle breaking runs first,
+/// then union discovery, tail-call rewriting, yield insertion, and
+/// elaboration. Union discovery sizes each union, and a size is
+/// finite only after the cycles are broken. `body` is a script's
+/// inline top-level body. Programs pass an empty one.
 pub(crate) fn rewrite(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
-    discover_unions(packages, body);
     break_type_cycles(packages);
+    discover_unions(packages, body);
     rewrite_tail_calls(packages);
     insert_yield_checks(packages, body);
     elaborate(packages, body);

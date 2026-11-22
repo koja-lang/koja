@@ -47,15 +47,6 @@ fn get(value: Value, key: String) -> Option<Value>
   end
 end
 
-impl Encoding for Array
-  @doc """
-  Returns this array as a JSON value.
-  """
-  fn to_json(self) -> Value
-    self
-  end
-end
-
 impl Encoding for Bool
   @doc """
   Returns this boolean as a JSON value.
@@ -121,7 +112,8 @@ end
 
 impl Encoding for List<T: Encoding>
   @doc """
-  Encodes each item as a JSON array item.
+  Converts each item to a JSON value and returns the list as a JSON
+  array.
   """
   fn to_json(self) -> Value
     items: List<Value> = []
@@ -130,6 +122,6 @@ impl Encoding for List<T: Encoding>
       items = items.append(item.to_json())
     end
 
-    Array{items: items}
+    items
   end
 end

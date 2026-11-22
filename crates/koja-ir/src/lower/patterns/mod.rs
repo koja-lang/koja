@@ -301,7 +301,7 @@ pub(super) fn lower_pattern_check(
             let member_ir =
                 resolved_type_to_ir_type(resolved, ctx.registry, &mut ctx.output.instantiations);
             let subject_ir = ctx.type_of(inputs.subject).clone();
-            let IRType::Union { members, .. } = &subject_ir else {
+            let Some(members) = ctx.output.union_members(&subject_ir) else {
                 panic!(
                     "IR lower: typed-binding pattern `{name}` reaches lower with \
                      non-Union subject `{subject_ir:?}`, typecheck-resolve invariant \

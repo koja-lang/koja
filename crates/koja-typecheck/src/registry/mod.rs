@@ -44,6 +44,7 @@ pub use definitions::{
     ConstantDefinition, Dispatch, EnumDefinition, FunctionDefinition, FunctionSignature,
     ProtocolDefinition, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
     ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
+    TypeAliasDefinition,
 };
 pub use format::format_registry;
 pub use koja_ast::ast::FunctionOrigin;
@@ -78,13 +79,8 @@ pub enum GlobalKind {
     Struct(Option<StructDefinition>),
     /// `type X = ...` declared at top level. The `Option` mirrors
     /// other lifecycle-payload variants, `None` after collect and
-    /// `Some(expansion)` after `lift_type_aliases` resolves the RHS.
-    /// The expansion is the canonical [`ResolvedType`] the alias
-    /// stands for. For the surface-aliasing case
-    /// (`type Pet = Cat | Dog | Fish`) that is typically a
-    /// canonical [`ResolvedType::Union`], but any `ResolvedType`
-    /// shape is permissible.
-    TypeAlias(Option<ResolvedType>),
+    /// `Some(definition)` after `lift_type_aliases` resolves the RHS.
+    TypeAlias(Option<TypeAliasDefinition>),
 }
 
 impl GlobalKind {
@@ -645,10 +641,14 @@ impl GlobalRegistry {
         id: GlobalRegistryId,
         expansion: ResolvedType,
     ) {
+        let definition = TypeAliasDefinition {
+            expansion,
+            recursive: false,
+        };
         self.stamp(
             id,
             "set_type_alias_definition",
-            expansion,
+            definition,
             |kind| match kind {
                 GlobalKind::TypeAlias(slot) => Some(slot),
                 _ => None,
@@ -663,8 +663,30 @@ impl GlobalRegistry {
     /// follow `Named { Global(alias_id) }` to the underlying type.
     pub fn alias_expansion(&self, id: GlobalRegistryId) -> Option<ResolvedType> {
         match self.entries.get(&id)?.kind {
-            GlobalKind::TypeAlias(Some(ref expansion)) => Some(expansion.clone()),
+            GlobalKind::TypeAlias(Some(ref definition)) => Some(definition.expansion.clone()),
             _ => None,
+        }
+    }
+
+    /// Whether `id` is a union alias that names itself inside a type
+    /// argument. See [`TypeAliasDefinition::recursive`].
+    pub fn is_recursive_alias(&self, id: GlobalRegistryId) -> bool {
+        matches!(
+            self.entries.get(&id).map(|entry| &entry.kind),
+            Some(GlobalKind::TypeAlias(Some(definition))) if definition.recursive
+        )
+    }
+
+    /// Set the `recursive` flag on a lifted alias. Panics if `id` is
+    /// not a lifted `TypeAlias` entry. Only the cycle sweep of
+    /// `lift_type_aliases` calls this.
+    pub(crate) fn mark_recursive_alias(&mut self, id: GlobalRegistryId) {
+        match self.entries.get_mut(&id).map(|entry| &mut entry.kind) {
+            Some(GlobalKind::TypeAlias(Some(definition))) => definition.recursive = true,
+            _ => panic!(
+                "mark_recursive_alias on registry id {id}, which is not a lifted type \
+                 alias. This is a lift invariant violation"
+            ),
         }
     }
 
@@ -687,7 +709,10 @@ impl GlobalRegistry {
         });
         match &entry.kind {
             GlobalKind::TypeAlias(_) => {
-                entry.kind = GlobalKind::TypeAlias(Some(expansion));
+                entry.kind = GlobalKind::TypeAlias(Some(TypeAliasDefinition {
+                    expansion,
+                    recursive: false,
+                }));
             }
             other => panic!(
                 "set_type_alias_definition_force called on non-alias entry `{}` ({}). \

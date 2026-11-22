@@ -30,7 +30,7 @@ mod registry;
 
 pub use error::CheckFailure;
 pub use koja_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
-pub use pipeline::{Substitution, peel_alias, substitute};
+pub use pipeline::{Substitution, peel_alias, recursive_alias, substitute};
 pub use program::{
     CheckOptions, CheckedPackage, CheckedProgram, check_program, check_program_with,
 };
@@ -40,5 +40,5 @@ pub use registry::{
     FunctionDefinition, FunctionOrigin, FunctionSignature, GlobalKind, GlobalRegistry, KEYWORDS,
     ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
     ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
-    VisibilityScope, format_registry,
+    TypeAliasDefinition, VisibilityScope, format_registry,
 };

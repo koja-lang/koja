@@ -18,3 +18,10 @@ false
 true
 Tom
 Rex
+[[1, "two", true], 3, [4, [5, "six"]]]
+[[1, "two", true], 3, [4, [5, "six"]]]
+true
+false
+true
+5
+["x", [1, 2, ["y", "z"]]]

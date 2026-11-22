@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use koja_graph::Graph;
 
+use crate::declarations::union_members_in;
 use crate::enum_decl::{IREnumDecl, IRVariantPayload};
 use crate::function::IRSymbol;
 use crate::package::IRPackage;
@@ -54,10 +55,10 @@ fn collect_edges(packages: &[IRPackage]) -> BTreeMap<IRSymbol, Vec<Edge>> {
     let mut edges: BTreeMap<IRSymbol, Vec<Edge>> = BTreeMap::new();
     for package in packages {
         for decl in package.structs.values() {
-            edges.insert(decl.symbol.clone(), collect_struct_edges(decl));
+            edges.insert(decl.symbol.clone(), collect_struct_edges(decl, packages));
         }
         for decl in package.enums.values() {
-            edges.insert(decl.symbol.clone(), collect_enum_edges(decl));
+            edges.insert(decl.symbol.clone(), collect_enum_edges(decl, packages));
         }
     }
     edges
@@ -85,10 +86,10 @@ fn back_edge_slots(edges: &BTreeMap<IRSymbol, Vec<Edge>>) -> BTreeMap<IRSymbol, 
     hits
 }
 
-fn collect_struct_edges(decl: &IRStructDecl) -> Vec<Edge> {
+fn collect_struct_edges(decl: &IRStructDecl, packages: &[IRPackage]) -> Vec<Edge> {
     let mut edges = Vec::new();
     for field in &decl.fields {
-        for target in inline_refs(&field.ir_type) {
+        for target in inline_refs(&field.ir_type, packages) {
             edges.push(Edge {
                 target,
                 slot: Slot::StructField(field.index),
@@ -98,14 +99,14 @@ fn collect_struct_edges(decl: &IRStructDecl) -> Vec<Edge> {
     edges
 }
 
-fn collect_enum_edges(decl: &IREnumDecl) -> Vec<Edge> {
+fn collect_enum_edges(decl: &IREnumDecl, packages: &[IRPackage]) -> Vec<Edge> {
     let mut edges = Vec::new();
     for (variant_idx, variant) in decl.variants.iter().enumerate() {
         let variant_idx = variant_idx as u32;
         match &variant.payload {
             IRVariantPayload::Tuple(types) => {
                 for (element_idx, ty) in types.iter().enumerate() {
-                    for target in inline_refs(ty) {
+                    for target in inline_refs(ty, packages) {
                         edges.push(Edge {
                             target,
                             slot: Slot::EnumTupleElement {
@@ -118,7 +119,7 @@ fn collect_enum_edges(decl: &IREnumDecl) -> Vec<Edge> {
             }
             IRVariantPayload::Struct(fields) => {
                 for field in fields {
-                    for target in inline_refs(&field.ir_type) {
+                    for target in inline_refs(&field.ir_type, packages) {
                         edges.push(Edge {
                             target,
                             slot: Slot::EnumStructField {
@@ -138,11 +139,23 @@ fn collect_enum_edges(decl: &IREnumDecl) -> Vec<Edge> {
 /// Symbols of every struct / enum that contribute inline (non-pointer)
 /// size to `ty`'s value layout. Pointer-shaped wrappers stop the
 /// recursion, as they already break the size cycle for the LLVM layer.
-fn inline_refs(ty: &IRType) -> Vec<IRSymbol> {
+///
+/// The walk into a named union ends, because each path from a
+/// recursive alias back to itself passes through a struct, an enum,
+/// or a pointer-shaped wrapper, and the walk stops at all of them.
+fn inline_refs(ty: &IRType, packages: &[IRPackage]) -> Vec<IRSymbol> {
+    let all_refs = |parts: &[IRType]| -> Vec<IRSymbol> {
+        parts
+            .iter()
+            .flat_map(|part| inline_refs(part, packages))
+            .collect()
+    };
     match ty {
         IRType::Struct(symbol) | IRType::Enum(symbol) => vec![symbol.clone()],
-        IRType::Tuple(elements) => elements.iter().flat_map(inline_refs).collect(),
-        IRType::Union { members, .. } => members.iter().flat_map(inline_refs).collect(),
+        IRType::Tuple(elements) => all_refs(elements),
+        IRType::NamedUnion(_) | IRType::Union { .. } => {
+            all_refs(union_members_in(packages, ty).unwrap_or_default())
+        }
         IRType::Binary
         | IRType::Bits
         | IRType::Bool

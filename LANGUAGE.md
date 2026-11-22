@@ -1227,6 +1227,34 @@ a: Setting = "auto" # a String
 b: Setting = 3 # a Count, through Count.from_int
 ```
 
+#### Recursive Unions
+
+A `type` alias of a union can name itself in a type argument of `List`, `Map`, `Set`, or a generic struct or enum:
+
+```koja
+type Value = Bool | Int | String | List<Value> | Map<String, Value>
+
+fn count(value: Value) -> Int
+  match value
+    items: List<Value> ->
+      items.reduce(0, fn (sum: Int, item: Value) -> Int sum + count(item) end)
+
+    fields: Map<String, Value> ->
+      fields.length()
+
+    _ ->
+      1
+  end
+end
+
+config: Value = ["name": "koja", "tags": ["fast", "small"]]
+count([1, [2, [3, true]]]) # 4
+```
+
+Two aliases can name each other the same way. An alias cannot name itself as a direct member, as in `type Chain = Int | Chain`, or through a tuple, a function type, or a `CPtr`. Only a union alias can be recursive, so `type Rows = List<Rows>` is an error.
+
+A recursive alias is a type of its own. Two recursive aliases with the same members are different types, and a value of one does not flow into a position that expects the other.
+
 ### Tuples
 
 An anonymous, fixed-size grouping of values. Tuples are structural. Two tuple types are the same type exactly when their element types match, position by position.
@@ -3220,17 +3248,16 @@ Checksum.crc32c("123456789".to_binary()) == 0xE3069283
 `JSON.Value` is a JSON value. It is a union of one type for each kind of JSON value:
 
 ```koja
-type Value = Null | Bool | Number | String | Array | Object
+type Value = Null | Bool | Number | String | List<Value> | Object
 ```
 
-`Bool` and `String` are the Koja types. The other four belong to the package:
+`Bool`, `String`, and `List` are the Koja types. A JSON array is a `List<JSON.Value>`, so every `List` function works on it. The other three belong to the package:
 
 - `JSON.Null` has one value, the constant `JSON.NULL`.
 - `JSON.Number` holds the number as JSON writes it, in its `text` field.
-- `JSON.Array` holds its `items`, a `List<JSON.Value>`.
 - `JSON.Object` holds its `entries`, a `List<(String, JSON.Value)>`. It keeps entry order and duplicate names.
 
-A literal builds a value in a position that expects one. A map literal builds an object, a list literal builds an array, and a number literal builds a number:
+A literal builds a value in a position that expects one. A map literal builds an object, a list literal builds a list of values, and a number literal builds a number:
 
 ```koja
 payload: JSON.Value = [
@@ -3241,12 +3268,13 @@ payload: JSON.Value = [
 ]
 ```
 
-A variable needs no conversion when its type is one of the six, so a `String`, a `Bool`, or another `JSON.Value` goes in as it is. An `Int` or a `Float` is not one of the six, so call `to_json()` on it:
+A variable needs no conversion when its type is one of the six, so a `String`, a `Bool`, a `List<JSON.Value>`, or another `JSON.Value` goes in as it is. An `Int` or a `Float` is not one of the six, so call `to_json()` on it:
 
 ```koja
 count = 3
 name = "Koja"
-payload: JSON.Value = ["name": name, "count": count.to_json()]
+tags: List<JSON.Value> = ["fast", "small"]
+payload: JSON.Value = ["name": name, "count": count.to_json(), "tags": tags]
 ```
 
 To read a value, `match` with a typed binding for each type the code accepts. `JSON.get(value, key)` returns the value of a key as an `Option<JSON.Value>`. It returns `None` when the value is not an object or has no such key, and the last entry when a key occurs more than one time. `Object.get(key)` does the same for a `JSON.Object`.
@@ -3258,6 +3286,15 @@ match JSON.get(payload, "name")
 end
 ```
 
+An array arrives as a list, so the arm binds the list itself:
+
+```koja
+match JSON.get(payload, "tags")
+  Option.Some(tags: List<JSON.Value>) -> tags.length()
+  _ -> 0
+end
+```
+
 `JSON.decode` checks a number against the JSON grammar and keeps its text, so it loses no digit. The code that reads the number picks the type:
 
 - `number.to_int()` returns `Int ! NumericConversionError`. A number with a fraction of zero is an integer, so `1.0` gives `1` and `1e2` gives `100`. It fails with `InvalidFormat` for `1.5`, the same as `"1.5".to_int()`, and with `OutOfRange` for an integer that does not fit in 64 bits.
@@ -3265,7 +3302,7 @@ end
 
 Two numbers are equal when they have the same value, so a decoded `1` equals a decoded `1.0`.
 
-`JSON.Encoding` converts a type to `JSON.Value` through `to_json`. `Bool`, `Int`, `Float`, `String`, `List<T: JSON.Encoding>`, and the four package types conform, and so `JSON.Value` does too.
+`JSON.Encoding` converts a type to `JSON.Value` through `to_json`. `Bool`, `Int`, `Float`, `String`, `List<T: JSON.Encoding>`, and the three package types conform, and so `JSON.Value` does too.
 
 ```koja
 struct Point

@@ -412,6 +412,12 @@ pub enum IRType {
         key: Box<IRType>,
         value: Box<IRType>,
     },
+    /// Tagged union that a recursive `type` alias names, as in
+    /// `type Tree = Int | List<Tree>`. The symbol is the alias name.
+    /// The members name the union again, so they live on the
+    /// [`crate::IRUnionDecl`] with this symbol and never inline. The
+    /// layout is the same as [`IRType::Union`].
+    NamedUnion(IRSymbol),
     Set(Box<IRType>),
     /// UTF-8 bytes with a trailing `\0` for libc compatibility.
     String,
@@ -459,6 +465,7 @@ impl IRType {
             | Self::Indirect(_)
             | Self::List(_)
             | Self::Map { .. }
+            | Self::NamedUnion(_)
             | Self::Set(_)
             | Self::Struct(_)
             | Self::Tuple(_)

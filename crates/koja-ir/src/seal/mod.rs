@@ -47,6 +47,8 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         | IRType::Int16
         | IRType::Int32
         | IRType::Int64
+        // A named type. Its members are not part of this type.
+        | IRType::NamedUnion(_)
         | IRType::String
         | IRType::Struct(_)
         | IRType::UInt8

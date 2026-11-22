@@ -228,7 +228,7 @@ pub(super) fn emit_union_wrap(
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
-    let IRType::Union { members, .. } = union_ty else {
+    let Some(members) = ctx.output.union_members(union_ty) else {
         panic!(
             "IR lower: Coercion::UnionWiden target lowered to non-Union \
              `{union_ty:?}` (typecheck invariant violation)",

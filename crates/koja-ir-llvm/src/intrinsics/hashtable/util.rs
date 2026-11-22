@@ -418,7 +418,9 @@ fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
         IRType::Binary => global_primitive_symbol(&["Binary"]),
         IRType::Bits => global_primitive_symbol(&["Bits"]),
         IRType::String => global_primitive_symbol(&["String"]),
-        IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.clone(),
+        IRType::Enum(symbol) | IRType::NamedUnion(symbol) | IRType::Struct(symbol) => {
+            symbol.clone()
+        }
         IRType::Union { mangled, .. } => mangled.clone(),
         _ => return None,
     })

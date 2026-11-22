@@ -54,6 +54,7 @@ use crate::function::{IRBasicBlock, IRBlockId, IRFunction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
+use crate::union_decl::{IRUnionDecl, union_members};
 
 /// Per-package write-back bag every `lower_*` helper reaches
 /// through [`FnLowerCtx::output`]. `lower_program` / `lower_script`
@@ -69,6 +70,12 @@ pub(crate) struct LowerOutput {
     /// wrapper.
     pub(crate) fn_as_closure_wrappers: BTreeMap<IRSymbol, IRSymbol>,
     pub(crate) instantiations: Vec<Instantiation>,
+    /// The declaration of each [`IRType::NamedUnion`], keyed by the
+    /// alias name. [`super::lower_named_unions`] fills it before any
+    /// function lowers, so lowering can read the members of a named
+    /// union. `lower_package` copies each declaration into the
+    /// package that owns the alias.
+    pub(crate) named_unions: BTreeMap<IRSymbol, IRUnionDecl>,
     /// Dedupe set for [`crate::FunctionKind::SpawnWrapper`] symbols
     /// minted during `spawn` lowering. Each state cell gets one
     /// wrapper per [`super::process`] turn-around regardless of how
@@ -83,6 +90,13 @@ pub(crate) struct LowerOutput {
     /// Union symbols whose `hash/1` and `equals?/2` are already
     /// synthesized, so `Map<U, V>` and `Set<U>` share one pair.
     pub(crate) union_key_conformances: BTreeSet<IRSymbol>,
+}
+
+impl LowerOutput {
+    /// The members of the union type `ty`. See [`union_members`].
+    pub(crate) fn union_members<'a>(&'a self, ty: &'a IRType) -> Option<&'a [IRType]> {
+        union_members(ty, |symbol| self.named_unions.get(symbol))
+    }
 }
 
 /// The shape every `lower_*` helper returns. `Open` carries the

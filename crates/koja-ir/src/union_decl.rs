@@ -11,6 +11,11 @@
 //! Every distinct canonical surface union (sorted, deduped, alias-
 //! peeled member set) yields the same `mangled` symbol and a single
 //! shared decl.
+//!
+//! The union of a recursive `type` alias lowers to an
+//! `IRType::NamedUnion` head instead. Its decl is keyed by the alias
+//! name and exists before function lowering starts. [`union_members`]
+//! reads the members of either head.
 
 use std::collections::BTreeMap;
 
@@ -33,6 +38,28 @@ pub struct IRUnionDecl {
     pub max_payload_size: u32,
     pub members: Vec<IRType>,
     pub symbol: IRSymbol,
+}
+
+/// The members of a union type in canonical order, or `None` when
+/// `ty` is not a union. An [`IRType::Union`] carries its members
+/// inline. An [`IRType::NamedUnion`] keeps them on its declaration,
+/// which `named` finds. Panics when `named` finds no declaration,
+/// because lowering declares each named union before any type names
+/// it.
+pub(crate) fn union_members<'a>(
+    ty: &'a IRType,
+    named: impl FnOnce(&IRSymbol) -> Option<&'a IRUnionDecl>,
+) -> Option<&'a [IRType]> {
+    match ty {
+        IRType::NamedUnion(symbol) => {
+            let Some(decl) = named(symbol) else {
+                panic!("IR: named union `{symbol}` has no declaration");
+            };
+            Some(&decl.members)
+        }
+        IRType::Union { members, .. } => Some(members),
+        _ => None,
+    }
 }
 
 /// Conservative byte-size walker used to size the trailing
@@ -95,6 +122,13 @@ fn size_and_align(
             Some(decl) => enum_size(decl, declarations, unions),
             None => (PTR_BYTES, PTR_BYTES),
         },
+        // A named union sizes through its declaration only. A walk
+        // into its members could reach the union again. Before the
+        // first sizing pass registers it, the size is a lower bound
+        // that `refine_nested_union_sizes` settles.
+        IRType::NamedUnion(symbol) => {
+            union_size(unions.get(symbol).map_or(0, |decl| decl.max_payload_size))
+        }
         IRType::Union { mangled, members } => match unions.get(mangled) {
             Some(decl) => union_size(decl.max_payload_size),
             None => {
@@ -189,6 +223,12 @@ fn union_size(payload: u32) -> (u32, u32) {
 /// [`crate::IRProgram::union_decl`], so where the decl physically
 /// lives does not matter for backends. What matters is that every
 /// observed mangled symbol has exactly one entry.
+///
+/// A named union is declared before this pass, with no payload size.
+/// The pass walks the members of each such declaration for the unions
+/// they hold, and sizes the declaration with the ones it discovers.
+/// The type cycles must be broken first, or the size of a struct that
+/// holds its own union has no end.
 pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBasicBlock]) {
     let declarations = Declarations::new(&*packages);
     let mut seen: BTreeMap<IRSymbol, usize> = BTreeMap::new();
@@ -208,6 +248,11 @@ pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBas
         }
         for function in pkg.functions.values() {
             walk_function(function, &mut local);
+        }
+        for decl in pkg.unions.values() {
+            for member in &decl.members {
+                walk_type(member, &mut local);
+            }
         }
         for (mangled, ir_type) in local {
             if seen.contains_key(&mangled) {
@@ -230,8 +275,10 @@ pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBas
         }
     }
     let empty_unions: BTreeMap<IRSymbol, IRUnionDecl> = BTreeMap::new();
+    // Start from the named unions, so the fixpoint below sizes them
+    // with the discovered ones.
     let mut decls_by_pkg: Vec<BTreeMap<IRSymbol, IRUnionDecl>> =
-        packages.iter().map(|_| BTreeMap::new()).collect();
+        packages.iter().map(|pkg| pkg.unions.clone()).collect();
     for (idx, locals) in staged.iter().enumerate() {
         for (mangled, ir_type) in locals {
             let IRType::Union { members, .. } = ir_type else {
@@ -451,6 +498,9 @@ fn walk_type(ty: &IRType, out: &mut BTreeMap<IRSymbol, IRType>) {
         | IRType::Int16
         | IRType::Int32
         | IRType::Int64
+        // A named union has its declaration already, and
+        // `discover_unions` walks the members from there.
+        | IRType::NamedUnion(_)
         | IRType::String
         | IRType::Struct(_)
         | IRType::UInt8

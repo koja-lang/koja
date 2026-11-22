@@ -1668,7 +1668,7 @@ async fn execute_instruction_value<R: CallResolver>(
             ..
         } => {
             let payload = lookup(&frame.values, *value)?;
-            let IRType::Union { mangled, .. } = ty else {
+            let (IRType::NamedUnion(mangled) | IRType::Union { mangled, .. }) = ty else {
                 panic!(
                     "interpreter: UnionWrap target IRType is not Union, got `{ty:?}` \
                      (seal invariant violation)",

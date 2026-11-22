@@ -86,7 +86,10 @@ fn apply_value_coercion(
         Coercion::UnionWiden(target) => {
             let target_ir =
                 resolved_type_to_ir_type(target, ctx.registry, &mut ctx.output.instantiations);
-            if matches!(ctx.type_of(value), IRType::Union { .. }) {
+            if matches!(
+                ctx.type_of(value),
+                IRType::NamedUnion(_) | IRType::Union { .. }
+            ) {
                 return emit_union_widen(expr, value, target_ir, ctx, block);
             }
             let dest = emit_union_wrap(value, &target_ir, ctx, block);

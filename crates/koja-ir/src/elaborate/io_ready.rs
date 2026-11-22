@@ -5,6 +5,7 @@
 //! them only as a union member, so delivery always wraps the payload
 //! into that union.
 
+use crate::package::IRPackage;
 use crate::types::IRType;
 
 use super::delivery::{Injection, inject_union_member};
@@ -20,6 +21,9 @@ fn is_io_ready(member: &IRType) -> bool {
 /// The `IOReady` member of a union message `M` and the wrap that lifts
 /// it into `M`. `None` when `M` is not a union with an `IOReady`
 /// member.
-pub(super) fn resolve(message_type: &IRType) -> Option<(IRType, Injection)> {
-    inject_union_member(message_type, is_io_ready)
+pub(super) fn resolve(
+    message_type: &IRType,
+    packages: &[IRPackage],
+) -> Option<(IRType, Injection)> {
+    inject_union_member(message_type, is_io_ready, packages)
 }
