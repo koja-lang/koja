@@ -1,33 +1,40 @@
 //! Return-position checking of the trailing expression against the
 //! declared return type, and of every explicit `return` statement.
 //!
-//! Once `resolve_function` has walked the body, every `Statement::Expr`
-//! carries a resolved type. The compiler's contract is that the body's
-//! final expression is the function's return value. [`check_return_type`]
-//! enforces the typecheck side. When the declared return type is
-//! non-Unit, the trailing statement must be a [`Statement::Expr`] whose
-//! resolution equals the declared return type. [`check_explicit_return`]
-//! applies the same compatibility rules at each `return` site.
+//! Once resolve has walked the body of a function or a block closure,
+//! every `Statement::Expr` carries a resolved type. The compiler's
+//! contract is that the body's final expression is the return value.
+//! [`check_return_type`] enforces the typecheck side. When the declared
+//! return type is non-Unit, the trailing statement must be a `return`
+//! or a [`Statement::Expr`] whose resolution is compatible with the
+//! declared return type. [`check_explicit_return`] applies the same
+//! compatibility rules at each `return` site.
 
-use koja_ast::ast::{Diagnostic, Edit, Expr, Function, Statement};
+use koja_ast::ast::{Diagnostic, Edit, Expr, Statement};
 use koja_ast::identifier::ResolvedType;
 use koja_ast::span::{Position, Span};
 
-use crate::registry::{FunctionSignature, GlobalRegistry};
+use crate::registry::GlobalRegistry;
 
 use super::coercion::{Mismatch, check_compatible_stamping};
-use super::ctx::{Resolver, ResolverEnv};
-use super::error_channel::{
-    ErrorChannel, channel_for_signature, ok_unit_construction, ok_wrap_expr,
-};
+use super::ctx::Resolver;
+use super::error_channel::{ErrorChannel, ok_unit_construction, ok_wrap_expr};
 use super::types::{display_resolution, is_primitive, types_equivalent};
 
-/// Diagnose any mismatch between the function's declared return type
-/// and the type produced by its trailing expression. In a `!`-spelled
-/// function the trailing expression checks against the unwrapped
-/// success type instead, and wraps in `Result.Ok` once it passes.
+/// Diagnose any mismatch between the declared return type of a
+/// function or a block closure and the type produced by the trailing
+/// expression of its `body`. In a `!`-spelled function the trailing
+/// expression checks against the unwrapped success type instead, and
+/// wraps in `Result.Ok` once it passes.
+///
+/// The declared type and the error channel come from `resolver`, the
+/// same source [`check_explicit_return`] reads, so the two checks
+/// cannot disagree. `owner` is the function name for the messages,
+/// and `None` for a closure. `span` places the message for an empty
+/// body.
 ///
 /// Skips the check when:
+/// - No declared type is in scope.
 /// - The declared (or unwrapped success) type is `Unit`. The body's
 ///   last value is discarded, so arbitrary trailing types are fine.
 ///   A `-> () ! E` function additionally gets `Result.Ok(())`
@@ -35,32 +42,35 @@ use super::types::{display_resolution, is_primitive, types_equivalent};
 /// - The declared return is `<unresolved>`. The annotation already
 ///   triggered its own diagnostic upstream, and piling on with a return
 ///   mismatch only adds noise.
-/// - Body is `None` (extern / intrinsic). Those declarations are not
-///   typechecked here.
+/// - The trailing statement is a `return`, which
+///   [`check_explicit_return`] checks at its own site.
 pub(super) fn check_return_type(
-    function: &mut Function,
-    signature: &FunctionSignature,
-    env: &mut ResolverEnv<'_>,
+    body: &mut Vec<Statement>,
+    owner: Option<&str>,
+    span: Span,
+    resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(body) = function.body.as_mut() else {
+    let Some(expected) = resolver.current_return_type.as_ref() else {
         return;
     };
-    let declared = &signature.return_type;
+    let registry = resolver.registry;
+    let channel = resolver.error_channel.as_ref().filter(|c| c.ok_wraps);
+    // In a `!`-spelled function the declared type is the full
+    // `Result`, and `expected` is its success type.
+    let declared = channel.map_or(expected, |c| &c.result);
     if !declared.is_resolved() {
         return;
     }
-    let channel = channel_for_signature(signature, env.registry).filter(|c| c.ok_wraps);
-    let expected = channel.as_ref().map_or(declared, |c| &c.ok);
-    if is_primitive(expected, env.registry, "Unit") {
-        if let Some(channel) = &channel
-            && body_can_fall_off(body, env.registry)
+    if is_primitive(expected, registry, "Unit") {
+        if let Some(channel) = channel
+            && body_can_fall_off(body, registry)
         {
-            let span = body.last().map_or(function.span, statement_span);
+            let span = body.last().map_or(span, statement_span);
             body.push(Statement::Expr(ok_unit_construction(
                 &channel.result,
                 span,
-                env.registry,
+                registry,
             )));
         }
         return;
@@ -68,28 +78,28 @@ pub(super) fn check_return_type(
     let Some(last) = body.last_mut() else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "return type mismatch on `{}`. Expected `{}`, found empty body",
-                function.name,
-                display_resolution(expected, env.registry),
+                "return type mismatch{}. Expected `{}`, found empty body",
+                owner_site(owner),
+                display_resolution(expected, registry),
             ),
-            function.span,
+            span,
         ));
         return;
     };
-    // In a fallible function a trailing `return` (including a
-    // desugared `fail`) already checked at its own site, and the
-    // body cannot fall off the end past it.
-    if channel.is_some() && matches!(last, Statement::Return { .. }) {
+    // A trailing `return` (including a desugared `fail`) already
+    // checked at its own site, and the body cannot fall off the end
+    // past it.
+    if matches!(last, Statement::Return { .. }) {
         return;
     }
     let last_span = statement_span(last);
     let Statement::Expr(trailing) = last else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "return type mismatch on `{}`. Expected `{}`, found a non-expression \
+                "return type mismatch{}. Expected `{}`, found a non-expression \
                  trailing statement",
-                function.name,
-                display_resolution(expected, env.registry),
+                owner_site(owner),
+                display_resolution(expected, registry),
             ),
             last_span,
         ));
@@ -105,22 +115,16 @@ pub(super) fn check_return_type(
     // trailing expression is `if cond then return 1 else return 2 end`,
     // or a bare `panic()` call) satisfies any non-`Never` declared
     // return type without ever actually returning a value.
-    if is_primitive(&actual, env.registry, "Never") {
+    if is_primitive(&actual, registry, "Never") {
         return;
     }
-    if let Some(mismatch) = check_compatible_stamping(trailing, &actual, expected, env.registry) {
-        let message = mismatch_message(
-            mismatch,
-            expected,
-            &actual,
-            Some(function.name.as_str()),
-            env.registry,
-        );
-        let hint = auto_wrap_hint(channel.as_ref(), &actual, env.registry);
+    if let Some(mismatch) = check_compatible_stamping(trailing, &actual, expected, registry) {
+        let message = mismatch_message(mismatch, expected, &actual, owner, registry);
+        let hint = auto_wrap_hint(channel, &actual, registry);
         diagnostics.push(mismatch_diagnostic(message, hint, trailing.span));
         return;
     }
-    if let Some(channel) = &channel {
+    if let Some(channel) = channel {
         ok_wrap_expr(trailing, &channel.result);
     }
 }
@@ -264,18 +268,20 @@ fn mismatch_message(
                 width.range_label(),
             )
         }
-        Mismatch::Incompatible => {
-            let site = match owner {
-                Some(name) => format!(" on `{name}`"),
-                None => String::new(),
-            };
-            format!(
-                "return type mismatch{site}. Expected `{}`, found `{}`",
-                display_resolution(declared, registry),
-                display_resolution(actual, registry),
-            )
-        }
+        Mismatch::Incompatible => format!(
+            "return type mismatch{}. Expected `{}`, found `{}`",
+            owner_site(owner),
+            display_resolution(declared, registry),
+            display_resolution(actual, registry),
+        ),
     }
+}
+
+/// The part of a return mismatch message that names the function.
+/// Empty for a closure and for an explicit `return`, which have no
+/// name to show.
+fn owner_site(owner: Option<&str>) -> String {
+    owner.map_or_else(String::new, |name| format!(" on `{name}`"))
 }
 
 /// Assemble the mismatch diagnostic, attaching the

@@ -6,5 +6,16 @@ fn tiny(flag: Bool) -> Int8
   0
 end
 
+# a function can end with a return
+fn tiny_last(flag: Bool) -> Int8
+  if flag
+    return 5
+  end
+
+  return 0
+end
+
 tiny(true).print()
 tiny(false).print()
+tiny_last(true).print()
+tiny_last(false).print()

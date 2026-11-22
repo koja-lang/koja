@@ -317,7 +317,7 @@ fn find(items: List<Int32>, target: Int32) -> Bool
 end
 ```
 
-`return` is a statement. It cannot appear inside another expression.
+`return` is a statement. It cannot appear inside another expression. It can be the last statement of a function or a closure.
 
 Every explicit `return` is typechecked against the declared return type with the same rules as the trailing expression, including numeric literal coercion (`return 5` in a `-> Int8` function produces an `Int8`). A bare `return` in a function that declares a return type is an error, and `return <value>` in a function that returns `Unit` is an error. A `return` whose value diverges (such as `return Kernel.panic("boom")`) is accepted in any function.
 
@@ -387,6 +387,8 @@ add =
     a + b
   end
 ```
+
+A closure that declares a return type checks its last expression against that type, with the same rules as a function.
 
 Closure parameters are passed by value, like function parameters:
 

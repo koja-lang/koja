@@ -36,6 +36,7 @@ use koja_ast::span::Span;
 use super::ctx::Resolver;
 use super::error_channel::channel_for_closure;
 use super::expr::resolve_expr_with_expected;
+use super::return_type::check_return_type;
 use super::walker::resolve_body_with_expected;
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 
@@ -80,6 +81,12 @@ pub(super) fn resolve_closure(
     // cannot pin `E` from context and fires "cannot infer type
     // parameter `E` of `Global.Result`".
     resolve_body_with_expected(body, return_hint.as_ref(), resolver, diagnostics);
+    // A return annotation makes the same promise as the return type
+    // of a named function, so the body gets the same check. With no
+    // annotation the closure takes its return type from the body.
+    if annotated_return.is_some() {
+        check_return_type(body, None, span, resolver, diagnostics);
+    }
     let body_return_ty = trailing_expr_type(body);
     resolver.loop_break_seen = saved_loop_break_seen;
     resolver.loop_depth = saved_loop_depth;

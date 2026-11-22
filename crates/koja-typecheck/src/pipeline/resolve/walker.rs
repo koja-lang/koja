@@ -297,10 +297,13 @@ fn resolve_function(
             _ => expected,
         };
         resolve_function_body(body, trailing_expected.as_ref(), &mut resolver, diagnostics);
-    }
-
-    if let Some(signature) = signature {
-        check_return_type(function, &signature, env, diagnostics);
+        check_return_type(
+            body,
+            Some(function.name.as_str()),
+            function.span,
+            &resolver,
+            diagnostics,
+        );
     }
 }
 

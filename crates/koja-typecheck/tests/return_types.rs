@@ -1,8 +1,8 @@
 //! Typecheck coverage for trailing-expression-vs-declared-return
 //! checking. When the
 //! declared return type is non-Unit, the body's trailing statement
-//! must be a `Statement::Expr` whose resolution equals the declared
-//! return type. Unit-returning functions skip the check, and
+//! must be a `return` or a `Statement::Expr` whose resolution equals
+//! the declared return type. Unit-returning functions skip the check, and
 //! upstream-failed expressions stay quiet to avoid pile-on
 //! diagnostics.
 
@@ -67,6 +67,34 @@ fn trailing_assignment_with_non_unit_return_diagnoses() {
         ";
 
     assert_script_fails_with(source, &["return type mismatch", "non-expression"]);
+}
+
+#[test]
+fn function_can_end_with_a_return() {
+    let source = "
+        fn answer -> Int
+          return 42
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn trailing_return_of_another_type_diagnoses_once() {
+    // The `return` site reports the mismatch. The check of the last
+    // statement adds no second diagnostic.
+    let source = "
+        fn answer -> Int
+          return \"forty-two\"
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec!["return type mismatch. Expected `Int`, found `String`"],
+    );
 }
 
 #[test]
