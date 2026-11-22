@@ -1166,6 +1166,10 @@ Use `type` to name a union:
 type Pet = Cat | Dog | Fish
 ```
 
+Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
+
+#### Widening
+
 A member type widens to the union automatically:
 
 ```koja
@@ -1185,7 +1189,7 @@ end
 
 In a position that expects no union, the arms must have the same type.
 
-Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
+#### Functions and Protocol Bounds
 
 A union has no functions of its own. To call a function, `match` on the value and call it on the member:
 
@@ -1197,7 +1201,7 @@ match pet
 end
 ```
 
-A union does satisfy a [trait bound](#trait-bounds) when every member implements the protocol. A call through the bound runs the function of the member the value holds:
+A union satisfies a [trait bound](#trait-bounds) when every member implements the protocol. A call through the bound runs the function of the member the value holds:
 
 ```koja
 fn introduce<T: Greeter>(animal: T) -> String
@@ -1209,6 +1213,8 @@ introduce(pet) # works when Cat, Dog, and Fish all implement Greeter
 
 This works only for a protocol whose functions all take `self` and name `Self` in no other position. A protocol with a static function, a `Self` parameter, or a `Self` result cannot pick one member from a value, so a union does not satisfy it. `Debug`, `Equality`, and `Hash` are the exceptions. A union gets `format()`, `print()`, `==`, and `hash()` when its members have them.
 
+#### Equality
+
 `==` and `!=` also compare a union with one of its members, on either side. The result is `true` when the union holds that member and the two values are equal. A narrower union compares with a wider one the same way.
 
 ```koja
@@ -1219,6 +1225,8 @@ pet == c # true
 c == pet # true
 pet == Dog{name: "Rex"} # false, pet holds a Cat
 ```
+
+#### Union Literals
 
 A literal in a position that expects a union builds one member. The member that is the default type of the literal wins, so `"text"` is a `String` and `true` is a `Bool` when the union has those members. Without that member, the literal goes to the one member that implements its [literal protocol](#literal-protocols). It is an error when two members do.
 
@@ -1822,7 +1830,8 @@ response = HTTP.get("https://example.com")
 The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, `Base`, `Path`, etc.) with no alias needed. Domain-specific packages require qualified access:
 
 - **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
-- **`JSON`**: `Value`, `Encoding`, `EncodeOptions`, `encode`, `decode`
+- **`HTTP`**: `Request`, `Response`, `Status`, `Method`, `Version`, `Headers`, `Header`, `Error`, `Parser`, `delete`, `get`, `head`, `options`, `patch`, `post`, `put`, `request`
+- **`JSON`**: `Value`, `Null`, `NULL`, `Number`, `Object`, `Encoding`, `EncodeOptions`, `encode`, `decode`, `get`
 - **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `Socket.Address`, `Socket.Kind`, `Socket.Error`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
 
 Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
@@ -2128,7 +2137,7 @@ When the closure returns, the finished `Trace.SpanRecord` joins a queue that hol
 `Log` writes structured records. A call names a level, a message, and a map of attributes. The runtime adds the calling process's `Process.Context` and a timestamp, so a record under a span carries the trace and span ids without a parameter.
 
 ```koja
-Log.info("request handled", ["status": 200, "path": Log.Attribute.from(request.path)])
+Log.info("request handled", ["status": 200, "path": Log.Attribute.from(request.uri.path)])
 Log.warn("retrying", ["attempt": Log.Attribute.from(attempt)])
 ```
 
@@ -2971,12 +2980,13 @@ Three error domains cover I/O. `IO.Error` is a failure on an open stream, `File.
 
 #### `IO.Reader<E>` and `IO.Writer<E>`
 
-The stream protocols. Each is generic in `E`, the error its implementor fails with, so the protocol does not need one enum wide enough for every stream. `IO.Descriptor` implements `IO.Reader<IO.Error>` and `TCPSocket` implements `IO.Reader<IO.Error | TLSError>`, and a caller sees the TLS cause by name. A type that implements `read` gets `read_string` and `read_line` from the protocol. Each method takes an options struct as its last parameter with an all-default value, so a call names only what it changes.
+The stream protocols. Each is generic in `E`, the error its implementor fails with, so the protocol does not need one enum wide enough for every stream. `IO.Descriptor` implements `IO.Reader<IO.Error>` and `TCPSocket` implements `IO.Reader<IO.Error | TLSError>`, and a caller sees the TLS cause by name. A type that implements `read` gets `read_string` and `read_line` from the protocol, and a type that implements `write` gets `write_all`. Each method takes an options struct as its last parameter with an all-default value, so a call names only what it changes.
 
 - `IO.Reader.read(self, count: Int, options: IO.Reader.Options = IO.Reader.Options{}) -> Binary ! E`: reads up to `count` bytes. An empty `Binary` is end of input.
 - `IO.Reader.read_string(self, count: Int, options) -> String ! E | String.ConversionError`: reads up to `count` bytes and decodes them as UTF-8.
 - `IO.Reader.read_line(self, options) -> Option<String> ! E | String.ConversionError`: reads up to and drops the next newline. `Option.None` at end of input.
-- `IO.Writer.write(self, data: Binary | String, options: IO.Writer.Options = IO.Writer.Options{}) -> Int ! E`: writes data and returns the byte count written.
+- `IO.Writer.write(self, data: Binary | String, options: IO.Writer.Options = IO.Writer.Options{}) -> Int ! E`: writes data and returns the byte count written, which can be less than the size of `data`. A call with data writes at least one byte or fails.
+- `IO.Writer.write_all(self, data: Binary | String, options) ! E`: writes all of `data`. It calls `write` until the destination has accepted every byte. `options.timeout` bounds each `write`, not the whole call, and a failure can come after some bytes are written.
 
 `IO.Reader.Options` and `IO.Writer.Options` each hold `timeout: Option<Duration>`, `Option.None` by default. A read or write that waits past its timeout fails with `IO.Error.TimedOut`.
 
@@ -3003,7 +3013,7 @@ end
 
 Functions:
 
-- `read`, `read_string`, `read_line`, and `write` as the protocols define them.
+- `read`, `read_string`, `read_line`, `write`, and `write_all` as the protocols define them.
 - `close(self) ! IO.Error`: closes the descriptor. A later read or write fails with `IO.Error.Closed`.
 
 Three functions are for processes that drive a descriptor directly. Reads and writes wait for readiness on their own, so most code never calls them. Each takes an `IO.Descriptor.Interest`, `Readable` or `Writable`.
@@ -3247,7 +3257,7 @@ Checksum.crc32c("123456789".to_binary()) == 0xE3069283
 
 ### JSON package
 
-`JSON.Value` is a JSON value. It is a union of one type for each kind of JSON value:
+`JSON.Value` is a JSON value, a union of one type for each kind of value:
 
 ```koja
 type Value = Null | Bool | Number | String | List<Value> | Object
@@ -3304,7 +3314,7 @@ end
 
 Two numbers are equal when they have the same value, so a decoded `1` equals a decoded `1.0`.
 
-`JSON.Encoding` converts a type to `JSON.Value` through `to_json`. `Bool`, `Int`, `Float`, `String`, `List<T: JSON.Encoding>`, and the three package types conform, and so `JSON.Value` does too.
+`JSON.Encoding` converts a type to `JSON.Value` through `to_json`. `Bool`, `Int`, `Float`, `String`, `List<T: JSON.Encoding>`, and the three package types conform, so `JSON.Value` conforms too.
 
 ```koja
 struct Point

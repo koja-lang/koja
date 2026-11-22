@@ -8,41 +8,22 @@ instead of forcing callers to unwrap.
 """
 struct Fields
   @doc """
-  Looks up a key in a JSON object. Returns `None` when the value is
-  not an object or the key is absent.
-  """
-  fn get(value: Value, key: String) -> Option<Value>
-    entries =
-      match value
-        Value.Object(object_entries) -> object_entries
-        _ -> return Option.None
-      end
-
-    for (entry_key, entry_value) in entries
-      if entry_key == key
-        return Option.Some(entry_value)
-      end
-    end
-
-    Option.None
-  end
-
-  @doc """
   Reads a boolean field; `false` when absent, null, or not a boolean.
   """
   fn flag(value: Value, key: String) -> Bool
-    match get(value, key)
-      Option.Some(Value.Bool(b)) -> b
+    match JSON.get(value, key)
+      Option.Some(b: Bool) -> b
       _ -> false
     end
   end
 
   @doc """
-  Reads an integer field; `0` when absent, null, or not a number.
+  Reads an integer field. Returns `0` when the field is absent, null,
+  or not an integer.
   """
   fn number(value: Value, key: String) -> Int
-    match get(value, key)
-      Option.Some(Value.Int(n)) -> n
+    match JSON.get(value, key)
+      Option.Some(n: JSON.Number) -> n.to_int() rescue _ -> 0
       _ -> 0
     end
   end
@@ -51,8 +32,8 @@ struct Fields
   Reads a string field; `""` when absent, null, or not a string.
   """
   fn text(value: Value, key: String) -> String
-    match get(value, key)
-      Option.Some(Value.String(s)) -> s
+    match JSON.get(value, key)
+      Option.Some(s: String) -> s
       _ -> ""
     end
   end

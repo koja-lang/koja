@@ -1,0 +1,87 @@
+alias Process.Step
+alias Process.StopReason
+
+struct CacheConfig
+  capacity: Int
+  initial: Map<String, String>
+end
+
+enum CacheMsg
+  Delete(String)
+  Get(String)
+  Put(String, String)
+end
+
+enum CacheReply
+  Deleted
+  Found(String)
+  Full
+  Missing
+  Stored
+end
+
+struct Cache: Process<CacheConfig, CacheMsg, CacheReply>
+  capacity: Int
+  entries: Map<String, String>
+
+  fn start(config: CacheConfig) -> Self ! StopReason
+    if config.initial.length() > config.capacity
+      IO.puts("Cache initial size exceeds capacity. Shutting down.")
+      fail StopReason.Shutdown
+    end
+
+    Cache{capacity: config.capacity, entries: config.initial}
+  end
+
+  fn handle(self, msg: CacheMsg, from: Option<ReplyTo<CacheReply>>)
+    -> Step<Self>
+
+    match msg
+      CacheMsg.Delete(key) ->
+        self.entries = self.entries.remove(key)
+        ReplyTo.reply(from, CacheReply.Deleted)
+        Step.Continue(self)
+
+      CacheMsg.Get(key) ->
+        ReplyTo.reply(from, self.lookup(key))
+        Step.Continue(self)
+
+      CacheMsg.Put(key, value) ->
+        if self.entries.length() >= self.capacity and not self.entries.has?(key)
+          ReplyTo.reply(from, CacheReply.Full)
+          return Step.Continue(self)
+        end
+
+        self.entries = self.entries.put(key, value)
+        ReplyTo.reply(from, CacheReply.Stored)
+        Step.Continue(self)
+    end
+  end
+
+  fn lookup(self, key: String) -> CacheReply
+    match self.entries.get(key)
+      Option.Some(value) -> CacheReply.Found(value)
+      Option.None -> CacheReply.Missing
+    end
+  end
+end
+
+fn show(label: String, reply: Result<CacheReply, Process.CallError>)
+  match reply
+    Result.Ok(answer) -> IO.puts("#{label}: #{answer}")
+    Result.Err(_) -> IO.puts("#{label}: the cache did not answer")
+  end
+end
+
+config = CacheConfig{capacity: 3, initial: ["lakeside": "open"]}
+cache = spawn Cache.start(config)
+
+# `cast` sends a message and does not wait for a reply.
+cache.cast(CacheMsg.Put("ridge", "open"))
+cache.cast(CacheMsg.Put("summit", "closed"))
+
+# `call` sends a message and waits up to 1000 ms for the reply.
+show("put meadow", cache.call(CacheMsg.Put("meadow", "open"), 1000)) # -> Full
+show("delete ridge", cache.call(CacheMsg.Delete("ridge"), 1000)) # -> Deleted
+show("get ridge", cache.call(CacheMsg.Get("ridge"), 1000)) # -> Missing
+show("get summit", cache.call(CacheMsg.Get("summit"), 1000)) # -> Found("closed")

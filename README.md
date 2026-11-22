@@ -115,8 +115,8 @@ end
 struct Counter: Process<Int, CounterMsg, Int>
   value: Int
 
-  fn start(initial: Int) -> Result<Self, StopReason>
-    Result.Ok(Counter{value: initial})
+  fn start(initial: Int) -> Self ! StopReason
+    Counter{value: initial}
   end
 
   fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
@@ -138,8 +138,9 @@ match counter.call(CounterMsg.Add(1), 1000)
 end
 ```
 
-Explore more in the runnable [language tour](examples/tour.kojs), or read
-the complete [language reference](LANGUAGE.md).
+Explore more in the runnable [language tour](examples/tour.kojs) and
+[process example](examples/processes.kojs), or read the complete
+[language reference](LANGUAGE.md).
 
 ## Editor Extensions
 

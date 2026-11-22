@@ -1,45 +1,94 @@
-struct Point
-  x: Int
-  y: Int
+# A campground takes bookings. Each part of this tour adds one idea
+# and builds on itself.
 
-  fn distance_squared(self) -> Int
-    self.x * self.x + self.y * self.y
+# An enum is one of several variants. A `match` covers each one.
+enum Shelter
+  Cabin
+  Hut
+  Tent
+end
+
+fn nightly_rate(shelter: Shelter) -> Int
+  match shelter
+    Shelter.Cabin -> 90
+    Shelter.Hut -> 45
+    Shelter.Tent -> 20
   end
 end
 
-enum Shape
-  Circle(Int)
-  Rect(Int, Int)
-end
+# A struct holds data and functions. A constant can hold a struct.
+struct Site
+  capacity: Int
+  shelter: Shelter
 
-fn area(s: Shape) -> Int
-  match s
-    Shape.Circle(r) -> r * r * 3
-    Shape.Rect(w, h) -> w * h
+  fn cost(self, nights: Int) -> Int
+    nightly_rate(self.shelter) * nights
   end
 end
 
-fn apply(x: Int, f: fn (Int) -> Int) -> Int
-  f(x)
+const OVERFLOW = Site{capacity: 2, shelter: Shelter.Tent}
+
+# A map pairs keys with values. This one is an index of the sites by name.
+sites: Map<String, Site> = [
+  "Koja": Site{capacity: 2, shelter: Shelter.Hut},
+  "Lakeside": Site{capacity: 4, shelter: Shelter.Tent},
+  "Ridge": Site{capacity: 6, shelter: Shelter.Cabin}
+]
+
+# `get` returns an `Option`, because the key can be absent.
+for name in ["Koja", "Ridge", "Summit"]
+  match sites.get(name)
+    Option.Some(site) -> IO.puts("#{name} sleeps #{site.capacity}")
+    Option.None -> IO.puts("#{name} is not a site")
+  end
 end
 
-p = Point{x: 3, y: 4}
-IO.puts("distance²: #{p.distance_squared()}")
-IO.puts("circle area: #{area(Shape.Circle(5))}")
+# A list holds values in order. A closure runs on each one.
+ridge = sites.get("Ridge").or(OVERFLOW)
+costs = [1, 2, 3].map(nights -> ridge.cost(nights))
+IO.puts("Ridge costs #{costs} for one, two, and three nights")
 
-for name in ["Alice", "Bob", "Charlie"]
-  IO.puts("Hello, #{name}!")
+# A union is one of several types. A booking counts its guests or names them.
+type Guests = Int | List<String>
+
+fn head_count(guests: Guests) -> Int
+  match guests
+    count: Int -> count
+    names: List<String> -> names.length()
+  end
 end
 
-scores: Map<String, Int> = ["Alice": 95, "Bob": 87]
-IO.puts("has Alice? #{scores.has?("Alice")}")
+# A function that can fail names its error after `!`.
+enum BookingError
+  NotFound
+  TooManyGuests(Int)
+end
 
-score = Option.Some(42)
-IO.puts("doubled: #{score.map(n -> n * 2).or(0)}")
+fn find(sites: Map<String, Site>, name: String) -> Site ! BookingError
+  match sites.get(name)
+    Option.Some(site) -> site
+    Option.None -> fail BookingError.NotFound
+  end
+end
 
-threshold = 80
+# `try` passes the error of a call on to the caller.
+fn book(sites: Map<String, Site>, name: String, guests: Guests)
+  -> Site ! BookingError
 
-passing = fn (s: Int) -> Bool s >= threshold end
+  site = try find(sites, name)
 
-IO.puts("87 passing? #{passing(87)}")
-IO.puts("applied: #{apply(5, n -> n * n)}")
+  if head_count(guests) > site.capacity
+    fail BookingError.TooManyGuests(site.capacity)
+  end
+
+  site
+end
+
+match book(sites, "Koja", ["Ann", "Bo", "Cy"])
+  Result.Ok(site) -> IO.puts("booked for #{site.cost(2)}")
+  Result.Err(error) -> IO.puts("not booked: #{error}")
+end
+
+# `rescue` handles the error in place.
+site = book(sites, "Summit", 2) rescue _ -> OVERFLOW
+IO.puts("a walk-in pays #{site.cost(1)} for one night")

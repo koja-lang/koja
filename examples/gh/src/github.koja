@@ -1,6 +1,9 @@
 alias HTTP.Headers
 alias HTTP.Method
+alias IO.Error as IOError
 alias JSON.Value
+alias Net.Socket.Error as SocketError
+alias Net.TLSError
 
 const API_ROOT: String = "https://api.github.com"
 
@@ -86,7 +89,7 @@ struct GitHub
     value = try fetch("/users/#{login}/repos?sort=updated&per_page=20")
 
     match value
-      Value.Array(items) -> items.map(item -> GitHub.Repo.from_json(item))
+      items: List<Value> -> items.map(item -> GitHub.Repo.from_json(item))
       _ -> fail "expected a JSON array of repositories"
     end
   end
@@ -103,16 +106,38 @@ struct GitHub
     JSON.decode(body) rescue e -> fail "malformed JSON from GitHub: #{e}"
   end
 
+  # The client fails with a union of four error types. A union has no
+  # `message`, so the match picks the member and asks it.
+  priv fn error_message(e: HTTP.Error | SocketError | IOError | TLSError)
+    -> String
+
+    match e
+      http_error: HTTP.Error -> http_error.message()
+      socket_error: SocketError -> socket_error.message()
+      io_error: IOError -> io_error.message()
+      tls_error: TLSError -> tls_error.message()
+    end
+  end
+
   priv fn fetch(path: String) -> Value ! String
     response = HTTP.request(Method.Get, "#{API_ROOT}#{path}", headers(), "")
-      rescue e -> fail e.message()
+      rescue e -> fail error_message(e)
 
     match response.status.code
-      _ when response.status.ok?() -> try decode(response.body)
+      _ when response.status.ok?() ->
+        text = response.text()
+          rescue _ -> fail "GitHub sent a body that is not valid UTF-8"
+
+        try decode(text)
+
       403 ->
         fail "rate limited or forbidden -- set GITHUB_TOKEN to authenticate"
-      404 -> fail "not found: #{path}"
-      code -> fail "GitHub returned HTTP #{code}"
+
+      404 ->
+        fail "not found: #{path}"
+
+      code ->
+        fail "GitHub returned HTTP #{code}"
     end
   end
 

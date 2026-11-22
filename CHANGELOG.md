@@ -5,44 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.0] - 2026-11-22
 
 ### Added
 
-- `PACKAGE_NAME` and `PACKAGE_VERSION`, constants every package declares from the `name` and `version` fields of its `koja.toml`.
-- `Koja.version()` returns the version of the toolchain that compiled the program, the same string `koja --version` prints.
-- `IO.Writer.write_all(data, options)` writes all of `data`. It is a default body on the protocol, so `IO.Descriptor`, `TCPSocket`, and every other writer have it. It calls `write` until the destination has accepted every byte. `options.timeout` bounds each `write`, not the whole call, and a failure can come after some bytes are written. The contract of `write` now says that a call with data writes at least one byte or fails.
-- `TCPSocket.set_nodelay(enabled)` and `Socket.set_nodelay(enabled)` turn the `TCP_NODELAY` option on or off, and fail with `Socket.Error`. A new connection keeps the system default, which is off. A package that writes a message and then waits for the reply turns it on after `connect` or `accept`.
-- `Socket.Error.Closed` means the socket is no longer open, the same meaning as `IO.Error.Closed`. `accept`, `bind`, `listen`, and `connect` on a closed socket fail with it, and a `TCPServer` whose listener is closed reports it. Before, a closed socket gave `Socket.Error.Unknown(0)`. An exhaustive `match` on `Socket.Error` needs one more arm.
-- `TLSConfig.with_alpn(protocols)` names the application protocols a client offers during the TLS handshake, as in `TLSConfig.client().with_alpn(["h2", "http/1.1"])`. `TCPSocket.alpn()` and `TLSSession.alpn()` return the protocol the server selected as an `Option<String>`, with `Option.None` when it selected none and on a connection without TLS. The list is the new field `TLSConfig.alpn`, which is empty by default. A name that is empty or longer than 255 bytes fails the client handshake with the new variant `TLSError.ProtocolNameInvalid`, so an exhaustive `match` on `TLSError` needs one more arm. A server handshake ignores the list.
+- A `type` alias of a union can name itself in a type argument of `List`, `Map`, `Set`, or a generic struct or enum, as in `type Value = Int | String | List<Value>`. Two aliases can name each other the same way. A recursive alias is a type of its own, so two recursive aliases with the same members are different types.
+- A union satisfies a protocol bound when every member implements the protocol, so a `Cat | Dog` value can go to `fn show<T: Label>(value: T)`. A call through the bound runs the function of the member the value holds. The protocol must take `self` in every function and name `Self` in no other position.
+- A literal in a position that expects a union builds one member of it. `"text"` is the `String` member and `true` is the `Bool` member. Without such a member, the literal goes to the one member that implements its literal protocol, and it is an error when two members do.
+- Each entry of a list or map literal flows into the expected element type the way an argument does. `List<Int | String> = [1, "a"]`, `List<UInt8> = [1, 2, 3]`, and a `List<Shape>` literal that holds a `Circle` and a `Square` compile.
+- `JSON.Number` holds a JSON number as its text. `to_int()` and `to_float()` convert it and fail with `NumericConversionError`. `to_int()` accepts a number with a fraction of zero, so `1.0` and `1e2` are integers.
+- `JSON.NULL` is the JSON `null` value, of the new type `JSON.Null`.
+- `JSON.get(value, key)` returns the value of a key in a JSON object as an `Option<JSON.Value>`, and `Option.None` when the value is not an object. `JSON.Object.get(key)` does the same for an object.
 - `HTTP.Version` names the HTTP version of a message: `HTTP1_0`, `HTTP1_1`, or `HTTP2`.
 - `HTTP.Method` gains `Connect`, `Query`, and `Trace`, so an exhaustive `match` needs three more arms.
+- Every `HTTP` client function takes a trailing `timeout: Option<Duration> = Option.None`. It bounds the whole request except the DNS lookup, and a request that passes it fails with `HTTP.Error.Timeout`.
+- `HTTP.patch`, `HTTP.post`, `HTTP.put`, and `HTTP.request` take a `Binary | String` body.
 - `Request.text()` and `Response.text()` decode the body as UTF-8 and fail with `String.ConversionError`.
 - `Request.serialize()` encodes a request as HTTP/1.1 bytes. It adds `Host` and `Content-Length` when the headers have none.
 - `Status.reason()` returns the standard reason phrase for a code, or `""` when there is none.
-- Every `HTTP` client function takes a trailing `timeout: Option<Duration> = Option.None`. It bounds the whole request except the DNS lookup, and a request that passes it fails with `HTTP.Error.Timeout`.
-- `HTTP.patch`, `HTTP.post`, `HTTP.put`, and `HTTP.request` take a `Binary | String` body.
-- A union satisfies a protocol bound when every member implements the protocol, so a `Cat | Dog` value can go to `fn show<T: Label>(value: T)`. A call through the bound runs the function of the member the value holds. The protocol must take `self` in every function and name `Self` in no other position.
-- A literal in a position that expects a union builds one member of it. `"text"` is the `String` member and `true` is the `Bool` member. Without such a member, the literal goes to the one member that implements its literal protocol, and it is an error when two members do.
-- Each entry of a list or map literal flows into the expected element type the way an argument does. `List<Int | String> = [1, "a"]`, `List<UInt8> = [1, 2, 3]`, and a `List<Shape>` literal that holds a `Circle` and a `Square` now compile.
-- A `type` alias of a union can name itself in a type argument of `List`, `Map`, `Set`, or a generic struct or enum, as in `type Value = Int | String | List<Value>`. Two aliases can name each other the same way. A recursive alias is a type of its own, so two recursive aliases with the same members are different types.
-- `JSON.NULL` is the JSON `null` value, of the new type `JSON.Null`.
-- `JSON.Number` holds a JSON number as its text. `to_int()` and `to_float()` convert it and fail with `NumericConversionError`. `to_int()` accepts a number with a fraction of zero, so `1.0` and `1e2` are integers.
-- `JSON.get(value, key)` returns the value of a key in a JSON object as an `Option<JSON.Value>`, and `Option.None` when the value is not an object. `JSON.Object.get(key)` does the same for an object.
+- `IO.Writer.write_all(data, options)` writes all of `data`. It is a default body on the protocol, so `IO.Descriptor`, `TCPSocket`, and every other writer have it. It calls `write` until the destination has accepted every byte. `options.timeout` bounds each `write`, not the whole call, and a failure can come after some bytes are written. The contract of `write` now says that a call with data writes at least one byte or fails.
+- `TLSConfig.with_alpn(protocols)` names the application protocols a client offers during the TLS handshake, as in `TLSConfig.client().with_alpn(["h2", "http/1.1"])`. `TCPSocket.alpn()` and `TLSSession.alpn()` return the protocol the server selected as an `Option<String>`, with `Option.None` when it selected none and on a connection without TLS. The list is the new field `TLSConfig.alpn`, which is empty by default. A name that is empty or longer than 255 bytes fails the client handshake with the new variant `TLSError.ProtocolNameInvalid`, so an exhaustive `match` on `TLSError` needs one more arm. A server handshake ignores the list.
+- `TCPSocket.set_nodelay(enabled)` and `Socket.set_nodelay(enabled)` turn the `TCP_NODELAY` option on or off, and fail with `Socket.Error`. A new connection keeps the system default, which is off. A package that writes a message and then waits for the reply turns it on after `connect` or `accept`.
+- `Socket.Error.Closed` means the socket is no longer open, the same meaning as `IO.Error.Closed`. `accept`, `bind`, `listen`, and `connect` on a closed socket fail with it in place of `Socket.Error.Unknown(0)`, and a `TCPServer` whose listener is closed reports it. An exhaustive `match` on `Socket.Error` needs one more arm.
+- `PACKAGE_NAME` and `PACKAGE_VERSION`, constants every package declares from the `name` and `version` fields of its `koja.toml`.
+- `Koja.version()` returns the version of the toolchain that compiled the program, the same string `koja --version` prints.
 
 ### Changed
 
 - **Breaking change.** `JSON.Value` is the union `Null | Bool | Number | String | List<Value> | Object`, not an enum. A `match` arm names a type with a binding, so `Value.String(text) ->` becomes `text: String ->` and `Value.Array(items) ->` becomes `items: List<JSON.Value> ->`. The constructors `Value.null`, `Value.bool`, `Value.int`, `Value.float`, `Value.string`, `Value.array`, `Value.object`, and `Value.entry` are gone. A `String`, a `Bool`, a `List<JSON.Value>`, or a literal is a value as it is, `Value.Null` becomes `JSON.NULL`, and an `Int` or `Float` variable takes `.to_json()`.
 - **Breaking change.** `JSON.decode` returns each number as a `JSON.Number` with the text it had, in place of an `Int` or a `Float`. Call `to_int()` or `to_float()` where the code needs one. An integer too large for 64 bits no longer fails the decode, a long fraction keeps every digit, and `JSON.encode` writes the same text back.
-
 - **Breaking change.** `Request.body` and `Response.body` are `Binary`. `response.body` becomes `try response.text()` where the code needs a `String`, and `body_as_binary()` is gone. `Response.new(status, body)` takes `Binary | String` and sets `Content-Length` from the byte size, not the character count.
 - **Breaking change.** `Request.uri`, a `URI`, replaces `Request.path`. `request.path` becomes `request.uri.path`, and the query moves to `request.uri.query`. `Request.Parser` fills `uri.host` and `uri.port` from the `Host` header. It keeps the query as it arrived, so `uri.query` can hold text that `URI.parse` rejects, such as `tag[]=a`.
-- **Breaking change.** `Request.version` and `Response.version` are an `HTTP.Version` that defaults to `Version.HTTP1_1`. `version: "HTTP/1.1"` becomes `version: Version.HTTP1_1`, or leave the field out.
-- **Breaking change.** `Status` holds only its `code`. `Status.new(503, "Service Unavailable")` becomes `Status.new(503)`, and `status.reason` becomes `status.reason()`.
 - **Breaking change.** `Request.Parser` and `Response.Parser` replace `Parser.parse_request` and `Parser.parse_response`. A parser reads a stream in pieces. `feed(bytes)` adds bytes, and `next()` returns the next event, or `Option.None` when it needs more. The events are the message with an empty body, a `Data(Binary)` for each piece of the body, and `End`. A parser has no body limit, so its owner counts the `Data` bytes. `Parser.Options` caps the head at 16 KiB. Both parsers fail with `Parser.Error`, which is `HeadersTooLarge`, `Malformed(String)`, or `UnsupportedMethod(String)`.
 - **Breaking change.** The parsers reject messages that `HTTP.Parser` accepted. These are `Malformed`: a `Content-Length` that is not a number, two `Content-Length` headers that differ, `Content-Length` with `Transfer-Encoding`, an HTTP/1.1 request without exactly one `Host` header, a space before the colon of a header, a bare CR or LF in the head, and a request target with a `#` or an invalid path. The parsers drop the reason phrase of a response and the trailers of a chunked body.
-- **Breaking change.** `Response.serialize()` returns `Binary`. The status line is always `HTTP/1.1` with `status.reason()`.
 - **Breaking change.** The `HTTP` client functions fail with `HTTP.Error | Socket.Error | IO.Error | TLSError`, so a network failure keeps its own type. `HTTP.Error` is now `BodyTooLarge`, `InvalidUrl(String)`, `Parse(Parser.Error)`, or `Timeout`. A union has no `message()`, so `rescue e -> fail e.message()` becomes a `match` on the type of `e`.
+- **Breaking change.** `Request.version` and `Response.version` are an `HTTP.Version` that defaults to `Version.HTTP1_1`. `version: "HTTP/1.1"` becomes `version: Version.HTTP1_1`, or leave the field out.
+- **Breaking change.** `Status` holds only its `code`. `Status.new(503, "Service Unavailable")` becomes `Status.new(503)`, and `status.reason` becomes `status.reason()`.
+- **Breaking change.** `Response.serialize()` returns `Binary`. The status line is always `HTTP/1.1` with `status.reason()`.
 - **Breaking change.** `IO.Error.last()`, `File.Error.last()`, `Socket.Error.last()`, and `IO.Error.from_errno()` are gone. Each one read a value that a different failed call could replace first. Every function that can fail already returns its error, so match on that error. `from_code` on the three enums stays but is no longer in the docs.
 - The `HTTP` client reads the response as bytes, so a binary body arrives whole and a multibyte character split across two reads no longer fails. It turns `TCP_NODELAY` on, skips a 1xx response other than 101, and fails with `HTTP.Error.BodyTooLarge` for a body over 16 MiB.
 - `koja format` puts each element of a list, map, or tuple literal on its own line when the literal does not fit on one line. The broken form has no trailing comma, and a literal that fits stays on one line. Binary literals still pack.
@@ -50,22 +49,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A write to a socket whose peer has closed fails with `IO.Error.BrokenPipe`. Before, the OS ended the whole program with SIGPIPE. A write to stdout or stderr after the reader has gone still ends the program with SIGPIPE, so `app | head` behaves like other tools.
-- Two test files with the same name in different directories of one package no longer collide. Before, `koja test` could fail with `is already defined`.
-- A backtrace from a compiled program shows each function name as written. Before, `Stack.pop_item` showed as `Stack.pop.item`, and a function whose name starts with `_` and the frame of a top-level `test` were missing.
-- A compiled `for` loop over a `List` no longer copies the list on each step. `List.map`, `filter`, and `reduce` are faster for the same reason.
-- A `for` loop over a `String` runs in linear time. Before, each step scanned the whole string. `String.downcase`, `upcase`, `codepoints`, and the other functions that walk a string are faster for the same reason.
-- A compiled program stops at startup with a clear message when a command-line argument is not valid UTF-8. Before, the argument became a `String` with invalid contents.
-- `Socket.connect`, `TCPSocket.connect`, and the `HTTP` client report the real cause of a failed connection, such as `Socket.Error.ConnectionRefused`. Before, a compiled program could get `Socket.Error.Unknown`.
-- A process that receives a message always takes on the `Process.Context` of the sender. Before, a compiled program could give that context to a different process, so a `Trace` span could join the wrong trace.
 - A failed call on a file, a descriptor, a socket, or a TLS connection always reports its own cause. Before, a program with many processes could get the cause of a different failed call, such as `File.Error.NotFound` in place of `File.Error.AlreadyExists`.
+- A process that receives a message always takes on the `Process.Context` of the sender. Before, a compiled program could give that context to a different process, so a `Trace` span could join the wrong trace.
+- `Socket.connect`, `TCPSocket.connect`, and the `HTTP` client report the real cause of a failed connection in a compiled program, such as `Socket.Error.ConnectionRefused`.
+- A block closure checks its last expression against its declared return type, the way a function does. A member widens into a declared union, as in `fn (cat: Cat) -> Pet cat end`, and a value of another type is a compile error.
+- The arms of an `if`, a `cond`, a `match`, a `receive`, or a `?:` can yield different members of a union when the position expects that union, as in `pet: Pet = likes_cats ? cat : dog`.
+- `==` and `!=` compare a union with one of its members on either side, as in `pet == Cat{name: "Tom"}` and `tom == pet` where `pet` is a `Cat | Dog`. A narrower union compares with a wider one the same way.
+- A struct can hold a union that names the struct, as in `struct Node` with a `next: Int | Node` field.
 - A constant of a union type takes a value of one member, as in `const NOTHING: Value = Null{}`, and so does a union field of a struct constant.
 - A constant of type `Int` or `Float` takes a sized number from another constant, as in `const WIDE: Int = SMALL` where `SMALL` is an `Int32`, and so does an `Int` or `Float` field of a struct constant.
 - A compiled program can hold a struct constant of a recursive type, as in `const LEAF: Node = Node{value: 1, next: Option.None}` where `Node` has a `next: Option<Node>` field.
-- `==` and `!=` compare a union with one of its members on either side, as in `pet == Cat{name: "Tom"}` and `tom == pet` where `pet` is a `Cat | Dog`. A narrower union compares with a wider one the same way.
-- The arms of an `if`, a `cond`, a `match`, a `receive`, or a `?:` can yield different members of a union when the position expects that union, as in `pet: Pet = likes_cats ? cat : dog`.
-- A struct can hold a union that names the struct, as in `struct Node` with a `next: Int | Node` field.
-- A block closure checks its last expression against its declared return type, the way a function does. A member widens into a declared union, as in `fn (cat: Cat) -> Pet cat end`, and a value of another type is a compile error.
 - A function can end with a `return` statement, as in a `fn answer -> Int` whose only statement is `return 42`.
+- A compiled `for` loop over a `List` no longer copies the list on each step. `List.map`, `filter`, and `reduce` are faster for the same reason.
+- A `for` loop over a `String` runs in linear time. `String.downcase`, `upcase`, `codepoints`, and the other functions that walk a string are faster for the same reason.
+- A backtrace from a compiled program shows each function name as written, such as `Stack.pop_item`. It includes a function whose name starts with `_` and the frame of a top-level `test`.
+- A compiled program stops at startup with a clear message when a command-line argument is not valid UTF-8.
+- A package can hold two test files with the same name in different directories, and `koja test` runs both.
 
 ## [0.20.1] - 2026-11-06
 
