@@ -1241,6 +1241,41 @@ fn match_typed_binding_against_non_union_diagnoses() {
 }
 
 #[test]
+fn match_typed_binding_of_the_subject_type_binds() {
+    // The subject is an `Int`, not a union, and the typed binding
+    // names that same type. The arm is a catch-all that binds the
+    // value, so one arm makes the match exhaustive.
+    let source = "
+          match 7
+            x: Int -> x
+          end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let match_expr = trailing_expr(&checked);
+    let ExprKind::Match { arms, .. } = &match_expr.kind else {
+        panic!("expected ExprKind::Match");
+    };
+    let Pattern::TypedBinding {
+        local_id,
+        resolved_type,
+        ..
+    } = &arms[0].pattern
+    else {
+        panic!("expected Pattern::TypedBinding for arm 0");
+    };
+    assert!(
+        local_id.is_some(),
+        "typed binding `x` should carry a stamped LocalId"
+    );
+    assert_eq!(
+        resolved_type.as_ref(),
+        Some(&int_type(&checked)),
+        "typed binding `x` should carry its annotation as the resolved type",
+    );
+}
+
+#[test]
 fn match_nested_enum_payload_arms_combine_into_outer_coverage() {
     // `Some(Red)` and `Some(Green)` together cover every `Some`, so
     // no catch-all is needed and nothing warns.

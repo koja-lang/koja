@@ -17,6 +17,9 @@
 //! and act as catch-alls (no tag check, no test block, only binds
 //! in the success block).
 //!
+//! A typed binding on a subject that is not a union lowers as a
+//! plain binding, at the top of a pattern and in nested positions.
+//!
 //! [`BlockParam`]: koja_ir::BlockParam
 
 use koja_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType, IRVariantTag};
@@ -192,6 +195,45 @@ fn match_binding_emits_local_decl_and_write() {
     assert!(
         has_write,
         "match binding `x` should emit a `LocalWrite` capturing the subject value",
+    );
+}
+
+#[test]
+fn match_typed_binding_on_plain_subject_lowers_as_binding() {
+    // The subject is an `Int`, not a union, so `x: Int` has no tag
+    // to test. It lowers the same as the plain binding `x`.
+    let source = "
+        fn pick -> Int
+          match 7
+            x: Int -> x
+          end
+        end
+
+        pick()
+        ";
+
+    let script = lower(source);
+    let pick = script_function(&script, "pick");
+
+    let has_decl =
+        all_instructions(&pick.blocks).any(|i| matches!(i, IRInstruction::LocalDecl { .. }));
+    assert!(
+        has_decl,
+        "typed binding `x: Int` should emit a `LocalDecl` (in the function entry block)",
+    );
+
+    let has_write =
+        all_instructions(&pick.blocks).any(|i| matches!(i, IRInstruction::LocalWrite { .. }));
+    assert!(
+        has_write,
+        "typed binding `x: Int` should emit a `LocalWrite` capturing the subject value",
+    );
+
+    let has_tag_get =
+        all_instructions(&pick.blocks).any(|i| matches!(i, IRInstruction::UnionTagGet { .. }));
+    assert!(
+        !has_tag_get,
+        "typed binding `x: Int` on an `Int` subject should emit no `UnionTagGet`",
     );
 }
 
@@ -1140,6 +1182,44 @@ fn match_nested_struct_binding_emits_chained_field_gets_in_body_block() {
     assert_eq!(
         writes, 1,
         "body block should emit one LocalWrite for the y_bind chained bind",
+    );
+}
+
+#[test]
+fn match_nested_typed_binding_leaves_add_no_test_block() {
+    // The tuple inside `Option.Some` holds an `Int` and a `String`,
+    // and neither is a union. The typed bindings `n: Int` and
+    // `s: String` test nothing, so the tuple adds no test block
+    // after the tag test. Both binds land in the body block.
+    let source = "
+        fn first(op: Option<(Int, String)>) -> Int
+          match op
+            Option.Some((n: Int, s: String)) -> n
+            Option.None -> 0
+          end
+        end
+
+        first(Option.Some((1, \"a\")))
+        ";
+
+    let script = lower(source);
+    let first = script_function(&script, "first");
+
+    assert_eq!(
+        count_blocks_with_prefix(&first.blocks, "match_and_field"),
+        0,
+        "typed binding leaves on plain element types should mint no `match_and_field` block",
+    );
+
+    let body = block_labeled(&first.blocks, "match_body_0");
+    let writes = body
+        .instructions
+        .iter()
+        .filter(|i| matches!(i, IRInstruction::LocalWrite { .. }))
+        .count();
+    assert_eq!(
+        writes, 2,
+        "body block should emit one LocalWrite for each of `n` and `s`",
     );
 }
 

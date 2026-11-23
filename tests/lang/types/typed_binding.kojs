@@ -1,0 +1,180 @@
+# Typed binding patterns in `match` arms. On a union subject, a typed
+# binding selects one member. On any other subject, it binds the value
+# the same as a plain binding.
+
+# Union subjects
+struct Post
+  title: String
+end
+
+struct Comment
+  body: String
+end
+
+struct Ad
+  url: String
+end
+
+fn describe(item: Post | Comment | Ad) -> String
+  match item
+    p: Post -> p.title
+    c: Comment -> c.body
+    a: Ad -> a.url
+  end
+end
+
+type Content = Post | Comment
+
+fn summarize(c: Content) -> String
+  match c
+    p: Post -> p.title
+    c: Comment -> c.body
+  end
+end
+
+post = Post{title: "Hello World"}
+comment = Comment{body: "Great post!"}
+ad = Ad{url: "https://example.com"}
+
+describe(post).print()
+describe(comment).print()
+describe(ad).print()
+
+summarize(Post{title: "Summary"}).print()
+summarize(Comment{body: "Nice"}).print()
+
+# Subjects that are not unions
+struct Point
+  x: Int
+  y: Int
+end
+
+struct Segment
+  from: Point
+  to: Point
+  label: String
+end
+
+enum Shape
+  Line(Segment)
+  Tagged((Int, Point), String)
+end
+
+type Count = Int
+
+# Typed bindings three levels deep, next to literal tests.
+fn describe_shape(shape: Shape) -> String
+  match shape
+    Shape.Line(Segment{
+      from: Point{x: a: Int, y: _},
+      to: end_point: Point,
+      label: text: String
+    }) ->
+      "line #{a} #{end_point.y} #{text}"
+
+    Shape.Tagged((id: Int, Point{x: 0, y: b: Int}), tag: String) ->
+      "origin column #{id} #{b} #{tag}"
+
+    Shape.Tagged((id: Int, p: Point), _) ->
+      "tagged #{id} #{p.x}"
+  end
+end
+
+fn same<T>(item: T) -> T
+  match item
+    t: T -> t
+  end
+end
+
+fn sign(x: Int) -> String
+  match x
+    n: Int when n < 0 -> "negative"
+    n: Int when n == 0 -> "zero"
+    _n: Int -> "positive"
+  end
+end
+
+# Top of a pattern
+x: Int = 3
+
+match x
+  n: Int -> IO.puts("int #{n}")
+end
+
+# Subject with an alias type
+count: Count = 4
+
+match count
+  n: Int -> IO.puts("count #{n}")
+end
+
+# Enum payload
+found: Option<Int> = Option.Some(5)
+
+match found
+  Option.Some(n: Int) -> IO.puts("some #{n}")
+  Option.None -> IO.puts("none")
+end
+
+# Tuple element
+pair = (1, "a")
+
+match pair
+  (n: Int, s) -> IO.puts("#{n} #{s}")
+end
+
+# Struct field
+point = Point{x: 1, y: 2}
+
+match point
+  Point{x: a: Int, y: b} -> IO.puts("#{a} #{b}")
+end
+
+# Type parameter
+same(6).print()
+
+# Inner match on a value that a union arm narrowed
+value: Int | String = 7
+
+match value
+  n: Int ->
+    match n
+      m: Int -> IO.puts("int #{m}")
+    end
+
+  s: String ->
+    IO.puts(s)
+end
+
+# The arm mutates the bound local, and the subject keeps its value
+items = [1, 2, 3]
+
+match items
+  xs: List<Int> ->
+    xs = xs.append(4)
+    IO.puts("#{xs.length()}")
+end
+
+IO.puts("#{items.length()}")
+
+# Guards
+IO.puts(sign(-1))
+IO.puts(sign(0))
+IO.puts(sign(5))
+
+# Nested patterns
+segment = Segment{from: Point{x: 1, y: 2}, to: Point{x: 3, y: 4}, label: "ab"}
+IO.puts(describe_shape(Shape.Line(segment)))
+IO.puts(describe_shape(Shape.Tagged((7, Point{x: 0, y: 9}), "t")))
+IO.puts(describe_shape(Shape.Tagged((8, Point{x: 5, y: 9}), "t")))
+
+# A tuple with a union element and a plain element. The first typed
+# binding tests the union tag and the second only binds.
+inner: (Int | String, Int) = ("u", 2)
+mixed: Option<(Int | String, Int)> = Option.Some(inner)
+
+match mixed
+  Option.Some((text: String, n: Int)) -> IO.puts("string #{text} #{n}")
+  Option.Some((total: Int, n: Int)) -> IO.puts("int #{total} #{n}")
+  Option.None -> IO.puts("none")
+end

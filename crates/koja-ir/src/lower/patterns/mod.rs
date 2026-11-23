@@ -292,6 +292,11 @@ pub(super) fn lower_pattern_check(
             resolved_type,
             ..
         } => {
+            let subject_ir = ctx.type_of(inputs.subject);
+            if whole_subject_local(pattern, &subject_ir).is_some() {
+                lower_binding_check(*local_id, name, &inputs, ctx, block);
+                return Ok((PatternCheck::CatchAll { binds: Vec::new() }, block));
+            }
             let resolved = resolved_type.as_ref().unwrap_or_else(|| {
                 panic!(
                     "IR lower: typed-binding pattern `{name}` reaches lower without a \
@@ -299,7 +304,6 @@ pub(super) fn lower_pattern_check(
                 );
             });
             let member_ir = resolved_type_to_ir_type(resolved, ctx.registry, ctx.output);
-            let subject_ir = ctx.type_of(inputs.subject).clone();
             let Some(members) = ctx.output.union_members(&subject_ir) else {
                 panic!(
                     "IR lower: typed-binding pattern `{name}` reaches lower with \
@@ -480,4 +484,18 @@ fn single_test(cond: ValueId, block: IRBlockId) -> (PatternCheck, IRBlockId) {
         },
         block,
     )
+}
+
+/// The local that `pattern` binds to its whole subject with no test.
+/// A plain binding always does. A typed binding does when the subject
+/// is not a union, because the typecheck accepts it only when its
+/// type equals the subject type.
+pub(super) fn whole_subject_local(pattern: &Pattern, subject_ir: &IRType) -> Option<IRLocalId> {
+    match pattern {
+        Pattern::Binding { local_id, name, .. } => Some(require_local(*local_id, name)),
+        Pattern::TypedBinding { local_id, name, .. } if !matches!(subject_ir, IRType::Union(_)) => {
+            Some(require_local(*local_id, name))
+        }
+        _ => None,
+    }
 }

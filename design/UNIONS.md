@@ -208,10 +208,6 @@ This list holds the open issues against the rules.
 - [#193](https://github.com/koja-lang/koja/issues/193): a generic struct
   literal or variant constructor does not take its type arguments from a
   member of the expected union. This is a missing position under rule 4.
-- [#194](https://github.com/koja-lang/koja/issues/194): a generic function
-  that widens into a union with a type parameter panics in IR lowering.
-  Rule 4 holds in the typecheck, and the record of the widening is wrong
-  after monomorphization.
 - [#195](https://github.com/koja-lang/koja/issues/195): a union with a type
   parameter is not canonical after the parameter gets its type. This breaks
   rule 1.

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A generic function can return a union that uses its type parameter. `fn wrap<T>(item: T) -> Int | List<T>` with the body `[item]` compiles. A local variable of such a type works too, and so does a method of a generic struct.
+- A `match` arm can give a binding the type of the value it matches, as in `n: Int ->` for an `Int` value. The arm matches every value, the same as `n ->`. The annotation also works inside enum, tuple, and struct patterns, as in `Option.Some(n: Int) ->`.
+
 ## [0.21.0] - 2026-11-22
 
 ### Added

@@ -13,17 +13,18 @@
 //!   struct's mangled prefix derived through [`IRSymbol::derived`].
 //! - Calls inside a substituted body (a generic function calling
 //!   another generic function) cascade through the worklist.
+//! - A widening inside a substituted body targets the concrete union.
 //!
 //! Mangled-name shape for top-level generic functions mirrors generic
 //! types: `<root>_$<arg>.<arg>$`. Methods on a generic type read as
 //! `<type-mangled>.<method>` (no separate args list, since methods
 //! inherit the type's params).
 
-use koja_ir::IRType;
+use koja_ir::{IRFunction, IRInstruction, IRType};
 
 mod common;
 
-use common::{lower_script_source, mangled_function, script_function_names};
+use common::{all_instructions, lower_script_source, mangled_function, script_function_names};
 
 #[test]
 fn identity_function_monomorphizes_at_each_concrete_arg() {
@@ -242,4 +243,131 @@ fn method_on_generic_struct_for_distinct_args_mints_distinct_methods() {
             "TestApp.Pair_$String.Int64$.first/1".to_string(),
         ],
     );
+}
+
+#[test]
+fn widening_into_a_union_with_a_type_parameter_lowers_to_union_wrap() {
+    // The typecheck records the widening of `[item]` with the target
+    // `Int | List<T>`. Monomorphization must substitute that target,
+    // or the lowering meets `T` and panics.
+    let source = "
+        fn wrap<T>(item: T) -> Int | List<T>
+          [item]
+        end
+
+        wrap(\"a\")
+        ";
+
+    let script = lower_script_source(source);
+
+    let wrap = mangled_function(&script, "TestApp.wrap/1_$String$");
+    assert!(
+        matches!(wrap.return_type, IRType::Union(_)),
+        "expected `wrap<String>` to return a union, got {:?}",
+        wrap.return_type,
+    );
+    assert_eq!(
+        union_wrap_count(wrap),
+        1,
+        "expected one UnionWrap for the list that widens into the return type",
+    );
+}
+
+#[test]
+fn widening_of_a_type_parameter_value_lowers_to_union_wrap_on_each_return() {
+    // The union is `Int | T`, so the type parameter is a member. The
+    // early return widens `item` and the tail widens `0`.
+    let source = "
+        fn pick<T>(item: T, flag: Bool) -> Int | T
+          if flag
+            return item
+          end
+
+          0
+        end
+
+        pick(\"b\", true)
+        ";
+
+    let script = lower_script_source(source);
+
+    let pick = mangled_function(&script, "TestApp.pick/2_$String$");
+    assert!(
+        matches!(pick.return_type, IRType::Union(_)),
+        "expected `pick<String>` to return a union, got {:?}",
+        pick.return_type,
+    );
+    assert_eq!(
+        union_wrap_count(pick),
+        2,
+        "expected one UnionWrap for `item` and one for `0`",
+    );
+}
+
+#[test]
+fn widening_into_a_typed_local_of_a_generic_body_lowers_to_union_wrap() {
+    // The widening target is the annotation of the local `held`, not
+    // the return type.
+    let source = "
+        fn hold<T>(item: T) -> Int
+          held: Int | List<T> = [item]
+
+          match held
+            n: Int -> n
+            items: List<T> -> items.length()
+          end
+        end
+
+        hold(\"c\")
+        ";
+
+    let script = lower_script_source(source);
+
+    let hold = mangled_function(&script, "TestApp.hold/1_$String$");
+    assert_eq!(
+        union_wrap_count(hold),
+        1,
+        "expected one UnionWrap for the list that widens into `held`",
+    );
+}
+
+#[test]
+fn widening_in_a_method_of_a_generic_struct_lowers_to_union_wrap() {
+    // The type parameter comes from the struct, not from the method.
+    let source = "
+        struct Holder<T>
+          value: T
+
+          fn either(self, flag: Bool) -> Int | T
+            if flag
+              return self.value
+            end
+
+            0
+          end
+        end
+
+        holder: Holder<String> = Holder{value: \"d\"}
+        holder.either(true)
+        ";
+
+    let script = lower_script_source(source);
+
+    let either = mangled_function(&script, "TestApp.Holder_$String$.either/2");
+    assert!(
+        matches!(either.return_type, IRType::Union(_)),
+        "expected `Holder<String>.either` to return a union, got {:?}",
+        either.return_type,
+    );
+    assert_eq!(
+        union_wrap_count(either),
+        2,
+        "expected one UnionWrap for `self.value` and one for `0`",
+    );
+}
+
+fn union_wrap_count(function: &IRFunction) -> usize {
+    all_instructions(&function.blocks)
+        .filter(|i| matches!(i, IRInstruction::UnionWrap { .. }))
+        .count()
 }
