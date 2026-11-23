@@ -22,6 +22,7 @@ use super::super::structs::{resolved_struct_symbol, struct_definition_from_resol
 use super::{
     BindOp, BindStep, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep,
     ensure_local_declared, field_type_for, global_id_of, lower_pattern_check, require_local,
+    whole_subject_local,
 };
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::types::{IRType, ValueId};
@@ -102,8 +103,10 @@ fn struct_pattern_target<'r>(
 /// position) into the outer chain. `prefix` is the extraction op
 /// (e.g. `BindOp::StructField` or `BindOp::EnumPayloadField`) that
 /// reads this sub-pattern's value from the outer extraction
-/// source. Bindings reached through it prepend `prefix` to their
-/// chain. Non-binding sub-patterns mint a fresh test block (when
+/// source. A sub-pattern that binds its whole subject, as
+/// [`whole_subject_local`] decides, pushes one bind that reads
+/// through `prefix`. Sub-patterns that test something mint a fresh
+/// test block (when
 /// any prior sibling test has already been emitted), emit the
 /// projection that exposes the sub-pattern's value to its own
 /// test logic, then recurse via [`super::lower_pattern_check`]
@@ -127,18 +130,18 @@ pub(super) fn lower_subpattern_into(
     steps: &mut Vec<TestStep>,
     binds: &mut Vec<PayloadBind>,
 ) {
+    if let Some(ir_local) = whole_subject_local(pattern, sub_ir_type) {
+        ensure_local_declared(ir_local, sub_ir_type, ctx);
+        ctx.mark_slot_borrowed(ir_local);
+        binds.push(PayloadBind {
+            local: ir_local,
+            chain: vec![prefix],
+        });
+        return;
+    }
     match pattern {
         Pattern::Wildcard { .. } => {}
-        Pattern::Binding { local_id, name, .. } => {
-            let ir_local = require_local(*local_id, name);
-            ensure_local_declared(ir_local, sub_ir_type, ctx);
-            ctx.mark_slot_borrowed(ir_local);
-            binds.push(PayloadBind {
-                local: ir_local,
-                chain: vec![prefix],
-            });
-        }
-        _ if is_static_catch_all(pattern) => {
+        _ if is_static_catch_all(pattern, sub_resolved_ty, sub_ir_type, inputs, ctx) => {
             // The inner pattern is structurally a catch-all
             // (bindings / wildcards / catch-all-only nested
             // structs). Bypass the projection-and-mint dance and
@@ -181,17 +184,66 @@ pub(super) fn lower_subpattern_into(
     }
 }
 
-/// True when `pattern` would lower to a [`PatternCheck::CatchAll`]
-/// regardless of subject type: wildcards, bindings, and struct
-/// destructures whose every listed field is itself a static
-/// catch-all. Used by [`lower_subpattern_into`] to skip the
-/// projection-and-block-mint dance for nested patterns that
-/// contribute no runtime predicates.
-fn is_static_catch_all(pattern: &Pattern) -> bool {
+/// True when `pattern` lowers to a [`PatternCheck::CatchAll`] against
+/// a subject of the given type. A wildcard and a plain binding always
+/// do. A typed binding does when the subject is not a union. A struct
+/// or tuple destructure does when every sub-pattern does. Used by
+/// [`lower_subpattern_into`] to skip the projection-and-block-mint
+/// dance for nested patterns that contribute no runtime predicates.
+///
+/// The walk gets each field and element type from the same helpers
+/// as [`collect_catch_all_binds`], so the two agree on every type.
+fn is_static_catch_all(
+    pattern: &Pattern,
+    sub_resolved_ty: &ResolvedType,
+    sub_ir_type: &IRType,
+    inputs: &PatternInputs<'_>,
+    ctx: &mut FnLowerCtx<'_>,
+) -> bool {
     match pattern {
-        Pattern::Wildcard { .. } | Pattern::Binding { .. } => true,
-        Pattern::Struct { fields, .. } => fields.iter().all(|f| is_static_catch_all(&f.pattern)),
-        Pattern::Tuple { elements, .. } => elements.iter().all(is_static_catch_all),
+        Pattern::Wildcard { .. } => true,
+        Pattern::Binding { .. } | Pattern::TypedBinding { .. } => {
+            whole_subject_local(pattern, sub_ir_type).is_some()
+        }
+        Pattern::Struct { fields, .. } => {
+            let (definition, _, owner) =
+                struct_pattern_target(sub_resolved_ty, ctx, "nested struct pattern");
+            let nested_inputs = PatternInputs {
+                subject: inputs.subject,
+                subject_ty: sub_resolved_ty,
+            };
+            fields.iter().all(|field| {
+                // An unknown field breaks a typecheck invariant. The
+                // general path reports it.
+                let Some((_, declared)) = definition.lookup_field(field.name.as_str()) else {
+                    return false;
+                };
+                let (field_resolved_ty, field_ir_type) =
+                    field_type_for(&declared.ty, owner, &nested_inputs, ctx);
+                is_static_catch_all(
+                    &field.pattern,
+                    &field_resolved_ty,
+                    &field_ir_type,
+                    &nested_inputs,
+                    ctx,
+                )
+            })
+        }
+        Pattern::Tuple { elements, .. } => {
+            let element_types =
+                super::tuples::tuple_element_types(sub_resolved_ty, elements.len(), ctx.registry);
+            elements
+                .iter()
+                .zip(&element_types)
+                .all(|(element, element_resolved)| {
+                    let element_ir = super::super::package::resolved_type_to_ir_type(
+                        element_resolved,
+                        ctx.registry,
+                        ctx.output,
+                    );
+                    is_static_catch_all(element, element_resolved, &element_ir, inputs, ctx)
+                })
+        }
         _ => false,
     }
 }
@@ -213,7 +265,7 @@ fn collect_catch_all_binds(
 ) {
     match pattern {
         Pattern::Wildcard { .. } => {}
-        Pattern::Binding { local_id, name, .. } => {
+        Pattern::Binding { local_id, name, .. } | Pattern::TypedBinding { local_id, name, .. } => {
             let ir_local = require_local(*local_id, name);
             ensure_local_declared(ir_local, sub_ir_type, ctx);
             ctx.mark_slot_borrowed(ir_local);

@@ -45,7 +45,7 @@ use super::expr::lower_expr;
 use super::ownership::drop_discarded_temp;
 use super::patterns::{
     BindOp, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
-    require_local,
+    whole_subject_local,
 };
 
 /// AST-side inputs to [`lower_match`].
@@ -196,9 +196,9 @@ pub(super) fn lower_match(
 
 /// The `(slot, type)` pairs this arm's pattern binds, the candidates
 /// for a mutation detach ([`detach_mutated_binds`]). Payload binds
-/// carry their chain's leaf type. A top-level bare binding holds the
-/// whole subject, and its write happens inside the pattern check, so
-/// it never appears in the check's bind lists.
+/// carry their chain's leaf type. A top-level binding that holds the
+/// whole subject, as [`whole_subject_local`] decides, writes inside
+/// the pattern check, so it never appears in the check's bind lists.
 fn bind_slots(
     pattern: &Pattern,
     subject: ValueId,
@@ -219,8 +219,9 @@ fn bind_slots(
             (bind.local, leaf.output_type.clone())
         })
         .collect();
-    if let Pattern::Binding { local_id, name, .. } = pattern {
-        slots.push((require_local(*local_id, name), ctx.type_of(subject)));
+    let subject_ir = ctx.type_of(subject);
+    if let Some(local) = whole_subject_local(pattern, &subject_ir) {
+        slots.push((local, subject_ir));
     }
     slots
 }
