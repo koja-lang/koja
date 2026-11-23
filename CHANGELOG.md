@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A generic function can widen a value into a union that names its type parameter, as in `fn wrap<T>(item: T) -> Int | List<T>`. A method of a generic struct can do the same.
-- A `match` arm can use a typed binding such as `n: Int` on a subject of that same type. It binds the value the same as a plain binding, at the top of a pattern and inside enum, tuple, and struct patterns.
+- A generic function can return a union that uses its type parameter. `fn wrap<T>(item: T) -> Int | List<T>` with the body `[item]` compiles. A local variable of such a type works too, and so does a method of a generic struct.
+- A `match` arm can give a binding the type of the value it matches, as in `n: Int ->` for an `Int` value. The arm matches every value, the same as `n ->`. The annotation also works inside enum, tuple, and struct patterns, as in `Option.Some(n: Int) ->`.
 
 ## [0.21.0] - 2026-11-22
 
