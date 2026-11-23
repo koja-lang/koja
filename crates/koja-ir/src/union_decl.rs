@@ -68,7 +68,8 @@ pub(crate) fn union_members<'a>(
 /// produces, with the outer rounded up to its max-align stride.
 /// A union resolves through `unions`. Before the sizing pass
 /// reaches its decl, the payload size is 0, a lower bound that
-/// [`refine_nested_union_sizes`] settles.
+/// [`refine_nested_union_sizes`] settles. Panics when `unions` has
+/// no decl for the union.
 pub(crate) fn size_in_bytes(
     ty: &IRType,
     declarations: &Declarations<'_>,
@@ -116,10 +117,13 @@ fn size_and_align(
         // A union sizes through its declaration only. A walk into
         // its members could reach the union again. Before the sizing
         // pass reaches the declaration, the size is a lower bound
-        // that `refine_nested_union_sizes` settles.
-        IRType::Union(symbol) => {
-            union_size(unions.get(symbol).map_or(0, |decl| decl.max_payload_size))
-        }
+        // that `refine_nested_union_sizes` settles. Lowering declares
+        // each union when a type first names it, so a union with no
+        // declaration is a compiler bug.
+        IRType::Union(symbol) => match unions.get(symbol) {
+            Some(decl) => union_size(decl.max_payload_size),
+            None => panic!("IR: union `{symbol}` has no declaration"),
+        },
     }
 }
 
@@ -332,8 +336,19 @@ mod tests {
     }
 
     #[test]
-    fn a_union_with_no_declaration_sizes_as_a_bare_tag() {
-        assert_eq!(size(&union_type("U_missing")), 8);
+    #[should_panic(expected = "union `U_missing` has no declaration")]
+    fn a_union_with_no_declaration_panics() {
+        size(&union_type("U_missing"));
+    }
+
+    #[test]
+    #[should_panic(expected = "union `U_missing` has no declaration")]
+    fn a_member_that_names_a_union_with_no_declaration_panics() {
+        let mut packages = vec![package_with(
+            "TestApp",
+            vec![unsized_decl("U_outer", vec![union_type("U_missing")])],
+        )];
+        size_unions(&mut packages);
     }
 
     #[test]

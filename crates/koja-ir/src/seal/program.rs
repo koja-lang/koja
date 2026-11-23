@@ -35,7 +35,7 @@ pub(crate) fn seal_program(program: &IRProgram) {
     }
     let declarations = program.declarations();
     for pkg in &program.packages {
-        seal_package(pkg);
+        seal_package(pkg, &declarations);
         seal_package_types(pkg, &declarations);
     }
     seal_program_calls(program);
