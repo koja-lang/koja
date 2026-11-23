@@ -13,17 +13,18 @@
 //!   struct's mangled prefix derived through [`IRSymbol::derived`].
 //! - Calls inside a substituted body (a generic function calling
 //!   another generic function) cascade through the worklist.
+//! - A widening inside a substituted body targets the concrete union.
 //!
 //! Mangled-name shape for top-level generic functions mirrors generic
 //! types: `<root>_$<arg>.<arg>$`. Methods on a generic type read as
 //! `<type-mangled>.<method>` (no separate args list, since methods
 //! inherit the type's params).
 
-use koja_ir::IRType;
+use koja_ir::{IRInstruction, IRType};
 
 mod common;
 
-use common::{lower_script_source, mangled_function, script_function_names};
+use common::{all_instructions, lower_script_source, mangled_function, script_function_names};
 
 #[test]
 fn identity_function_monomorphizes_at_each_concrete_arg() {
@@ -241,5 +242,35 @@ fn method_on_generic_struct_for_distinct_args_mints_distinct_methods() {
             "TestApp.Pair_$Int64.String$.first/1".to_string(),
             "TestApp.Pair_$String.Int64$.first/1".to_string(),
         ],
+    );
+}
+
+#[test]
+fn widening_into_a_union_with_a_type_parameter_lowers_to_union_wrap() {
+    // The typecheck records the widening of `[item]` with the target
+    // `Int | List<T>`. Monomorphization must substitute that target,
+    // or the lowering meets `T` and panics.
+    let source = "
+        fn wrap<T>(item: T) -> Int | List<T>
+          [item]
+        end
+
+        wrap(\"a\")
+        ";
+
+    let script = lower_script_source(source);
+
+    let wrap = mangled_function(&script, "TestApp.wrap/1_$String$");
+    assert!(
+        matches!(wrap.return_type, IRType::Union(_)),
+        "expected `wrap<String>` to return a union, got {:?}",
+        wrap.return_type,
+    );
+    let wrap_count = all_instructions(&wrap.blocks)
+        .filter(|i| matches!(i, IRInstruction::UnionWrap { .. }))
+        .count();
+    assert_eq!(
+        wrap_count, 1,
+        "expected one UnionWrap for the list that widens into the return type, got {wrap_count}",
     );
 }

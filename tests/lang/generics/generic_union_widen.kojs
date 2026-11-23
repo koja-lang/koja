@@ -1,0 +1,55 @@
+# A generic function widens a value into a union that names its type
+# parameter. The widening is in a return, in a typed local, and in a
+# method of a generic struct. `describe` reads each result with a
+# `match`, so the output shows which member the value holds.
+
+struct Holder<T>
+  value: T
+
+  fn either(self, flag: Bool) -> Int | T
+    if flag
+      return self.value
+    end
+
+    0
+  end
+end
+
+fn describe(value: Int | String) -> String
+  match value
+    n: Int -> "int #{n}"
+    text: String -> "string #{text}"
+  end
+end
+
+fn hold<T>(item: T) -> Int
+  held: Int | List<T> = [item]
+
+  match held
+    n: Int -> n
+    items: List<T> -> items.length()
+  end
+end
+
+fn pick<T>(item: T, flag: Bool) -> Int | T
+  if flag
+    return item
+  end
+
+  0
+end
+
+fn wrap<T>(item: T) -> Int | List<T>
+  [item]
+end
+
+wrap("a").print()
+
+IO.puts(describe(pick("b", true)))
+IO.puts(describe(pick("b", false)))
+
+hold("c").print()
+
+holder: Holder<String> = Holder{value: "d"}
+IO.puts(describe(holder.either(true)))
+IO.puts(describe(holder.either(false)))

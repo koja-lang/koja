@@ -11,6 +11,7 @@
 //! [`crate::lower::package::lower_function_inner`] needs.
 
 use koja_ast::ast::{Expr, ExprKind, Function, LValue, Pattern};
+use koja_ast::coercion::Coercion;
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 use koja_ast::visit_mut::{self, VisitorMut};
 use koja_typecheck::{FunctionSignature, ResolvedParam};
@@ -60,10 +61,11 @@ pub(super) fn substitute_signature(
     }
 }
 
-/// Rewrites the four [`ResolvedType`] slots a function body carries.
-/// Those are `Expr.resolution`, the `type_args` on calls and method
-/// calls, the head type of a multi-segment assignment target, and
-/// the resolved type of a typed-binding pattern.
+/// Rewrites the five [`ResolvedType`] slots a function body carries.
+/// Those are `Expr.resolution`, the target type of `Expr.coercion`,
+/// the `type_args` on calls and method calls, the head type of a
+/// multi-segment assignment target, and the resolved type of a
+/// typed-binding pattern.
 struct Substituter<'a> {
     args: &'a [ResolvedType],
     owner: GlobalRegistryId,
@@ -85,8 +87,20 @@ impl VisitorMut for Substituter<'_> {
         }
     }
 
+    /// A widening in a generic body records its target with the type
+    /// parameter still in it, as in `Int | List<T>`. The lowering
+    /// builds the union value from that target, so it must be
+    /// concrete. The `match` has no catch-all arm, so a new
+    /// [`Coercion`] variant does not compile until it has an arm here.
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         self.rewrite(&mut expr.resolution);
+        if let Some(coercion) = expr.coercion.as_mut() {
+            match coercion {
+                Coercion::NumericWiden(target) | Coercion::UnionWiden(target) => {
+                    self.rewrite(target)
+                }
+            }
+        }
         if let ExprKind::Call { type_args, .. } | ExprKind::MethodCall { type_args, .. } =
             &mut expr.kind
         {
