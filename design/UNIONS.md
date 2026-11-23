@@ -180,9 +180,11 @@ carry the result.
 - `narrow_union_hint` picks the member for a literal.
 - `recursive_alias` finds the alias for the union of rule 7.
 
-In the IR, a union is `IRType::Union` with its members, and its name comes
-from the members. The union of a recursive alias is `IRType::NamedUnion`
-with the name of the alias, and one declaration holds its members.
+In the IR, a union is `IRType::Union` with a name, and a declaration with
+that name holds its members. The name of an anonymous union comes from the
+members. Each package that names the union declares it, and the declarations
+are equal. The union of a recursive alias has the name of the alias, and the
+package of the alias holds its one declaration.
 
 A union value is a tag and a payload as wide as the widest member. A struct
 or an enum that holds its own union inline gets a box on that field, the

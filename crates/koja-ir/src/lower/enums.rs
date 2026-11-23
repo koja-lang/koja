@@ -28,7 +28,6 @@ use crate::enum_decl::{
     EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
 };
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
-use crate::generics::Instantiation;
 use crate::struct_decl::IRStructField;
 use crate::types::{IRType, ValueId};
 
@@ -90,14 +89,14 @@ pub(super) fn lower_enum_decl(
         return None;
     }
     let symbol = IRSymbol::from_identifier(&entry.identifier);
-    let variants = lower_variants(definition, registry, &mut output.instantiations);
+    let variants = lower_variants(definition, registry, output);
     Some(IREnumDecl { symbol, variants })
 }
 
 fn lower_variants(
     definition: &EnumDefinition,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> Vec<IREnumVariant> {
     let mut variants = Vec::with_capacity(definition.variants.len());
     for (index, variant) in definition.variants.iter().enumerate() {
@@ -107,7 +106,7 @@ fn lower_variants(
                 for (idx, field) in fields.iter().enumerate() {
                     ir_fields.push(IRStructField {
                         index: idx as u32,
-                        ir_type: resolved_type_to_ir_type(&field.ty, registry, instantiations),
+                        ir_type: resolved_type_to_ir_type(&field.ty, registry, output),
                         name: field.name.clone(),
                     });
                 }
@@ -116,7 +115,7 @@ fn lower_variants(
             ResolvedVariantData::Tuple(types) => {
                 let translated = types
                     .iter()
-                    .map(|ty| resolved_type_to_ir_type(ty, registry, instantiations))
+                    .map(|ty| resolved_type_to_ir_type(ty, registry, output))
                     .collect();
                 IRVariantPayload::Tuple(translated)
             }
@@ -145,11 +144,7 @@ pub(super) fn lower_enum_construction(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let entry = enum_entry_from_resolution(expr_resolution, ctx.registry);
     let definition = enum_definition_from_entry(entry);
-    let symbol = resolved_enum_symbol(
-        expr_resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let symbol = resolved_enum_symbol(expr_resolution, ctx.registry, ctx.output);
     let (variant_index, variant) = definition
         .lookup_variant(variant_name.as_str())
         .unwrap_or_else(|| {
@@ -184,13 +179,13 @@ pub(super) fn lower_enum_construction(
 /// The mangled [`IRSymbol`] for the enum named by `resolution`.
 /// Mirrors [`super::structs`]'s `resolved_struct_symbol`. Routes
 /// through [`resolved_type_to_ir_type`] so any non-empty `type_args`
-/// land in `instantiations`.
+/// land in `output.instantiations`.
 pub(super) fn resolved_enum_symbol(
     resolution: &ResolvedType,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> IRSymbol {
-    match resolved_type_to_ir_type(resolution, registry, instantiations) {
+    match resolved_type_to_ir_type(resolution, registry, output) {
         IRType::Enum(symbol) => symbol,
         other => panic!(
             "IR lower: enum construction target lowered to `{other:?}`, expected \

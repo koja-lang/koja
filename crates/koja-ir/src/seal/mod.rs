@@ -11,12 +11,14 @@
 //! (block shape, dominance of operand definitions, branch targets,
 //! locals, tail calls), [`types`] (per-instruction operand and result
 //! types), [`structs`], [`enums`], and [`closures`] (decl shape and
-//! the instructions that project them), and [`constants`] (built
-//! constant inits and their startup order). Every `Call` must
-//! resolve to a function somewhere in the program or script.
+//! the instructions that project them), [`unions`] (decl shape), and
+//! [`constants`] (built constant inits and their startup order).
+//! Every `Call` must resolve to a function somewhere in the program
+//! or script.
 
+use crate::declarations::Declarations;
 use crate::enum_decl::EnumPayloadInit;
-use crate::function::{IRInstruction, IRTerminator};
+use crate::function::{IRInstruction, IRSymbol, IRTerminator};
 use crate::types::{IRType, ValueId};
 
 mod calls;
@@ -28,70 +30,96 @@ mod program;
 mod script;
 mod structs;
 mod types;
+mod unions;
 
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
 
-/// Every [`IRType`] variant is admitted. The walk recurses into
-/// pointee, element, and member types so a new restriction has a
-/// location-aware hook at every edge.
-pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
+/// Every [`IRType`] variant is admitted, and an enum, a struct, or a
+/// union must name a declaration in `declarations`. The walk recurses
+/// into pointee, element, and member types so a new restriction has
+/// a location-aware hook at every edge.
+pub(super) fn require_supported_type(
+    ty: &IRType,
+    declarations: &Declarations<'_>,
+    location: &dyn Fn() -> String,
+) {
     match ty {
         IRType::Binary
         | IRType::Bits
         | IRType::Bool
-        | IRType::Enum(_)
         | IRType::Float32
         | IRType::Float64
         | IRType::Int8
         | IRType::Int16
         | IRType::Int32
         | IRType::Int64
-        // A named type. Its members are not part of this type.
-        | IRType::NamedUnion(_)
         | IRType::String
-        | IRType::Struct(_)
         | IRType::UInt8
         | IRType::UInt16
         | IRType::UInt32
         | IRType::UInt64
         | IRType::Unit => {}
-        IRType::CPtr(inner) => {
-            require_supported_type(inner, &|| format!("{} (CPtr pointee)", location()))
-        }
-        IRType::Indirect(inner) => {
-            require_supported_type(inner, &|| format!("{} (Indirect pointee)", location()))
-        }
-        IRType::List(inner) => {
-            require_supported_type(inner, &|| format!("{} (List element)", location()))
-        }
+        IRType::CPtr(inner) => require_supported_type(inner, declarations, &|| {
+            format!("{} (CPtr pointee)", location())
+        }),
+        IRType::Indirect(inner) => require_supported_type(inner, declarations, &|| {
+            format!("{} (Indirect pointee)", location())
+        }),
+        IRType::List(inner) => require_supported_type(inner, declarations, &|| {
+            format!("{} (List element)", location())
+        }),
         IRType::Map { key, value } => {
-            require_supported_type(key, &|| format!("{} (Map key)", location()));
-            require_supported_type(value, &|| format!("{} (Map value)", location()));
+            require_supported_type(key, declarations, &|| format!("{} (Map key)", location()));
+            require_supported_type(value, declarations, &|| {
+                format!("{} (Map value)", location())
+            });
         }
-        IRType::Set(inner) => {
-            require_supported_type(inner, &|| format!("{} (Set element)", location()))
-        }
+        IRType::Set(inner) => require_supported_type(inner, declarations, &|| {
+            format!("{} (Set element)", location())
+        }),
         IRType::Function { params, ret, .. } => {
             for (idx, param) in params.iter().enumerate() {
-                require_supported_type(param, &|| {
+                require_supported_type(param, declarations, &|| {
                     format!("{} (Function param[{idx}])", location())
                 });
             }
-            require_supported_type(ret, &|| format!("{} (Function return)", location()));
+            require_supported_type(ret, declarations, &|| {
+                format!("{} (Function return)", location())
+            });
         }
         IRType::Tuple(elements) => {
             for (idx, element) in elements.iter().enumerate() {
-                require_supported_type(element, &|| {
+                require_supported_type(element, declarations, &|| {
                     format!("{} (Tuple element[{idx}])", location())
                 });
             }
         }
-        IRType::Union { members, .. } => {
-            for (idx, member) in members.iter().enumerate() {
-                require_supported_type(member, &|| format!("{} (Union member[{idx}])", location()));
-            }
+        // The fields, variants, and members are not part of a named
+        // type. The declaration checks cover them, so these arms only
+        // prove that the declaration exists.
+        IRType::Enum(symbol) => {
+            let declared = declarations.enum_decl(symbol).is_some();
+            require_declared(declared, "enum", symbol, location);
         }
+        IRType::Struct(symbol) => {
+            let declared = declarations.struct_decl(symbol).is_some();
+            require_declared(declared, "struct", symbol, location);
+        }
+        IRType::Union(symbol) => {
+            let declared = declarations.union_decl(symbol).is_some();
+            require_declared(declared, "union", symbol, location);
+        }
+    }
+}
+
+/// Panic when a type names a `kind` that no package declares.
+fn require_declared(declared: bool, kind: &str, symbol: &IRSymbol, location: &dyn Fn() -> String) {
+    if !declared {
+        seal_panic(&format!(
+            "{} names {kind} `{symbol}`, which is not registered in any package",
+            location()
+        ));
     }
 }
 

@@ -93,8 +93,8 @@ pub enum Value {
     /// position of the wrapped member in the union's canonical
     /// member list). `payload` is the boxed value the user wrote.
     /// `symbol` is the union's mangled name, kept for debug
-    /// rendering and for sanity-checking against the IR's
-    /// `IRType::Union { mangled }`.
+    /// rendering and for sanity-checking against the symbol on the
+    /// IR's `IRType::Union`.
     Union {
         payload: Box<Value>,
         symbol: IRSymbol,

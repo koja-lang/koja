@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::declarations::Declarations;
 use crate::dominators::{compute_immediate_dominators, dominator_tree_children};
 use crate::function::{
     BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRTerminator,
@@ -16,12 +17,14 @@ use crate::types::{IRType, ValueId};
 use super::closures::seal_closure_decls;
 use super::enums::seal_enum_decls;
 use super::structs::seal_struct_decls;
+use super::unions::seal_union_decls;
 use super::{instruction_operands, require_supported_type, seal_panic, terminator_operands};
 
-pub(super) fn seal_package(pkg: &IRPackage) {
-    seal_struct_decls(pkg);
-    seal_enum_decls(pkg);
-    seal_closure_decls(pkg);
+pub(super) fn seal_package(pkg: &IRPackage, declarations: &Declarations<'_>) {
+    seal_struct_decls(pkg, declarations);
+    seal_enum_decls(pkg, declarations);
+    seal_union_decls(pkg, declarations);
+    seal_closure_decls(pkg, declarations);
     for (sym, function) in &pkg.functions {
         if sym != &function.symbol {
             seal_panic(&format!(
@@ -29,11 +32,11 @@ pub(super) fn seal_package(pkg: &IRPackage) {
                 pkg.package, function.symbol,
             ));
         }
-        seal_function(function);
+        seal_function(function, declarations);
     }
 }
 
-fn seal_function(function: &IRFunction) {
+fn seal_function(function: &IRFunction, declarations: &Declarations<'_>) {
     let owner = format!("function `{}`", function.symbol);
     match &function.kind {
         FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue | FunctionKind::DropGlue => {
@@ -120,14 +123,16 @@ fn seal_function(function: &IRFunction) {
             }
         }
     }
-    require_supported_type(&function.return_type, &|| format!("{owner} return type"));
+    require_supported_type(&function.return_type, declarations, &|| {
+        format!("{owner} return type")
+    });
     // Function parameter `ValueId`s seed the entry block's
     // dominator-tree-rooted defined set, because params are visible to
     // every block the entry dominates, which in a well-formed CFG
     // is every reachable block.
     let mut parameter_value_ids: HashSet<ValueId> = HashSet::new();
     for (index, param) in function.params.iter().enumerate() {
-        require_supported_type(&param.ty, &|| {
+        require_supported_type(&param.ty, declarations, &|| {
             format!("{owner} parameter #{index} ({}) type", param.id)
         });
         if !parameter_value_ids.insert(param.id) {
@@ -141,7 +146,7 @@ fn seal_function(function: &IRFunction) {
         return;
     }
     let block_ids = collect_block_ids(&function.blocks, &owner);
-    let block_params = collect_block_params(&function.blocks, &owner);
+    let block_params = collect_block_params(&function.blocks, &owner, declarations);
     for block in &function.blocks {
         seal_block(block, &owner, &block_ids, &block_params);
     }
@@ -190,11 +195,12 @@ fn seal_tail_calls(function: &IRFunction, owner: &str) {
 pub(super) fn collect_block_params(
     blocks: &[IRBasicBlock],
     owner: &str,
+    declarations: &Declarations<'_>,
 ) -> BTreeMap<IRBlockId, Vec<IRType>> {
     let mut by_block: BTreeMap<IRBlockId, Vec<IRType>> = BTreeMap::new();
     for block in blocks {
         for (index, param) in block.params.iter().enumerate() {
-            require_supported_type(&param.ty, &|| {
+            require_supported_type(&param.ty, declarations, &|| {
                 format!(
                     "{owner} block {} param #{index} ({}) type",
                     block.id, param.dest
@@ -537,7 +543,7 @@ mod block_param_tests {
 
     fn run_seal(blocks: &[IRBasicBlock], owner: &str) {
         let block_ids = collect_block_ids(blocks, owner);
-        let block_params = collect_block_params(blocks, owner);
+        let block_params = collect_block_params(blocks, owner, &Declarations::new(&[]));
         for block in blocks {
             seal_block(block, owner, &block_ids, &block_params);
         }

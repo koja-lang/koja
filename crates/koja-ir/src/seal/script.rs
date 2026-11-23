@@ -27,16 +27,18 @@ use super::{require_supported_type, seal_panic};
 pub(crate) fn seal_script(script: &IRScript) {
     let declarations = script.declarations();
     for pkg in &script.packages {
-        seal_package(pkg);
+        seal_package(pkg, &declarations);
         seal_package_types(pkg, &declarations);
     }
     let owner = "script body";
     if script.blocks.is_empty() {
         seal_panic(&format!("{owner} has no basic blocks"));
     }
-    require_supported_type(&script.return_type, &|| format!("{owner} return type"));
+    require_supported_type(&script.return_type, &declarations, &|| {
+        format!("{owner} return type")
+    });
     let block_ids = collect_block_ids(&script.blocks, owner);
-    let block_params = collect_block_params(&script.blocks, owner);
+    let block_params = collect_block_params(&script.blocks, owner, &declarations);
     for block in &script.blocks {
         seal_block(block, owner, &block_ids, &block_params);
     }

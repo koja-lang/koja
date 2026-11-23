@@ -24,7 +24,7 @@ pub(super) fn emit_union_wrap<'ctx>(
     ty: &IRType,
     payload: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let (IRType::NamedUnion(mangled) | IRType::Union { mangled, .. }) = ty else {
+    let IRType::Union(mangled) = ty else {
         panic!("LLVM emit: UnionWrap target IRType is not Union (got `{ty:?}`)");
     };
     let outer = ctx.layouts.union_outer(mangled.mangled());
@@ -57,7 +57,7 @@ pub(super) fn emit_union_tag_get<'ctx>(
     ty: &IRType,
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let (IRType::NamedUnion(mangled) | IRType::Union { mangled, .. }) = ty else {
+    let IRType::Union(mangled) = ty else {
         panic!("LLVM emit: UnionTagGet receiver IRType is not Union (got `{ty:?}`)");
     };
     let outer = ctx.layouts.union_outer(mangled.mangled());
@@ -93,7 +93,7 @@ pub(super) fn emit_union_payload_get<'ctx>(
     ty: &IRType,
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let (IRType::NamedUnion(mangled) | IRType::Union { mangled, .. }) = ty else {
+    let IRType::Union(mangled) = ty else {
         panic!("LLVM emit: UnionPayloadGet receiver IRType is not Union (got `{ty:?}`)");
     };
     let outer = ctx.layouts.union_outer(mangled.mangled());

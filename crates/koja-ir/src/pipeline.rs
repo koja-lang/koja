@@ -18,7 +18,7 @@ use crate::lower::{LowerOutput, lower_named_unions, lower_package};
 use crate::merge;
 use crate::package::IRPackage;
 use crate::tail_calls::rewrite_tail_calls;
-use crate::union_decl::discover_unions;
+use crate::union_decl::size_unions;
 use crate::yield_checks::insert_yield_checks;
 
 /// The order backends run [`crate::IRConstantValue::Built`] inits in.
@@ -82,6 +82,10 @@ fn empty_global_stdlib_package() -> IRPackage {
 
 /// Run the queued generic instantiations against `packages`. The
 /// diagnostics they raise return as a [`LowerError`].
+///
+/// Lowering ends here, so every anonymous union it named must have
+/// a declaration in a package by now. A union that is still pending
+/// came from a lowering path that does not drain into a package.
 pub(crate) fn instantiate(
     packages: &mut [IRPackage],
     checked: &CheckedProgram,
@@ -95,7 +99,13 @@ pub(crate) fn instantiate(
         packages,
         output,
     );
-    check_diagnostics(output)
+    check_diagnostics(output)?;
+    assert!(
+        output.pending_unions.is_empty(),
+        "IR lower: no package declares the anonymous unions {:?}",
+        output.pending_unions,
+    );
+    Ok(())
 }
 
 /// Lower every checked package behind a seeded `Global` package and
@@ -112,13 +122,13 @@ pub(crate) fn lower_packages(checked: &CheckedProgram, output: &mut LowerOutput)
 }
 
 /// The post-instantiation rewrites. Type cycle breaking runs first,
-/// then union discovery, tail-call rewriting, yield insertion, and
-/// elaboration. Union discovery sizes each union, and a size is
-/// finite only after the cycles are broken. `body` is a script's
-/// inline top-level body. Programs pass an empty one.
+/// then union sizing, tail-call rewriting, yield insertion, and
+/// elaboration. The size of a union is finite only after the cycles
+/// are broken. `body` is a script's inline top-level body. Programs
+/// pass an empty one.
 pub(crate) fn rewrite(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
     break_type_cycles(packages);
-    discover_unions(packages, body);
+    size_unions(packages);
     rewrite_tail_calls(packages);
     insert_yield_checks(packages, body);
     elaborate(packages, body);

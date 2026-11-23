@@ -191,8 +191,8 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
         IRType::Tuple(elements) => elements
             .iter()
             .any(|element| needs_drop_seen(element, packages, visited)),
-        // The members of a named union can hold the union again.
-        IRType::NamedUnion(symbol) => {
+        // The members of a union can hold the union again.
+        IRType::Union(symbol) => {
             if !visited.insert(symbol.clone()) {
                 return false;
             }
@@ -201,9 +201,6 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
                 .iter()
                 .any(|member| needs_drop_seen(member, packages, visited))
         }
-        IRType::Union { members, .. } => members
-            .iter()
-            .any(|member| needs_drop_seen(member, packages, visited)),
         // A closure owns its heap env block. Acquisition / release is
         // always inline (`rc++` / `koja_closure_rc_dec` on the env
         // base, while the per-instance capture teardown lives behind
@@ -271,11 +268,7 @@ fn is_inline_managed(ty: &IRType) -> bool {
 fn is_aggregate(ty: &IRType) -> bool {
     matches!(
         ty,
-        IRType::Enum(_)
-            | IRType::NamedUnion(_)
-            | IRType::Struct(_)
-            | IRType::Tuple(_)
-            | IRType::Union { .. }
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union(_)
     )
 }
 
@@ -447,9 +440,7 @@ fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
         }
         IRType::Map { key, value } => vec![key.as_ref().clone(), value.as_ref().clone()],
         IRType::Tuple(elements) => elements.clone(),
-        IRType::NamedUnion(_) | IRType::Union { .. } => {
-            union_members_in(packages, ty).unwrap_or_default().to_vec()
-        }
+        IRType::Union(_) => union_members_in(packages, ty).unwrap_or_default().to_vec(),
         IRType::Struct(symbol) => find_struct(packages, symbol)
             .map(|decl| decl.fields.iter().map(|f| f.ir_type.clone()).collect())
             .unwrap_or_default(),
@@ -583,9 +574,9 @@ fn glue_owner(packages: &[IRPackage], ty: &IRType) -> String {
         IRType::Struct(symbol) => packages
             .iter()
             .find(|package| package.structs.contains_key(symbol.mangled())),
-        IRType::NamedUnion(mangled) | IRType::Union { mangled, .. } => packages
+        IRType::Union(symbol) => packages
             .iter()
-            .find(|package| package.unions.contains_key(mangled.mangled())),
+            .find(|package| package.unions.contains_key(symbol.mangled())),
         _ => return "Global".to_string(),
     };
     owner

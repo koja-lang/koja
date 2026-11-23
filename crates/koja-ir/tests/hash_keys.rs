@@ -27,7 +27,7 @@ fn union_key_synthesizes_regular_hash_and_equals_functions() {
     let hash = mangled_function(&script, UNION_HASH);
     assert_eq!(hash.kind, FunctionKind::Regular);
     assert_eq!(hash.params.len(), 1);
-    assert!(matches!(hash.params[0].ty, IRType::Union { .. }));
+    assert!(matches!(hash.params[0].ty, IRType::Union(_)));
     assert_eq!(hash.return_type, IRType::Int64);
     assert!(
         all_instructions(&hash.blocks)

@@ -100,8 +100,10 @@ impl IRProgram {
 
     /// Lookup a union declaration across every package by its
     /// mangled symbol. Mirrors [`Self::struct_decl`]. Backends pass
-    /// the `&IRSymbol` carried on `IRType::Union { mangled }`
-    /// directly through the `IRSymbol: Borrow<str>` impl.
+    /// the `&IRSymbol` carried on `IRType::Union` directly through
+    /// the `IRSymbol: Borrow<str>` impl. Two packages can hold an
+    /// equal declaration of one union, and the lookup returns the
+    /// first.
     pub fn union_decl(&self, mangled: &str) -> Option<&IRUnionDecl> {
         find_in(&self.packages, |pkg| &pkg.unions, mangled)
     }
@@ -175,7 +177,8 @@ pub fn lower_program(
 ///
 /// The wrapper drops directly into the state's owning [`IRPackage`]
 /// (no `synthesized_functions` round-trip needed for the non-generic
-/// case, which is the only shape `koja.toml` can name today).
+/// case, which is the only shape `koja.toml` can name today). That
+/// package also declares each anonymous union the wrapper names.
 fn stage_process_entry(
     state: &Identifier,
     checked: &CheckedProgram,
@@ -212,17 +215,9 @@ fn stage_process_entry(
         );
     };
 
-    let config_type = resolved_type_to_ir_type(
-        config_resolved,
-        &checked.registry,
-        &mut output.instantiations,
-    );
+    let config_type = resolved_type_to_ir_type(config_resolved, &checked.registry, output);
     let state_resolved = ResolvedType::leaf(Resolution::Global(state_id));
-    let state_ir = resolved_type_to_ir_type(
-        &state_resolved,
-        &checked.registry,
-        &mut output.instantiations,
-    );
+    let state_ir = resolved_type_to_ir_type(&state_resolved, &checked.registry, output);
     let state_symbol = match &state_ir {
         IRType::Struct(symbol) => symbol.clone(),
         other => panic!(
@@ -246,6 +241,7 @@ fn stage_process_entry(
     let wrapper_symbol = wrapper.symbol.clone();
     insert_package_function(packages, &owner_package, body);
     insert_package_function(packages, &owner_package, wrapper);
+    output.drain_pending_unions_into(packages, &owner_package);
 
     Ok((state.clone(), wrapper_symbol))
 }

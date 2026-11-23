@@ -23,6 +23,7 @@
 
 use std::collections::HashSet;
 
+use crate::declarations::Declarations;
 use crate::enum_decl::{
     EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
 };
@@ -33,7 +34,7 @@ use crate::types::IRType;
 use super::structs::seal_named_field_layout;
 use super::{field_type_matches, seal_panic};
 
-pub(super) fn seal_enum_decls(pkg: &IRPackage) {
+pub(super) fn seal_enum_decls(pkg: &IRPackage, declarations: &Declarations<'_>) {
     for (sym, decl) in &pkg.enums {
         if sym != &decl.symbol {
             seal_panic(&format!(
@@ -41,11 +42,11 @@ pub(super) fn seal_enum_decls(pkg: &IRPackage) {
                 pkg.package, decl.symbol,
             ));
         }
-        seal_enum_decl(decl);
+        seal_enum_decl(decl, declarations);
     }
 }
 
-fn seal_enum_decl(decl: &IREnumDecl) {
+fn seal_enum_decl(decl: &IREnumDecl, declarations: &Declarations<'_>) {
     let owner = format!("enum `{}`", decl.symbol);
     if decl.variants.len() > usize::from(u8::MAX) + 1 {
         seal_panic(&format!(
@@ -71,19 +72,23 @@ fn seal_enum_decl(decl: &IREnumDecl) {
                 variant.name,
             ));
         }
-        seal_variant_payload(&owner, variant);
+        seal_variant_payload(&owner, variant, declarations);
     }
 }
 
-fn seal_variant_payload(owner: &str, variant: &crate::enum_decl::IREnumVariant) {
+fn seal_variant_payload(
+    owner: &str,
+    variant: &crate::enum_decl::IREnumVariant,
+    declarations: &Declarations<'_>,
+) {
     let variant_label = format!("{owner} variant `{}`", variant.name);
     match &variant.payload {
         IRVariantPayload::Struct(fields) => {
-            seal_named_field_layout(&variant_label, fields);
+            seal_named_field_layout(&variant_label, fields, declarations);
         }
         IRVariantPayload::Tuple(types) => {
             for (index, ty) in types.iter().enumerate() {
-                super::require_supported_type(ty, &|| {
+                super::require_supported_type(ty, declarations, &|| {
                     format!("{variant_label} tuple element #{index}")
                 });
             }
@@ -306,6 +311,7 @@ mod tests {
 
     use koja_ast::identifier::Identifier;
 
+    use crate::declarations::Declarations;
     use crate::enum_decl::{
         EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
     };
@@ -318,6 +324,11 @@ mod tests {
 
     fn symbol(name: &str) -> IRSymbol {
         IRSymbol::from_identifier(&Identifier::single("TestApp", name))
+    }
+
+    /// Seal the enum decls of `pkg` against its own declarations.
+    fn seal_decls(pkg: &IRPackage) {
+        seal_enum_decls(pkg, &Declarations::new(std::slice::from_ref(pkg)));
     }
 
     fn option_decl() -> IREnumDecl {
@@ -358,7 +369,7 @@ mod tests {
     #[test]
     fn well_formed_decls_pass_seal() {
         let pkg = package_with(option_decl());
-        seal_enum_decls(&pkg);
+        seal_decls(&pkg);
     }
 
     #[test]
@@ -366,7 +377,7 @@ mod tests {
     fn non_dense_tag_panics() {
         let mut decl = option_decl();
         decl.variants[1].tag = IRVariantTag(7);
-        seal_enum_decls(&package_with(decl));
+        seal_decls(&package_with(decl));
     }
 
     #[test]
@@ -374,7 +385,7 @@ mod tests {
     fn duplicate_variant_name_panics() {
         let mut decl = option_decl();
         decl.variants[1].name = "None".to_string();
-        seal_enum_decls(&package_with(decl));
+        seal_decls(&package_with(decl));
     }
 
     #[test]
@@ -391,7 +402,17 @@ mod tests {
             structs: BTreeMap::new(),
             unions: BTreeMap::new(),
         };
-        seal_enum_decls(&pkg);
+        seal_decls(&pkg);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "names enum `TestApp.Missing`, which is not registered in any package"
+    )]
+    fn payload_that_names_an_enum_with_no_declaration_panics() {
+        let mut decl = option_decl();
+        decl.variants[1].payload = IRVariantPayload::Tuple(vec![IRType::Enum(symbol("Missing"))]);
+        seal_decls(&package_with(decl));
     }
 
     #[test]

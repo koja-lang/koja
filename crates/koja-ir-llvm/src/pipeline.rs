@@ -8,7 +8,9 @@
 //! [`enums_in_dependency_order`] computes. Only the host `main`
 //! differs between the two entries, see [`EntryShape`].
 
-use koja_ir::{IRBasicBlock, IRFunction, IRPackage, IRSourceDef, IRSymbol};
+use std::collections::BTreeSet;
+
+use koja_ir::{IRBasicBlock, IRFunction, IRPackage, IRSourceDef, IRSymbol, IRUnionDecl};
 
 use crate::constant_pool::ConstantPoolSnapshot;
 use crate::ctx::EmitContext;
@@ -86,10 +88,10 @@ pub(crate) fn compile_packages(
 
 /// Declare every union, struct, and enum type opaque.
 fn declare_types(ctx: &EmitContext<'_>, packages: &[IRPackage]) {
+    for decl in distinct_unions(packages) {
+        declare_union_type(ctx, decl);
+    }
     for package in packages {
-        for decl in package.unions.values() {
-            declare_union_type(ctx, decl);
-        }
         for decl in package.structs.values() {
             declare_struct_type(ctx, decl);
         }
@@ -102,10 +104,10 @@ fn declare_types(ctx: &EmitContext<'_>, packages: &[IRPackage]) {
 /// Set the type bodies. Unions and structs first, then enum payloads,
 /// then enum completes and outer blobs in dependency order.
 fn define_types(ctx: &EmitContext<'_>, packages: &[IRPackage]) -> Result<(), LlvmError> {
+    for decl in distinct_unions(packages) {
+        define_union_body(ctx, decl);
+    }
     for package in packages {
-        for decl in package.unions.values() {
-            define_union_body(ctx, decl);
-        }
         for decl in package.structs.values() {
             define_struct_body(ctx, decl)?;
         }
@@ -119,4 +121,16 @@ fn define_types(ctx: &EmitContext<'_>, packages: &[IRPackage]) -> Result<(), Llv
         define_enum_completes_and_outer(ctx, decl);
     }
     Ok(())
+}
+
+/// Each union declaration one time, in package order. Every package
+/// that names an anonymous union declares it. The copies are equal,
+/// so the first one stands for all of them.
+fn distinct_unions(packages: &[IRPackage]) -> Vec<&IRUnionDecl> {
+    let mut seen = BTreeSet::new();
+    packages
+        .iter()
+        .flat_map(|package| package.unions.values())
+        .filter(|decl| seen.insert(&decl.symbol))
+        .collect()
 }

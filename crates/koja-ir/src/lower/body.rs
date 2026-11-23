@@ -329,8 +329,7 @@ fn lower_field_assignment(
 
     let plan = build_field_chain(&head_ty, lvalue, ctx.registry, ctx.output);
 
-    let head_ir_type =
-        resolved_type_to_ir_type(&head_ty, ctx.registry, &mut ctx.output.instantiations);
+    let head_ir_type = resolved_type_to_ir_type(&head_ty, ctx.registry, ctx.output);
     let root_value = ctx.fresh_value(head_ir_type.clone());
     ctx.cfg.append(
         block,
@@ -480,10 +479,8 @@ fn build_field_chain(
                 });
         let subst = Substitution::from_args(struct_id, type_args);
         let substituted = substitute(&declared.ty, &subst);
-        let field_ir_type =
-            resolved_type_to_ir_type(&substituted, registry, &mut output.instantiations);
-        let struct_symbol =
-            resolved_struct_symbol(&current_ty, registry, &mut output.instantiations);
+        let field_ir_type = resolved_type_to_ir_type(&substituted, registry, output);
+        let struct_symbol = resolved_struct_symbol(&current_ty, registry, output);
         steps.push(FieldStep {
             field_index,
             field_ir_type,
@@ -576,8 +573,7 @@ fn lower_compound_assignment(
         )
     });
     let plan = build_field_chain(&head_ty, target, ctx.registry, ctx.output);
-    let head_ir_type =
-        resolved_type_to_ir_type(&head_ty, ctx.registry, &mut ctx.output.instantiations);
+    let head_ir_type = resolved_type_to_ir_type(&head_ty, ctx.registry, ctx.output);
 
     let root_value = ctx.fresh_value(head_ir_type.clone());
     ctx.cfg.append(

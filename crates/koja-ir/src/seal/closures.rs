@@ -21,24 +21,25 @@
 //! closure seal failures indicate a closure lowering bug,
 //! not a user error.
 
+use crate::declarations::Declarations;
 use crate::function::{FunctionKind, IRFunction, IRInstruction, IRSymbol};
 use crate::package::IRPackage;
 use crate::types::IRType;
 
 use super::{require_supported_type, seal_panic};
 
-pub(super) fn seal_closure_decls(pkg: &IRPackage) {
+pub(super) fn seal_closure_decls(pkg: &IRPackage, declarations: &Declarations<'_>) {
     for function in pkg.functions.values() {
         match &function.kind {
             // Every closure-shaped kind reads captures via `LoadCapture`
             // keyed into `env_layout`: the user-visible body and the
             // synthesized `$drop_env$` / `$eq_env$` glue.
             FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
-                seal_closure_function(function, env_layout);
+                seal_closure_function(function, env_layout, declarations);
                 forbid_loadcaptureof_in(function);
             }
             FunctionKind::EqClosureGlue { env_layout } => {
-                seal_closure_function(function, env_layout);
+                seal_closure_function(function, env_layout, declarations);
                 seal_eq_glue_shape(function, env_layout);
             }
             // `CopyClosureGlue` is env-keyed too, but its body is
@@ -64,10 +65,14 @@ pub(super) fn seal_closure_decls(pkg: &IRPackage) {
 /// supported set, and every `LoadCapture` / `LoadCaptureOf` keyed
 /// into that layout is in range with a matching `ty`. A layout slot
 /// may be read many times. An out-of-range index is the violation.
-fn seal_closure_function(function: &IRFunction, env_layout: &[IRType]) {
+fn seal_closure_function(
+    function: &IRFunction,
+    env_layout: &[IRType],
+    declarations: &Declarations<'_>,
+) {
     let owner = format!("closure `{}`", function.symbol);
     for (index, ty) in env_layout.iter().enumerate() {
-        require_supported_type(ty, &|| format!("{owner} env_layout[{index}]"));
+        require_supported_type(ty, declarations, &|| format!("{owner} env_layout[{index}]"));
     }
     for block in &function.blocks {
         for inst in &block.instructions {
@@ -290,6 +295,7 @@ mod tests {
 
     use koja_ast::identifier::{Identifier, LocalId};
 
+    use crate::declarations::Declarations;
     use crate::function::{
         FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction,
         IRSymbol, IRTerminator,
@@ -302,6 +308,11 @@ mod tests {
 
     fn symbol(name: &str) -> IRSymbol {
         IRSymbol::from_identifier(&Identifier::single("TestApp", name))
+    }
+
+    /// Seal the closure decls of `pkg` against its own declarations.
+    fn seal_decls(pkg: &IRPackage) {
+        seal_closure_decls(pkg, &Declarations::new(std::slice::from_ref(pkg)));
     }
 
     /// Build a minimal `FunctionKind::Closure` body with the given
@@ -384,7 +395,7 @@ mod tests {
     #[test]
     fn well_formed_closure_decl_passes_seal() {
         let pkg = package_with(vec![closure_function("F__closure0", vec![IRType::Int64])]);
-        seal_closure_decls(&pkg);
+        seal_decls(&pkg);
     }
 
     #[test]
@@ -399,7 +410,7 @@ mod tests {
                 ty: IRType::Int64,
             },
         );
-        seal_closure_decls(&package_with(vec![function]));
+        seal_decls(&package_with(vec![function]));
     }
 
     #[test]
@@ -414,7 +425,7 @@ mod tests {
                 ty: IRType::Bool,
             },
         );
-        seal_closure_decls(&package_with(vec![function]));
+        seal_decls(&package_with(vec![function]));
     }
 
     #[test]
@@ -425,7 +436,7 @@ mod tests {
             dest: ValueId(0),
             ty: IRType::Int64,
         }]);
-        seal_closure_decls(&package_with(vec![function]));
+        seal_decls(&package_with(vec![function]));
     }
 
     #[test]

@@ -361,7 +361,7 @@ fn assert_built_union(script: &IRScript, name: &str) {
         );
     };
     assert!(
-        matches!(ty, IRType::Union { .. }),
+        matches!(ty, IRType::Union(_)),
         "expected `{name}` to have a union type, got {ty:?}",
     );
 }

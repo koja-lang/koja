@@ -53,6 +53,7 @@ use crate::cfg::CFGBuilder;
 use crate::function::{IRBasicBlock, IRBlockId, IRFunction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
+use crate::package::IRPackage;
 use crate::types::{IRType, ValueId};
 use crate::union_decl::{IRUnionDecl, union_members};
 
@@ -70,12 +71,10 @@ pub(crate) struct LowerOutput {
     /// wrapper.
     pub(crate) fn_as_closure_wrappers: BTreeMap<IRSymbol, IRSymbol>,
     pub(crate) instantiations: Vec<Instantiation>,
-    /// The declaration of each [`IRType::NamedUnion`], keyed by the
-    /// alias name. [`super::lower_named_unions`] fills it before any
-    /// function lowers, so lowering can read the members of a named
-    /// union. `lower_package` copies each declaration into the
-    /// package that owns the alias.
-    pub(crate) named_unions: BTreeMap<IRSymbol, IRUnionDecl>,
+    /// The anonymous unions that the current lowering unit named.
+    /// Each unit copies their declarations into its own package and
+    /// clears the set. See [`LowerOutput::drain_pending_unions`].
+    pub(crate) pending_unions: BTreeSet<IRSymbol>,
     /// Dedupe set for [`crate::FunctionKind::SpawnWrapper`] symbols
     /// minted during `spawn` lowering. Each state cell gets one
     /// wrapper per [`super::process`] turn-around regardless of how
@@ -90,12 +89,60 @@ pub(crate) struct LowerOutput {
     /// Union symbols whose `hash/1` and `equals?/2` are already
     /// synthesized, so `Map<U, V>` and `Set<U>` share one pair.
     pub(crate) union_key_conformances: BTreeSet<IRSymbol>,
+    /// The declaration of every union that lowering has named, keyed
+    /// by the union symbol. [`super::lower_named_unions`] declares
+    /// each recursive alias before any function lowers.
+    /// [`LowerOutput::declare_anonymous_union`] declares an anonymous
+    /// union when a type first names it. Lowering reads the members
+    /// of a union from here.
+    pub(crate) unions: BTreeMap<IRSymbol, IRUnionDecl>,
 }
 
 impl LowerOutput {
+    /// Declare the anonymous union `symbol` when it is new, and
+    /// record that the current lowering unit named it. The sizing
+    /// pass sets the payload size after the type cycles are broken.
+    pub(crate) fn declare_anonymous_union(&mut self, symbol: &IRSymbol, members: Vec<IRType>) {
+        self.unions
+            .entry(symbol.clone())
+            .or_insert_with(|| IRUnionDecl {
+                max_payload_size: 0,
+                members,
+                symbol: symbol.clone(),
+            });
+        self.pending_unions.insert(symbol.clone());
+    }
+
+    /// Copy the declaration of each pending union into `unions` and
+    /// clear the pending set. `unions` holds the union declarations
+    /// of the package that the current lowering unit belongs to, so
+    /// each package that names an anonymous union declares it.
+    pub(crate) fn drain_pending_unions(&mut self, unions: &mut BTreeMap<IRSymbol, IRUnionDecl>) {
+        for symbol in std::mem::take(&mut self.pending_unions) {
+            let declaration = &self.unions[&symbol];
+            unions.entry(symbol).or_insert_with(|| declaration.clone());
+        }
+    }
+
+    /// Run [`Self::drain_pending_unions`] into the package named
+    /// `owner`. Panics if the package is missing, since that is a
+    /// compiler bug.
+    pub(crate) fn drain_pending_unions_into(&mut self, packages: &mut [IRPackage], owner: &str) {
+        if self.pending_unions.is_empty() {
+            return;
+        }
+        let package = packages
+            .iter_mut()
+            .find(|package| package.package == owner)
+            .unwrap_or_else(|| {
+                panic!("IR package routing: pending unions name missing owner package `{owner}`")
+            });
+        self.drain_pending_unions(&mut package.unions);
+    }
+
     /// The members of the union type `ty`. See [`union_members`].
-    pub(crate) fn union_members<'a>(&'a self, ty: &'a IRType) -> Option<&'a [IRType]> {
-        union_members(ty, |symbol| self.named_unions.get(symbol))
+    pub(crate) fn union_members(&self, ty: &IRType) -> Option<&[IRType]> {
+        union_members(ty, |symbol| self.unions.get(symbol))
     }
 }
 

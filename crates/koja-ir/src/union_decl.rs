@@ -1,29 +1,26 @@
 //! Lowered union declarations and the helper that precomputes
 //! their tagged-runtime payload size.
 //!
-//! A surface union `A | B | C` lowers to an `IRType::Union { mangled,
-//! members }` head plus a per-program [`IRUnionDecl`] entry keyed by
-//! the same `mangled` symbol. Backends look the decl up to discover
-//! `max_payload_size`, the byte width of the largest member, which
-//! determines the trailing `[M x i64]` payload buffer in the
-//! `{ i64, [M x i64] }` LLVM struct layout.
+//! A surface union `A | B | C` lowers to an `IRType::Union` that
+//! holds a symbol, plus an [`IRUnionDecl`] keyed by the same symbol.
+//! The decl holds the members and `max_payload_size`, the byte width
+//! of the largest member, which determines the trailing `[M x i64]`
+//! payload buffer in the `{ i64, [M x i64] }` LLVM struct layout.
+//! [`union_members`] reads the members.
 //!
 //! Every distinct canonical surface union (sorted, deduped, alias-
-//! peeled member set) yields the same `mangled` symbol and a single
-//! shared decl.
+//! peeled member set) yields the same symbol. Each package that
+//! names the union declares it, and the copies are equal.
 //!
-//! The union of a recursive `type` alias lowers to an
-//! `IRType::NamedUnion` head instead. Its decl is keyed by the alias
-//! name and exists before function lowering starts. [`union_members`]
-//! reads the members of either head.
+//! The union of a recursive `type` alias has the alias name as its
+//! symbol. Only the package of the alias declares it, and its decl
+//! exists before function lowering starts.
 
 use std::collections::BTreeMap;
 
 use crate::declarations::Declarations;
 use crate::enum_decl::{IREnumDecl, IRVariantPayload};
-use crate::function::{
-    BlockParam, IRBasicBlock, IRFunction, IRInstruction, IRSymbol, IRTerminator,
-};
+use crate::function::IRSymbol;
 use crate::package::IRPackage;
 use crate::types::IRType;
 
@@ -33,7 +30,7 @@ use crate::types::IRType;
 /// the largest member as computed by [`size_in_bytes`]. Backends
 /// consult `max_payload_size` to size the trailing `[M x i64]`
 /// payload buffer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct IRUnionDecl {
     pub max_payload_size: u32,
     pub members: Vec<IRType>,
@@ -41,25 +38,21 @@ pub struct IRUnionDecl {
 }
 
 /// The members of a union type in canonical order, or `None` when
-/// `ty` is not a union. An [`IRType::Union`] carries its members
-/// inline. An [`IRType::NamedUnion`] keeps them on its declaration,
-/// which `named` finds. Panics when `named` finds no declaration,
-/// because lowering declares each named union before any type names
-/// it.
+/// `ty` is not a union. The members live on the declaration, which
+/// `declaration` finds by the union symbol. Panics when it finds
+/// none, because lowering declares each union when a type first
+/// names it.
 pub(crate) fn union_members<'a>(
-    ty: &'a IRType,
-    named: impl FnOnce(&IRSymbol) -> Option<&'a IRUnionDecl>,
+    ty: &IRType,
+    declaration: impl FnOnce(&IRSymbol) -> Option<&'a IRUnionDecl>,
 ) -> Option<&'a [IRType]> {
-    match ty {
-        IRType::NamedUnion(symbol) => {
-            let Some(decl) = named(symbol) else {
-                panic!("IR: named union `{symbol}` has no declaration");
-            };
-            Some(&decl.members)
-        }
-        IRType::Union { members, .. } => Some(members),
-        _ => None,
-    }
+    let IRType::Union(symbol) = ty else {
+        return None;
+    };
+    let Some(decl) = declaration(symbol) else {
+        panic!("IR: union `{symbol}` has no declaration");
+    };
+    Some(&decl.members)
 }
 
 /// Conservative byte-size walker used to size the trailing
@@ -73,11 +66,10 @@ pub(crate) fn union_members<'a>(
 /// padding* to natural alignment. Enums use the same `{ i8 tag +
 /// align padding + max-payload }` blob the LLVM enum layout
 /// produces, with the outer rounded up to its max-align stride.
-/// Nested unions resolve through `unions`. If the inner decl
-/// is not yet registered, fall back to `1 + max(member_size)` as
-/// a conservative upper bound so the caller's first sizing pass
-/// still produces a usable number that a later
-/// [`refine_nested_union_sizes`] pass can settle.
+/// A union resolves through `unions`. Before the sizing pass
+/// reaches its decl, the payload size is 0, a lower bound that
+/// [`refine_nested_union_sizes`] settles. Panics when `unions` has
+/// no decl for the union.
 pub(crate) fn size_in_bytes(
     ty: &IRType,
     declarations: &Declarations<'_>,
@@ -122,23 +114,15 @@ fn size_and_align(
             Some(decl) => enum_size(decl, declarations, unions),
             None => (PTR_BYTES, PTR_BYTES),
         },
-        // A named union sizes through its declaration only. A walk
-        // into its members could reach the union again. Before the
-        // first sizing pass registers it, the size is a lower bound
-        // that `refine_nested_union_sizes` settles.
-        IRType::NamedUnion(symbol) => {
-            union_size(unions.get(symbol).map_or(0, |decl| decl.max_payload_size))
-        }
-        IRType::Union { mangled, members } => match unions.get(mangled) {
+        // A union sizes through its declaration only. A walk into
+        // its members could reach the union again. Before the sizing
+        // pass reaches the declaration, the size is a lower bound
+        // that `refine_nested_union_sizes` settles. Lowering declares
+        // each union when a type first names it, so a union with no
+        // declaration is a compiler bug.
+        IRType::Union(symbol) => match unions.get(symbol) {
             Some(decl) => union_size(decl.max_payload_size),
-            None => {
-                let payload = members
-                    .iter()
-                    .map(|m| size_in_bytes(m, declarations, unions))
-                    .max()
-                    .unwrap_or(0);
-                union_size(payload)
-            }
+            None => panic!("IR: union `{symbol}` has no declaration"),
         },
     }
 }
@@ -215,99 +199,24 @@ fn union_size(payload: u32) -> (u32, u32) {
     (8 + 8 * payload.div_ceil(8), 8)
 }
 
-/// Walk every IR type referenced in `packages` (and, for script
-/// mode, the top-level `script_blocks`) and register one
-/// [`IRUnionDecl`] per distinct mangled `IRType::Union` head into
-/// the package that first observed it. Script-only unions land in
-/// the first package. Cross-package lookup goes through
-/// [`crate::IRProgram::union_decl`], so where the decl physically
-/// lives does not matter for backends. What matters is that every
-/// observed mangled symbol has exactly one entry.
-///
-/// A named union is declared before this pass, with no payload size.
-/// The pass walks the members of each such declaration for the unions
-/// they hold, and sizes the declaration with the ones it discovers.
-/// The type cycles must be broken first, or the size of a struct that
-/// holds its own union has no end.
-pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBasicBlock]) {
+/// Set `max_payload_size` on every union declaration in `packages`.
+/// Lowering declares each union with no payload size, in every
+/// package that names it. The copies of one declaration get the same
+/// size. The type cycles must be broken first, or the size of a
+/// struct that holds its own union has no end.
+pub(crate) fn size_unions(packages: &mut [IRPackage]) {
     let declarations = Declarations::new(&*packages);
-    let mut seen: BTreeMap<IRSymbol, usize> = BTreeMap::new();
-    let mut staged: Vec<BTreeMap<IRSymbol, IRType>> =
-        packages.iter().map(|_| BTreeMap::new()).collect();
-    for (idx, pkg) in packages.iter().enumerate() {
-        let mut local: BTreeMap<IRSymbol, IRType> = BTreeMap::new();
-        for decl in pkg.structs.values() {
-            for field in &decl.fields {
-                walk_type(&field.ir_type, &mut local);
-            }
-        }
-        for decl in pkg.enums.values() {
-            for variant in &decl.variants {
-                walk_variant_payload(&variant.payload, &mut local);
-            }
-        }
-        for function in pkg.functions.values() {
-            walk_function(function, &mut local);
-        }
-        for decl in pkg.unions.values() {
-            for member in &decl.members {
-                walk_type(member, &mut local);
-            }
-        }
-        for (mangled, ir_type) in local {
-            if seen.contains_key(&mangled) {
-                continue;
-            }
-            seen.insert(mangled.clone(), idx);
-            staged[idx].insert(mangled, ir_type);
-        }
-    }
-    if !script_blocks.is_empty() && !packages.is_empty() {
-        let mut local: BTreeMap<IRSymbol, IRType> = BTreeMap::new();
-        for block in script_blocks {
-            walk_block(block, &mut local);
-        }
-        for (mangled, ir_type) in local {
-            if !seen.contains_key(&mangled) {
-                seen.insert(mangled.clone(), 0);
-                staged[0].insert(mangled, ir_type);
-            }
-        }
-    }
-    let empty_unions: BTreeMap<IRSymbol, IRUnionDecl> = BTreeMap::new();
-    // Start from the named unions, so the fixpoint below sizes them
-    // with the discovered ones.
-    let mut decls_by_pkg: Vec<BTreeMap<IRSymbol, IRUnionDecl>> =
+    let mut sized: Vec<BTreeMap<IRSymbol, IRUnionDecl>> =
         packages.iter().map(|pkg| pkg.unions.clone()).collect();
-    for (idx, locals) in staged.iter().enumerate() {
-        for (mangled, ir_type) in locals {
-            let IRType::Union { members, .. } = ir_type else {
-                continue;
-            };
-            let max_payload_size = members
-                .iter()
-                .map(|m| size_in_bytes(m, &declarations, &empty_unions))
-                .max()
-                .unwrap_or(0);
-            decls_by_pkg[idx].insert(
-                mangled.clone(),
-                IRUnionDecl {
-                    max_payload_size,
-                    members: members.clone(),
-                    symbol: mangled.clone(),
-                },
-            );
-        }
-    }
-    refine_nested_union_sizes(&mut decls_by_pkg, &declarations);
-    for (pkg, unions) in packages.iter_mut().zip(decls_by_pkg) {
-        pkg.unions.extend(unions);
+    refine_nested_union_sizes(&mut sized, &declarations);
+    for (pkg, unions) in packages.iter_mut().zip(sized) {
+        pkg.unions = unions;
     }
 }
 
-/// Recompute `max_payload_size` for any union whose member set
-/// includes another union. Iterates until fixpoint so chained
-/// `(A | B) | C` references settle into stable byte counts.
+/// Compute `max_payload_size` for every declaration in `staged`.
+/// Iterates until fixpoint, so a union that holds another union
+/// settles into a stable byte count after the inner one does.
 fn refine_nested_union_sizes(
     staged: &mut [BTreeMap<IRSymbol, IRUnionDecl>],
     declarations: &Declarations<'_>,
@@ -338,204 +247,6 @@ fn refine_nested_union_sizes(
     }
 }
 
-fn walk_function(function: &IRFunction, out: &mut BTreeMap<IRSymbol, IRType>) {
-    for param in &function.params {
-        walk_type(&param.ty, out);
-    }
-    walk_type(&function.return_type, out);
-    for block in &function.blocks {
-        walk_block(block, out);
-    }
-}
-
-fn walk_block(block: &IRBasicBlock, out: &mut BTreeMap<IRSymbol, IRType>) {
-    for param in &block.params {
-        walk_block_param(param, out);
-    }
-    for instruction in &block.instructions {
-        walk_instruction(instruction, out);
-    }
-    walk_terminator(&block.terminator, out);
-}
-
-fn walk_block_param(param: &BlockParam, out: &mut BTreeMap<IRSymbol, IRType>) {
-    walk_type(&param.ty, out);
-}
-
-fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IRType>) {
-    match instruction {
-        IRInstruction::CallClosure {
-            param_types,
-            result_ty,
-            ..
-        } => {
-            for param in param_types {
-                walk_type(param, out);
-            }
-            walk_type(result_ty, out);
-        }
-        IRInstruction::Clone { ty, .. }
-        | IRInstruction::ClosureEquals { ty, .. }
-        | IRInstruction::DeepCopy { ty, .. }
-        | IRInstruction::DropLocal { ty, .. }
-        | IRInstruction::DropValue { ty, .. } => walk_type(ty, out),
-        IRInstruction::EnumPayloadFieldGet { field_type, .. } => walk_type(field_type, out),
-        IRInstruction::FieldGet { field_type, .. } | IRInstruction::FieldSet { field_type, .. } => {
-            walk_type(field_type, out)
-        }
-        IRInstruction::LoadCapture { ty, .. }
-        | IRInstruction::LoadCaptureOf { ty, .. }
-        | IRInstruction::LoadConst { ty, .. }
-        | IRInstruction::LocalDecl { ty, .. }
-        | IRInstruction::LocalRead { ty, .. }
-        | IRInstruction::MakeClosure { ty, .. } => walk_type(ty, out),
-        IRInstruction::Receive {
-            arms, result_type, ..
-        } => {
-            walk_type(result_type, out);
-            for arm in arms {
-                walk_type(&arm.payload_type, out);
-            }
-        }
-        IRInstruction::NumericWiden { from, to, .. } => {
-            walk_type(from, out);
-            walk_type(to, out);
-        }
-        IRInstruction::Spawn { config_type, .. } => walk_type(config_type, out),
-        IRInstruction::TupleGet { element_type, .. } => walk_type(element_type, out),
-        IRInstruction::TupleInit { ty, .. } => {
-            for element in ty {
-                walk_type(element, out);
-            }
-        }
-        IRInstruction::UnionWrap {
-            member_type, ty, ..
-        }
-        | IRInstruction::UnionPayloadGet {
-            member_type, ty, ..
-        } => {
-            walk_type(member_type, out);
-            walk_type(ty, out);
-        }
-        IRInstruction::UnionTagGet { ty, .. } => walk_type(ty, out),
-        IRInstruction::BinaryMatch { segments, .. } => {
-            for segment in segments {
-                walk_binary_pattern(segment, out);
-            }
-        }
-        IRInstruction::BinaryConstruct { .. }
-        | IRInstruction::BinaryOp { .. }
-        | IRInstruction::Call { .. }
-        | IRInstruction::Concat { .. }
-        | IRInstruction::Const { .. }
-        | IRInstruction::ConsumeLocal { .. }
-        | IRInstruction::EnumConstruct { .. }
-        | IRInstruction::EnumTagGet { .. }
-        | IRInstruction::IndirectPresent { .. }
-        | IRInstruction::LocalWrite { .. }
-        | IRInstruction::ProcessExit { .. }
-        | IRInstruction::SetPriority { .. }
-        | IRInstruction::StructInit { .. }
-        | IRInstruction::UnaryOp { .. }
-        | IRInstruction::YieldCheck => {}
-    }
-}
-
-/// Per-segment IRType walker for the binary-pattern instruction.
-/// Only [`crate::LoweredBinaryPattern::BindInt`] /
-/// [`crate::LoweredBinaryPattern::GreedyTail`]
-/// carry types. The rest are pure shape + bit-offset metadata.
-fn walk_binary_pattern(
-    segment: &crate::types::LoweredBinaryPattern,
-    out: &mut BTreeMap<IRSymbol, IRType>,
-) {
-    use crate::types::LoweredBinaryPattern;
-    match segment {
-        LoweredBinaryPattern::BindInt { ty, .. } | LoweredBinaryPattern::GreedyTail { ty, .. } => {
-            walk_type(ty, out);
-        }
-        LoweredBinaryPattern::LiteralInt { .. }
-        | LoweredBinaryPattern::LiteralBytes { .. }
-        | LoweredBinaryPattern::Discard { .. } => {}
-    }
-}
-
-fn walk_terminator(terminator: &IRTerminator, _out: &mut BTreeMap<IRSymbol, IRType>) {
-    match terminator {
-        IRTerminator::Branch(_)
-        | IRTerminator::CondBranch { .. }
-        | IRTerminator::Return { .. }
-        | IRTerminator::TailCall { .. }
-        | IRTerminator::Unreachable => {}
-    }
-}
-
-fn walk_variant_payload(payload: &IRVariantPayload, out: &mut BTreeMap<IRSymbol, IRType>) {
-    match payload {
-        IRVariantPayload::Unit => {}
-        IRVariantPayload::Tuple(types) => {
-            for ty in types {
-                walk_type(ty, out);
-            }
-        }
-        IRVariantPayload::Struct(fields) => {
-            for field in fields {
-                walk_type(&field.ir_type, out);
-            }
-        }
-    }
-}
-
-fn walk_type(ty: &IRType, out: &mut BTreeMap<IRSymbol, IRType>) {
-    match ty {
-        IRType::Binary
-        | IRType::Bits
-        | IRType::Bool
-        | IRType::Enum(_)
-        | IRType::Float32
-        | IRType::Float64
-        | IRType::Int8
-        | IRType::Int16
-        | IRType::Int32
-        | IRType::Int64
-        // A named union has its declaration already, and
-        // `discover_unions` walks the members from there.
-        | IRType::NamedUnion(_)
-        | IRType::String
-        | IRType::Struct(_)
-        | IRType::UInt8
-        | IRType::UInt16
-        | IRType::UInt32
-        | IRType::UInt64
-        | IRType::Unit => {}
-        IRType::CPtr(inner)
-        | IRType::Indirect(inner)
-        | IRType::List(inner)
-        | IRType::Set(inner) => walk_type(inner, out),
-        IRType::Map { key, value } => {
-            walk_type(key, out);
-            walk_type(value, out);
-        }
-        IRType::Function { params, ret, .. } => {
-            for param in params {
-                walk_type(param, out);
-            }
-            walk_type(ret, out);
-        }
-        IRType::Tuple(elements) => {
-            for element in elements {
-                walk_type(element, out);
-            }
-        }
-        IRType::Union { mangled, members } => {
-            for member in members {
-                walk_type(member, out);
-            }
-            out.entry(mangled.clone()).or_insert_with(|| ty.clone());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,27 +267,100 @@ mod tests {
         assert_eq!(size(&IRType::Tuple(vec![IRType::Unit, IRType::Unit])), 2);
     }
 
-    fn union_of(name: &str, members: Vec<IRType>) -> IRType {
-        IRType::Union {
-            mangled: IRSymbol::synthetic(name.to_string()),
+    fn union_type(name: &str) -> IRType {
+        IRType::Union(IRSymbol::synthetic(name.to_string()))
+    }
+
+    fn unsized_decl(name: &str, members: Vec<IRType>) -> IRUnionDecl {
+        IRUnionDecl {
+            max_payload_size: 0,
             members,
+            symbol: IRSymbol::synthetic(name.to_string()),
         }
+    }
+
+    fn package_with(name: &str, unions: Vec<IRUnionDecl>) -> IRPackage {
+        IRPackage {
+            constants: BTreeMap::new(),
+            enums: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            package: name.to_string(),
+            structs: BTreeMap::new(),
+            unions: unions
+                .into_iter()
+                .map(|decl| (decl.symbol.clone(), decl))
+                .collect(),
+        }
+    }
+
+    /// The size of the union `name` after the sizing pass, read
+    /// through the declarations of the first package.
+    fn sized(packages: &[IRPackage], name: &str) -> u32 {
+        size_in_bytes(
+            &union_type(name),
+            &Declarations::new(packages),
+            &packages[0].unions,
+        )
     }
 
     #[test]
     fn unions_are_a_tag_word_plus_word_chunked_payload() {
-        // A 1-byte payload rounds up to one word: { i64, [1 x i64] }.
-        assert_eq!(size(&union_of("U_bool", vec![IRType::Bool])), 16);
-        // A 16-byte tuple payload is two words: { i64, [2 x i64] }.
         let tuple = IRType::Tuple(vec![IRType::Unit, IRType::Int64]);
-        assert_eq!(size(&union_of("U_tuple", vec![tuple])), 24);
+        let mut packages = vec![package_with(
+            "TestApp",
+            vec![
+                unsized_decl("U_bool", vec![IRType::Bool]),
+                unsized_decl("U_tuple", vec![tuple]),
+            ],
+        )];
+        size_unions(&mut packages);
+        // A 1-byte payload rounds up to one word: { i64, [1 x i64] }.
+        assert_eq!(sized(&packages, "U_bool"), 16);
+        // A 16-byte tuple payload is two words: { i64, [2 x i64] }.
+        assert_eq!(sized(&packages, "U_tuple"), 24);
     }
 
     #[test]
     fn nested_unions_size_through_the_outer_shape() {
+        let mut packages = vec![package_with(
+            "TestApp",
+            vec![
+                unsized_decl("U_inner", vec![IRType::Int64]),
+                unsized_decl("U_outer", vec![union_type("U_inner")]),
+            ],
+        )];
+        size_unions(&mut packages);
         // Inner { i64, [1 x i64] } = 16 bytes becomes the outer's
         // payload: { i64, [2 x i64] } = 24 bytes.
-        let inner = union_of("U_inner", vec![IRType::Int64]);
-        assert_eq!(size(&union_of("U_outer", vec![inner])), 24);
+        assert_eq!(sized(&packages, "U_outer"), 24);
+    }
+
+    #[test]
+    #[should_panic(expected = "union `U_missing` has no declaration")]
+    fn a_union_with_no_declaration_panics() {
+        size(&union_type("U_missing"));
+    }
+
+    #[test]
+    #[should_panic(expected = "union `U_missing` has no declaration")]
+    fn a_member_that_names_a_union_with_no_declaration_panics() {
+        let mut packages = vec![package_with(
+            "TestApp",
+            vec![unsized_decl("U_outer", vec![union_type("U_missing")])],
+        )];
+        size_unions(&mut packages);
+    }
+
+    #[test]
+    fn copies_of_one_declaration_get_the_same_size() {
+        let decl = unsized_decl("U_shared", vec![IRType::Int64, IRType::String]);
+        let mut packages = vec![
+            package_with("First", vec![decl.clone()]),
+            package_with("Second", vec![decl]),
+        ];
+        size_unions(&mut packages);
+        let symbol = IRSymbol::synthetic("U_shared".to_string());
+        assert_eq!(packages[0].unions[&symbol].max_payload_size, 8);
+        assert_eq!(packages[0].unions[&symbol], packages[1].unions[&symbol]);
     }
 }

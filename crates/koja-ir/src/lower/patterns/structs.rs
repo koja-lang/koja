@@ -93,8 +93,7 @@ fn struct_pattern_target<'r>(
     what: &str,
 ) -> (&'r StructDefinition, IRSymbol, GlobalRegistryId) {
     let definition = struct_definition_from_resolution(subject_ty, ctx.registry, what);
-    let struct_symbol =
-        resolved_struct_symbol(subject_ty, ctx.registry, &mut ctx.output.instantiations);
+    let struct_symbol = resolved_struct_symbol(subject_ty, ctx.registry, ctx.output);
     let owner = global_id_of(subject_ty, &format!("{what} subject"));
     (definition, struct_symbol, owner)
 }
@@ -270,7 +269,7 @@ fn collect_catch_all_binds(
                 let element_ir = super::super::package::resolved_type_to_ir_type(
                     element_resolved,
                     ctx.registry,
-                    &mut ctx.output.instantiations,
+                    ctx.output,
                 );
                 chain.push(BindStep {
                     op: BindOp::TupleElement {

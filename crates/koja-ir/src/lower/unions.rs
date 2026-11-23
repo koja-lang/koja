@@ -74,8 +74,7 @@ pub(super) fn lower_union_conformance_call(
              (typecheck resolve invariant violation)",
         );
     };
-    let union_ty =
-        resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
+    let union_ty = resolved_type_to_ir_type(&structural, ctx.registry, ctx.output);
     if method == "hash" {
         let (value, current) = lower_expr(receiver, ctx, block)?;
         let subject = UnionSubject {
@@ -117,8 +116,7 @@ fn lower_union_member_call(
              (typecheck resolve invariant violation)",
         );
     };
-    let union_ty =
-        resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
+    let union_ty = resolved_type_to_ir_type(&structural, ctx.registry, ctx.output);
     let (value, mut current) = lower_expr(receiver, ctx, block)?;
     let mut arg_values = Vec::with_capacity(args.len());
     for arg in args {
@@ -197,8 +195,7 @@ pub(super) fn emit_union_switch(
             current = next;
             arm_block
         };
-        let member_ir =
-            resolved_type_to_ir_type(member_ty, ctx.registry, &mut ctx.output.instantiations);
+        let member_ir = resolved_type_to_ir_type(member_ty, ctx.registry, ctx.output);
         let payload = emit_union_payload(value, member_index, &member_ir, union_ty, ctx, arm_block);
         let (arm_result, after) = arm(
             UnionArm {

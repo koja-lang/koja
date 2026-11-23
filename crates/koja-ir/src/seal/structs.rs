@@ -20,6 +20,7 @@
 
 use std::collections::HashSet;
 
+use crate::declarations::Declarations;
 use crate::function::{IRFunction, IRIndirectSlot, IRInstruction, IRSymbol};
 use crate::package::IRPackage;
 use crate::struct_decl::{IRStructDecl, IRStructField};
@@ -27,7 +28,7 @@ use crate::types::IRType;
 
 use super::{field_type_matches, require_supported_type, seal_panic};
 
-pub(super) fn seal_struct_decls(pkg: &IRPackage) {
+pub(super) fn seal_struct_decls(pkg: &IRPackage, declarations: &Declarations<'_>) {
     for (sym, decl) in &pkg.structs {
         if sym != &decl.symbol {
             seal_panic(&format!(
@@ -35,13 +36,13 @@ pub(super) fn seal_struct_decls(pkg: &IRPackage) {
                 pkg.package, decl.symbol,
             ));
         }
-        seal_struct_decl(decl);
+        seal_struct_decl(decl, declarations);
     }
 }
 
-fn seal_struct_decl(decl: &IRStructDecl) {
+fn seal_struct_decl(decl: &IRStructDecl, declarations: &Declarations<'_>) {
     let owner = format!("struct `{}`", decl.symbol);
-    seal_named_field_layout(&owner, &decl.fields);
+    seal_named_field_layout(&owner, &decl.fields, declarations);
 }
 
 /// Validate a named-field layout (struct decl or enum struct-variant
@@ -54,7 +55,11 @@ fn seal_struct_decl(decl: &IRStructDecl) {
 /// [`IRStructField`] vocabulary. The enum slice's struct
 /// variants are structurally a struct's field roster, and the seal
 /// surface should be identical.
-pub(super) fn seal_named_field_layout(owner: &str, fields: &[IRStructField]) {
+pub(super) fn seal_named_field_layout(
+    owner: &str,
+    fields: &[IRStructField],
+    declarations: &Declarations<'_>,
+) {
     let mut seen_names: HashSet<&str> = HashSet::with_capacity(fields.len());
     for (position, field) in fields.iter().enumerate() {
         if field.index as usize != position {
@@ -71,7 +76,7 @@ pub(super) fn seal_named_field_layout(owner: &str, fields: &[IRStructField]) {
                 field.name,
             ));
         }
-        require_supported_type(&field.ir_type, &|| {
+        require_supported_type(&field.ir_type, declarations, &|| {
             format!("{owner} field `{}` type", field.name)
         });
     }
@@ -318,6 +323,7 @@ mod tests {
 
     use koja_ast::identifier::Identifier;
 
+    use crate::declarations::Declarations;
     use crate::function::{IRIndirectSlot, IRInstruction, IRSymbol};
     use crate::package::IRPackage;
     use crate::struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
@@ -327,6 +333,11 @@ mod tests {
 
     fn symbol(name: &str) -> IRSymbol {
         IRSymbol::from_identifier(&Identifier::single("TestApp", name))
+    }
+
+    /// Seal the struct decls of `pkg` against its own declarations.
+    fn seal_decls(pkg: &IRPackage) {
+        seal_struct_decls(pkg, &Declarations::new(std::slice::from_ref(pkg)));
     }
 
     fn point_decl() -> IRStructDecl {
@@ -369,7 +380,7 @@ mod tests {
     #[test]
     fn well_formed_decls_pass_seal() {
         let pkg = package_with(point_decl());
-        seal_struct_decls(&pkg);
+        seal_decls(&pkg);
     }
 
     #[test]
@@ -377,7 +388,7 @@ mod tests {
     fn non_monotonic_field_index_panics() {
         let mut decl = point_decl();
         decl.fields[1].index = 7;
-        seal_struct_decls(&package_with(decl));
+        seal_decls(&package_with(decl));
     }
 
     #[test]
@@ -385,7 +396,7 @@ mod tests {
     fn duplicate_field_name_panics() {
         let mut decl = point_decl();
         decl.fields[1].name = "x".to_string();
-        seal_struct_decls(&package_with(decl));
+        seal_decls(&package_with(decl));
     }
 
     #[test]
@@ -402,7 +413,17 @@ mod tests {
             structs,
             unions: BTreeMap::new(),
         };
-        seal_struct_decls(&pkg);
+        seal_decls(&pkg);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "names struct `TestApp.Missing`, which is not registered in any package"
+    )]
+    fn field_that_names_a_struct_with_no_declaration_panics() {
+        let mut decl = point_decl();
+        decl.fields[1].ir_type = IRType::Struct(symbol("Missing"));
+        seal_decls(&package_with(decl));
     }
 
     #[test]

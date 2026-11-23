@@ -17,12 +17,11 @@ pub(super) fn seal_union_payload_get(
 ) {
     let owner = scope.owner;
     scope.require_value_type(value, ty, "UnionPayloadGet value");
-    let (IRType::NamedUnion(mangled) | IRType::Union { mangled, .. }) = ty else {
+    let IRType::Union(symbol) = ty else {
         seal_panic(&format!("{owner} UnionPayloadGet source is not a union"));
     };
-    registered(scope.declarations.union_decl(mangled), "union", mangled);
-    let members = scope.declarations.union_members(ty).unwrap_or_default();
-    let Some(expected) = members.get(member_index as usize) else {
+    let declaration = registered(scope.declarations.union_decl(symbol), "union", symbol);
+    let Some(expected) = declaration.members.get(member_index as usize) else {
         seal_panic(&format!(
             "{owner} UnionPayloadGet member index {member_index} is out of range"
         ));
@@ -39,9 +38,7 @@ pub(super) fn seal_union_tag_get(ty: &IRType, value: ValueId, scope: &TypeScope<
 }
 
 /// The target must be a registered union, and the wrapped value must
-/// carry the member type at `member_index`. A structural target must
-/// also spell out the members of its declaration. A named target
-/// carries no members to compare.
+/// carry the member type at `member_index`.
 pub(super) fn seal_union_wrap(
     member_index: u8,
     member_type: &IRType,
@@ -51,20 +48,10 @@ pub(super) fn seal_union_wrap(
 ) {
     let owner = scope.owner;
     scope.require_value_type(value, member_type, "UnionWrap value");
-    let (IRType::NamedUnion(mangled) | IRType::Union { mangled, .. }) = ty else {
+    let IRType::Union(symbol) = ty else {
         seal_panic(&format!("{owner} UnionWrap target is not a union"));
     };
-    let declaration = registered(scope.declarations.union_decl(mangled), "union", mangled);
-    if matches!(ty, IRType::Union { .. }) {
-        require_same_type(
-            &IRType::Union {
-                mangled: declaration.symbol.clone(),
-                members: declaration.members.clone(),
-            },
-            ty,
-            &format!("{owner} UnionWrap declaration"),
-        );
-    }
+    let declaration = registered(scope.declarations.union_decl(symbol), "union", symbol);
     let Some(expected) = declaration.members.get(member_index as usize) else {
         seal_panic(&format!(
             "{owner} UnionWrap member index {member_index} is out of range"
