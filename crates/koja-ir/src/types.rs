@@ -371,9 +371,10 @@ impl ConcatKind {
 /// [`crate::generics::instantiate`] substitutes concrete args first.
 ///
 /// Width and signedness are part of each integer and float variant's
-/// identity, mirroring [`ConstValue`]. `Struct` and `Enum` name a
-/// user declaration by the mangled [`IRSymbol`] that keys
-/// [`crate::IRPackage::structs`] and [`crate::IRPackage::enums`].
+/// identity, mirroring [`ConstValue`]. `Struct`, `Enum`, and `Union`
+/// name a declaration by the mangled [`IRSymbol`] that keys
+/// [`crate::IRPackage::structs`], [`crate::IRPackage::enums`], and
+/// [`crate::IRPackage::unions`].
 /// `CPtr`, `List`, `Map`, and `Set` are primitives with no decl.
 /// Backends own the storage layout of every variant.
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -412,12 +413,6 @@ pub enum IRType {
         key: Box<IRType>,
         value: Box<IRType>,
     },
-    /// Tagged union that a recursive `type` alias names, as in
-    /// `type Tree = Int | List<Tree>`. The symbol is the alias name.
-    /// The members name the union again, so they live on the
-    /// [`crate::IRUnionDecl`] with this symbol and never inline. The
-    /// layout is the same as [`IRType::Union`].
-    NamedUnion(IRSymbol),
     Set(Box<IRType>),
     /// UTF-8 bytes with a trailing `\0` for libc compatibility.
     String,
@@ -431,15 +426,14 @@ pub enum IRType {
     UInt16,
     UInt32,
     UInt64,
-    /// Tagged union of two or more member types. `mangled` is the
-    /// canonical symbol (`Union_<m1>_or_<m2>...`) shared by every
-    /// surface union with the same member set, and `members` is that
-    /// set in canonical order. Backends key their layout off
-    /// `mangled` through the program-level `UnionDecl` registry.
-    Union {
-        mangled: IRSymbol,
-        members: Vec<IRType>,
-    },
+    /// Tagged union of two or more member types. The symbol is the
+    /// identity of the type, and the members live on the
+    /// [`crate::IRUnionDecl`] with this symbol. An anonymous union
+    /// has the canonical symbol `Union_<m1>_or_<m2>...`, which every
+    /// surface union with the same member set shares. The union of a
+    /// recursive `type` alias, as in `type Tree = Int | List<Tree>`,
+    /// has the alias name as its symbol.
+    Union(IRSymbol),
     Unit,
 }
 
@@ -465,11 +459,10 @@ impl IRType {
             | Self::Indirect(_)
             | Self::List(_)
             | Self::Map { .. }
-            | Self::NamedUnion(_)
             | Self::Set(_)
             | Self::Struct(_)
             | Self::Tuple(_)
-            | Self::Union { .. } => true,
+            | Self::Union(_) => true,
             Self::Bool
             | Self::CPtr(_)
             | Self::Float32

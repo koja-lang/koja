@@ -96,11 +96,8 @@ pub(super) fn lower_spawn(
     }
     let config_value = copied_config;
 
-    let state_ir_type = resolved_type_to_ir_type(
-        &target.receiver_resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let state_ir_type =
+        resolved_type_to_ir_type(&target.receiver_resolution, ctx.registry, ctx.output);
     let state_symbol = struct_symbol(&state_ir_type).ok_or_else(|| {
         ctx.output.diagnostics.push(Diagnostic::error(
             format!(
@@ -123,8 +120,7 @@ pub(super) fn lower_spawn(
     let wrapper_symbol =
         synthesize_spawn_wrapper(&state_symbol, body_types, ctx.registry, ctx.output);
 
-    let ref_ir_type =
-        resolved_type_to_ir_type(ref_resolution, ctx.registry, &mut ctx.output.instantiations);
+    let ref_ir_type = resolved_type_to_ir_type(ref_resolution, ctx.registry, ctx.output);
     let ref_symbol = struct_symbol(&ref_ir_type).ok_or_else(|| {
         ctx.output.diagnostics.push(Diagnostic::error(
             format!("IR lower: `spawn` result must be `Ref<M, R>` (got `{ref_ir_type:?}`)",),
@@ -249,11 +245,7 @@ fn lower_receive_arm(
         );
     });
 
-    let payload_type = resolved_type_to_ir_type(
-        payload_resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let payload_type = resolved_type_to_ir_type(payload_resolution, ctx.registry, ctx.output);
     let tag = receive_tag_for(payload_resolution, ctx.registry).unwrap_or_else(|| {
         panic!(
             "IR lower: receive arm payload type does not match a known envelope \
@@ -416,12 +408,9 @@ impl ProcessBodyTypes {
             resolution: Resolution::Global(result_id),
             type_args: vec![state_resolved.clone(), stop_reason_resolved.clone()],
         };
-        let result =
-            resolved_type_to_ir_type(&result_resolved, registry, &mut output.instantiations);
-        let stop_reason =
-            resolved_type_to_ir_type(&stop_reason_resolved, registry, &mut output.instantiations);
-        let priority =
-            resolved_type_to_ir_type(&priority_resolved, registry, &mut output.instantiations);
+        let result = resolved_type_to_ir_type(&result_resolved, registry, output);
+        let stop_reason = resolved_type_to_ir_type(&stop_reason_resolved, registry, output);
+        let priority = resolved_type_to_ir_type(&priority_resolved, registry, output);
         let (priority_high_tag, priority_low_tag) = priority_variant_tags(registry, priority_id);
         Self {
             config,

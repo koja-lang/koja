@@ -148,7 +148,8 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
 
 /// Lower the script's top-level statements into the implicit body's
 /// blocks and land any closures they synthesize in the body's own
-/// package. Returns the blocks and the trailing expression's type.
+/// package. That package also declares each anonymous union the
+/// body names. Returns the blocks and the trailing expression's type.
 /// Diagnostics from the body walk return before either.
 fn stage_script_body(
     checked: &CheckedProgram,
@@ -173,6 +174,9 @@ fn stage_script_body(
         for function in synthesized {
             insert_package_function(packages, target_package, function);
         }
+    }
+    if let Some(target_package) = body_package {
+        output.drain_pending_unions_into(packages, target_package);
     }
 
     Ok(lowered.unwrap_or_else(|()| {

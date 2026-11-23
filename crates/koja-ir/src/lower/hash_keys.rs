@@ -60,8 +60,8 @@ fn synthesize_union_hash_eq(
     output: &mut LowerOutput,
 ) {
     let union_resolved = ResolvedType::Union(members.to_vec());
-    let union_ty = resolved_type_to_ir_type(&union_resolved, registry, &mut output.instantiations);
-    let (IRType::NamedUnion(mangled) | IRType::Union { mangled, .. }) = &union_ty else {
+    let union_ty = resolved_type_to_ir_type(&union_resolved, registry, output);
+    let IRType::Union(mangled) = &union_ty else {
         panic!("IR lower: union key `{members:?}` lowered to `{union_ty:?}`");
     };
     if !output.union_key_conformances.insert(mangled.clone()) {

@@ -145,7 +145,7 @@ pub(super) fn finalize_arm_value(
 /// expression to its IR equivalent. Centralized so per-arm helpers
 /// do not redo the registry walk.
 pub(super) fn lower_result_ty(resolution: &ResolvedType, ctx: &mut FnLowerCtx<'_>) -> IRType {
-    resolved_type_to_ir_type(resolution, ctx.registry, &mut ctx.output.instantiations)
+    resolved_type_to_ir_type(resolution, ctx.registry, ctx.output)
 }
 
 /// Emit `lhs == rhs` over two `Int8` values in `block` and return

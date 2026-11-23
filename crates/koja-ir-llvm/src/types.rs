@@ -45,12 +45,11 @@ pub(crate) fn ir_int_type<'ctx>(context: &'ctx Context, ty: &IRType) -> IntType<
         | IRType::Indirect(_)
         | IRType::List(_)
         | IRType::Map { .. }
-        | IRType::NamedUnion(_)
         | IRType::Set(_)
         | IRType::String
         | IRType::Struct(_)
         | IRType::Tuple(_)
-        | IRType::Union { .. }
+        | IRType::Union(_)
         | IRType::Unit => {
             panic!("expected an integer or Bool IRType, got `{ty:?}` (seal invariant violation)")
         }
@@ -100,9 +99,7 @@ pub(crate) fn ir_basic_type<'ctx>(
         IRType::Map { .. } | IRType::Set(_) => Ok(hashtable_value_type(ctx).into()),
         IRType::Struct(symbol) => Ok(ctx.layouts.struct_type(symbol.mangled()).into()),
         IRType::Tuple(elements) => Ok(tuple_struct_type(ctx, elements)?.into()),
-        IRType::NamedUnion(mangled) | IRType::Union { mangled, .. } => {
-            Ok(ctx.layouts.union_outer(mangled.mangled()).into())
-        }
+        IRType::Union(symbol) => Ok(ctx.layouts.union_outer(symbol.mangled()).into()),
         IRType::Unit => Ok(ctx.context.i8_type().into()),
     }
 }

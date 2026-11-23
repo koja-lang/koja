@@ -68,8 +68,7 @@ fn apply_value_coercion(
     };
     match coercion {
         Coercion::NumericWiden(target) => {
-            let target_ir =
-                resolved_type_to_ir_type(target, ctx.registry, &mut ctx.output.instantiations);
+            let target_ir = resolved_type_to_ir_type(target, ctx.registry, ctx.output);
             let from = ctx.type_of(value).clone();
             let dest = ctx.fresh_value(target_ir.clone());
             ctx.cfg.append(
@@ -84,12 +83,8 @@ fn apply_value_coercion(
             (dest, block)
         }
         Coercion::UnionWiden(target) => {
-            let target_ir =
-                resolved_type_to_ir_type(target, ctx.registry, &mut ctx.output.instantiations);
-            if matches!(
-                ctx.type_of(value),
-                IRType::NamedUnion(_) | IRType::Union { .. }
-            ) {
+            let target_ir = resolved_type_to_ir_type(target, ctx.registry, ctx.output);
+            if matches!(ctx.type_of(value), IRType::Union(_)) {
                 return emit_union_widen(expr, value, target_ir, ctx, block);
             }
             let dest = emit_union_wrap(value, &target_ir, ctx, block);
@@ -405,7 +400,7 @@ fn lower_local_read(
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> (ValueId, IRBlockId) {
-    let ty = resolved_type_to_ir_type(resolution, ctx.registry, &mut ctx.output.instantiations);
+    let ty = resolved_type_to_ir_type(resolution, ctx.registry, ctx.output);
     if let Some(capture_index) = ctx.closures().capture_index(local_id) {
         let dest = ctx.fresh_value(ty.clone());
         ctx.cfg.append(
@@ -470,13 +465,12 @@ fn lower_constant_ident(
     block: IRBlockId,
 ) -> (ValueId, IRBlockId) {
     let registry = ctx.registry;
-    let shape = constant_read_shape(constant_id, registry, &mut ctx.output.instantiations)
-        .unwrap_or_else(|| {
-            panic!(
-                "IR lower: constant `{name}` (id {constant_id}) reaches lower \
+    let shape = constant_read_shape(constant_id, registry, ctx.output).unwrap_or_else(|| {
+        panic!(
+            "IR lower: constant `{name}` (id {constant_id}) reaches lower \
                  without a stamped definition, typecheck seal must have rejected this",
-            );
-        });
+        );
+    });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
         panic!("IR lower: constant id {constant_id} missing from registry (seal violation)",)
     });
@@ -493,7 +487,7 @@ fn lower_constant_ident(
             (dest, block)
         }
         ConstantRead::Pooled => {
-            let ty = resolved_type_to_ir_type(&def.ty, registry, &mut ctx.output.instantiations);
+            let ty = resolved_type_to_ir_type(&def.ty, registry, ctx.output);
             let const_id = IRSymbol::from_identifier(&entry.identifier);
             let dest = ctx.fresh_value(ty.clone());
             ctx.cfg
@@ -530,7 +524,7 @@ fn lower_fn_as_value(
     let target_symbol = source_function_symbol(&entry.identifier, definition.arity);
     let wrapper_symbol =
         synthesize_fn_as_closure_wrapper(&target_symbol, sig, registry, ctx.output);
-    let ty = resolved_type_to_ir_type(expr_resolution, registry, &mut ctx.output.instantiations);
+    let ty = resolved_type_to_ir_type(expr_resolution, registry, ctx.output);
     let dest = ctx.fresh_value(ty.clone());
     ctx.cfg.append(
         block,

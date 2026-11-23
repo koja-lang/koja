@@ -157,8 +157,7 @@ fn synthesize_eq_env(
 ) -> Option<IRFunction> {
     let last = captures.len().checked_sub(1)?;
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
-    let closure_ty =
-        resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
+    let closure_ty = resolved_type_to_ir_type(closure_resolution, registry, output);
     let mut ctx = FnLowerCtx::new(registry, output);
     let other = ctx.fresh_value(closure_ty.clone());
     let entry = ctx.fresh_block("entry");
@@ -477,8 +476,7 @@ fn resolve_capture_types(
     captures
         .iter()
         .map(|(local_id, resolution)| {
-            let ir_type =
-                resolved_type_to_ir_type(resolution, registry, &mut output.instantiations);
+            let ir_type = resolved_type_to_ir_type(resolution, registry, output);
             CaptureInfo {
                 ir_type,
                 local_id: *local_id,
@@ -522,8 +520,7 @@ fn synthesize_body(
         BodyShape::Short(expr) => vec![Statement::Expr(expr.clone())],
     };
     let flow = lower_body(&body_statements, &mut ctx, entry)?;
-    let return_type =
-        resolved_type_to_ir_type(sig.fn_ret, ctx.registry, &mut ctx.output.instantiations);
+    let return_type = resolved_type_to_ir_type(sig.fn_ret, ctx.registry, ctx.output);
     finalize_open_flow(&mut ctx, flow, &return_type);
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     Ok(IRFunction {
@@ -550,7 +547,7 @@ fn lower_closure_params(
         closure_params.iter().zip(fn_params.iter()).enumerate()
     {
         let local_id = closure_param_local_id(closure_param, index);
-        let ty = resolved_type_to_ir_type(fn_param, ctx.registry, &mut ctx.output.instantiations);
+        let ty = resolved_type_to_ir_type(fn_param, ctx.registry, ctx.output);
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
         params.push(promote_param(ctx, entry, ir_local, ty));
@@ -595,11 +592,7 @@ fn emit_make_closure(
         let borrowed = read_capture(capture, ctx, block);
         capture_values.push(materialize_owned(ctx, block, borrowed, &capture.ir_type));
     }
-    let ty = resolved_type_to_ir_type(
-        closure_resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let ty = resolved_type_to_ir_type(closure_resolution, ctx.registry, ctx.output);
     let dest = ctx.fresh_value(ty.clone());
     let captures_env = !capture_values.is_empty();
     ctx.cfg.append(
@@ -701,11 +694,7 @@ fn build_fn_as_closure_wrapper(
     let params = mint_wrapper_params(sig, &mut ctx, entry);
     let arg_values = read_wrapper_args(&params, &mut ctx, entry);
 
-    let return_ty = resolved_type_to_ir_type(
-        &sig.return_type,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let return_ty = resolved_type_to_ir_type(&sig.return_type, ctx.registry, ctx.output);
     let call_dest = ctx.fresh_value(return_ty.clone());
     ctx.cfg.append(
         entry,
@@ -745,7 +734,7 @@ fn mint_wrapper_params(
 ) -> Vec<IRFunctionParam> {
     let mut params = Vec::with_capacity(sig.params.len());
     for (index, param) in sig.params.iter().enumerate() {
-        let ty = resolved_type_to_ir_type(&param.ty, ctx.registry, &mut ctx.output.instantiations);
+        let ty = resolved_type_to_ir_type(&param.ty, ctx.registry, ctx.output);
         let local_id = LocalId::new(index as u32);
         let ir_local = IRLocalId::from_local_id(local_id);
         params.push(promote_param(ctx, entry, ir_local, ty));

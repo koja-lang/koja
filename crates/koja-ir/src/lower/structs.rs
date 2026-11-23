@@ -62,7 +62,7 @@ pub(super) fn lower_struct_decl(
     let symbol = IRSymbol::from_identifier(&entry.identifier);
     let mut fields = Vec::with_capacity(definition.fields.len());
     for (index, declared) in definition.fields.iter().enumerate() {
-        let ir_type = resolved_type_to_ir_type(&declared.ty, registry, &mut output.instantiations);
+        let ir_type = resolved_type_to_ir_type(&declared.ty, registry, output);
         fields.push(IRStructField {
             index: index as u32,
             ir_type,
@@ -85,11 +85,7 @@ pub(super) fn lower_struct_construction(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let definition =
         struct_definition_from_resolution(expr_resolution, ctx.registry, "construction");
-    let symbol = resolved_struct_symbol(
-        expr_resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let symbol = resolved_struct_symbol(expr_resolution, ctx.registry, ctx.output);
 
     let (field_inits, current) = canonicalize_struct_inits(&definition.fields, fields, ctx, block)?;
 
@@ -117,9 +113,9 @@ pub(super) fn lower_struct_construction(
 pub(super) fn resolved_struct_symbol(
     resolution: &ResolvedType,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<crate::generics::Instantiation>,
+    output: &mut LowerOutput,
 ) -> IRSymbol {
-    match resolved_type_to_ir_type(resolution, registry, instantiations) {
+    match resolved_type_to_ir_type(resolution, registry, output) {
         IRType::Struct(symbol) => symbol,
         other => panic!(
             "IR lower: struct construction target lowered to `{other:?}`, expected \
@@ -195,16 +191,8 @@ pub(super) fn lower_field_access(
              (resolve invariant violation)",
         )
     });
-    let field_type = resolved_type_to_ir_type(
-        field_resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
-    let struct_symbol = resolved_struct_symbol(
-        &receiver.resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let field_type = resolved_type_to_ir_type(field_resolution, ctx.registry, ctx.output);
+    let struct_symbol = resolved_struct_symbol(&receiver.resolution, ctx.registry, ctx.output);
     let dest = ctx.fresh_value(field_type.clone());
     ctx.cfg.append(
         current,

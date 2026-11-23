@@ -88,13 +88,13 @@ fn enum_dependencies(
     packages: &[IRPackage],
 ) -> BTreeSet<IRSymbol> {
     let mut deps: BTreeSet<IRSymbol> = BTreeSet::new();
-    let mut named_unions_seen: BTreeSet<IRSymbol> = BTreeSet::new();
+    let mut unions_seen: BTreeSet<IRSymbol> = BTreeSet::new();
     for variant in &decl.variants {
         collect_payload_enum_refs(
             &variant.payload,
             struct_field_index,
             packages,
-            &mut named_unions_seen,
+            &mut unions_seen,
             &mut deps,
         );
     }
@@ -105,7 +105,7 @@ fn collect_payload_enum_refs(
     payload: &IRVariantPayload,
     struct_field_index: &BTreeMap<IRSymbol, &[IRStructField]>,
     packages: &[IRPackage],
-    named_unions_seen: &mut BTreeSet<IRSymbol>,
+    unions_seen: &mut BTreeSet<IRSymbol>,
     deps: &mut BTreeSet<IRSymbol>,
 ) {
     match payload {
@@ -115,14 +115,14 @@ fn collect_payload_enum_refs(
                     &field.ir_type,
                     struct_field_index,
                     packages,
-                    named_unions_seen,
+                    unions_seen,
                     deps,
                 );
             }
         }
         IRVariantPayload::Tuple(types) => {
             for ty in types {
-                collect_type_enum_refs(ty, struct_field_index, packages, named_unions_seen, deps);
+                collect_type_enum_refs(ty, struct_field_index, packages, unions_seen, deps);
             }
         }
         IRVariantPayload::Unit => {}
@@ -133,7 +133,7 @@ fn collect_type_enum_refs(
     ty: &IRType,
     struct_field_index: &BTreeMap<IRSymbol, &[IRStructField]>,
     packages: &[IRPackage],
-    named_unions_seen: &mut BTreeSet<IRSymbol>,
+    unions_seen: &mut BTreeSet<IRSymbol>,
     deps: &mut BTreeSet<IRSymbol>,
 ) {
     match ty {
@@ -149,7 +149,7 @@ fn collect_type_enum_refs(
                         &field.ir_type,
                         struct_field_index,
                         packages,
-                        named_unions_seen,
+                        unions_seen,
                         deps,
                     );
                 }
@@ -157,40 +157,17 @@ fn collect_type_enum_refs(
         }
         IRType::Tuple(elements) => {
             for element in elements {
-                collect_type_enum_refs(
-                    element,
-                    struct_field_index,
-                    packages,
-                    named_unions_seen,
-                    deps,
-                );
+                collect_type_enum_refs(element, struct_field_index, packages, unions_seen, deps);
             }
         }
-        // The members of a named union can hold the union again, so
-        // the walk enters each named union one time.
-        IRType::NamedUnion(symbol) => {
-            if !named_unions_seen.insert(symbol.clone()) {
+        // The members of a union can hold the union again, so the
+        // walk enters each union one time.
+        IRType::Union(symbol) => {
+            if !unions_seen.insert(symbol.clone()) {
                 return;
             }
             for member in union_members_in(packages, ty).unwrap_or_default() {
-                collect_type_enum_refs(
-                    member,
-                    struct_field_index,
-                    packages,
-                    named_unions_seen,
-                    deps,
-                );
-            }
-        }
-        IRType::Union { members, .. } => {
-            for member in members {
-                collect_type_enum_refs(
-                    member,
-                    struct_field_index,
-                    packages,
-                    named_unions_seen,
-                    deps,
-                );
+                collect_type_enum_refs(member, struct_field_index, packages, unions_seen, deps);
             }
         }
         // For heap-pointer payloads, the inner type lives behind a

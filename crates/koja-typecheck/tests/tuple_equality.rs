@@ -79,8 +79,8 @@ fn equality_bound_admits_tuples_with_closure_and_union_elements() {
         fn equal<T: Equality>(left: T, right: T) -> Bool
           left.equals?(right)
         end
-{CLOSURES}
-{PETS}
+        {CLOSURES}
+        {PETS}
         equal((f, 1), (g, 1)).print()
         equal((1, (2, pet)), (1, (2, pet))).print()
         "
@@ -123,7 +123,7 @@ fn equality_bound_rejects_tuple_with_non_equality_element() {
         fn equal<T: Equality>(left: T, right: T) -> Bool
           left.equals?(right)
         end
-{CONDITIONAL_BOX}
+        {CONDITIONAL_BOX}
         equal((boxed, 1), (boxed, 1))
         "
     );
@@ -172,7 +172,7 @@ fn debug_bound_still_admits_tuples_with_closure_elements() {
         fn render<T: Debug>(value: T) -> String
           value.format()
         end
-{CLOSURES}
+        {CLOSURES}
         render((f, 1)).print()
         "
     );

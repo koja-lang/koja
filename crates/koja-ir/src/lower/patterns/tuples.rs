@@ -26,11 +26,7 @@ pub(super) fn lower_tuple_check(
     let mut steps = Vec::new();
     let mut current_block = block;
     for (index, (pattern, element_resolved)) in elements.iter().zip(&element_types).enumerate() {
-        let element_ir = resolved_type_to_ir_type(
-            element_resolved,
-            ctx.registry,
-            &mut ctx.output.instantiations,
-        );
+        let element_ir = resolved_type_to_ir_type(element_resolved, ctx.registry, ctx.output);
         let prefix = BindStep {
             op: BindOp::TupleElement {
                 index: index as u32,

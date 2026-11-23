@@ -67,11 +67,7 @@ pub(super) fn lower_call(
     let definition = entry.expect_function_definition();
     let template_symbol = source_function_symbol(&entry.identifier, definition.arity);
     let (callee_symbol, return_ty) = if type_args.is_empty() {
-        let return_ty = resolved_type_to_ir_type(
-            &signature.return_type,
-            registry,
-            &mut ctx.output.instantiations,
-        );
+        let return_ty = resolved_type_to_ir_type(&signature.return_type, registry, ctx.output);
         if signature.impl_args.is_empty() {
             (template_symbol, return_ty)
         } else {
@@ -93,7 +89,7 @@ pub(super) fn lower_call(
         let callee_id = *id;
         let arg_ir_types: Vec<IRType> = type_args
             .iter()
-            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut ctx.output.instantiations))
+            .map(|ty| resolved_type_to_ir_type(ty, registry, ctx.output))
             .collect();
         let mangled = mangled_function_name(&template_symbol, &arg_ir_types);
         ctx.output.instantiations.push(Instantiation {
@@ -104,11 +100,7 @@ pub(super) fn lower_call(
         });
         let substituted_return =
             substitute_resolved_type(&signature.return_type, type_args, callee_id);
-        let return_ty = resolved_type_to_ir_type(
-            &substituted_return,
-            registry,
-            &mut ctx.output.instantiations,
-        );
+        let return_ty = resolved_type_to_ir_type(&substituted_return, registry, ctx.output);
         (mangled, return_ty)
     };
     let site = CallSite {
@@ -145,7 +137,7 @@ fn impl_pinned_call_symbol(
     let owner_symbol = IRSymbol::from_identifier(&owner);
     let arg_types: Vec<IRType> = impl_args
         .iter()
-        .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+        .map(|ty| resolved_type_to_ir_type(ty, registry, output))
         .collect();
     mangled_method_name(&owner_symbol, &arg_types, identifier.last(), arity, &[])
 }
@@ -170,10 +162,9 @@ fn lower_local_closure_call(
              ({callee_ty:?}), typecheck seal violation",
         );
     };
-    let callee_ir_type =
-        resolved_type_to_ir_type(callee_ty, ctx.registry, &mut ctx.output.instantiations);
+    let callee_ir_type = resolved_type_to_ir_type(callee_ty, ctx.registry, ctx.output);
     let param_types = closure_param_types(&callee_ir_type);
-    let return_ty = resolved_type_to_ir_type(ret, ctx.registry, &mut ctx.output.instantiations);
+    let return_ty = resolved_type_to_ir_type(ret, ctx.registry, ctx.output);
 
     let ir_local = IRLocalId::from_local_id(local_id);
     let callee_value = if let Some(capture_index) = ctx.closures().capture_index(local_id) {
@@ -252,13 +243,9 @@ fn lower_closure_expr_call(
             callee.resolution,
         );
     };
-    let callee_ir_type = resolved_type_to_ir_type(
-        &callee.resolution,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let callee_ir_type = resolved_type_to_ir_type(&callee.resolution, ctx.registry, ctx.output);
     let param_types = closure_param_types(&callee_ir_type);
-    let return_ty = resolved_type_to_ir_type(ret, ctx.registry, &mut ctx.output.instantiations);
+    let return_ty = resolved_type_to_ir_type(ret, ctx.registry, ctx.output);
 
     let (callee_value, mut current) = lower_expr(callee, ctx, block)?;
     let mut lowered_args = Vec::with_capacity(args.len());
@@ -403,11 +390,7 @@ pub(super) fn lower_method_call(
 
     let (callee_symbol, return_ty) = if receiver_type_args.is_empty() && method_type_args.is_empty()
     {
-        let return_ty = resolved_type_to_ir_type(
-            &signature.return_type,
-            registry,
-            &mut ctx.output.instantiations,
-        );
+        let return_ty = resolved_type_to_ir_type(&signature.return_type, registry, ctx.output);
         (
             mangled_method_name(
                 &IRSymbol::from_identifier(&struct_entry.identifier),
@@ -421,11 +404,11 @@ pub(super) fn lower_method_call(
     } else {
         let receiver_arg_ir: Vec<IRType> = receiver_type_args
             .iter()
-            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut ctx.output.instantiations))
+            .map(|ty| resolved_type_to_ir_type(ty, registry, ctx.output))
             .collect();
         let method_arg_ir: Vec<IRType> = method_type_args
             .iter()
-            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut ctx.output.instantiations))
+            .map(|ty| resolved_type_to_ir_type(ty, registry, ctx.output))
             .collect();
         let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
         let callee = mangled_method_name(
@@ -453,8 +436,7 @@ pub(super) fn lower_method_call(
         let with_receiver =
             substitute_resolved_type(&signature.return_type, &receiver_type_args, struct_id);
         let with_method = substitute_resolved_type(&with_receiver, method_type_args, method_id);
-        let return_ty =
-            resolved_type_to_ir_type(&with_method, registry, &mut ctx.output.instantiations);
+        let return_ty = resolved_type_to_ir_type(&with_method, registry, ctx.output);
         (callee, return_ty)
     };
     let site = CallSite {
@@ -557,8 +539,7 @@ pub(super) fn conformance_method_symbol(
         });
     let signature = method_entry.expect_function_signature();
     if type_args.is_empty() {
-        let return_ty =
-            resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
+        let return_ty = resolved_type_to_ir_type(&signature.return_type, registry, output);
         return (
             source_function_symbol(
                 &method_entry.identifier,
@@ -569,7 +550,7 @@ pub(super) fn conformance_method_symbol(
     }
     let receiver_arg_ir: Vec<IRType> = type_args
         .iter()
-        .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+        .map(|ty| resolved_type_to_ir_type(ty, registry, output))
         .collect();
     let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
     let callee = mangled_method_name(
@@ -586,7 +567,7 @@ pub(super) fn conformance_method_symbol(
         owner: struct_id,
     });
     let substituted = substitute_resolved_type(&signature.return_type, type_args, struct_id);
-    let return_ty = resolved_type_to_ir_type(&substituted, registry, &mut output.instantiations);
+    let return_ty = resolved_type_to_ir_type(&substituted, registry, output);
     (callee, return_ty)
 }
 

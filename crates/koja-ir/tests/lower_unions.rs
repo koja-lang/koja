@@ -1,10 +1,10 @@
 //! Coverage for union lowering across the IR pipeline:
 //!
-//! - A `ResolvedType::Union` lowers to `IRType::Union { mangled,
-//!   members }` whose canonical mangle is stable under member
-//!   reordering and aliasing. The lifter already canonicalizes the
-//!   source side, so two surface spellings of the same set yield
-//!   the same `IRType`.
+//! - A `ResolvedType::Union` lowers to an `IRType::Union` that holds
+//!   the canonical mangle, which is stable under member reordering
+//!   and aliasing. The lifter already canonicalizes the source side,
+//!   so two surface spellings of the same set yield the same
+//!   `IRType`.
 //! - A member-typed source flowing into a union slot stamps
 //!   `Coercion::UnionWiden` at typecheck and lowers to a single
 //!   [`IRInstruction::UnionWrap`] with the member's index in the
@@ -16,39 +16,52 @@
 //!   local at the head of the body block.
 //! - A call through a protocol bound with a union receiver lowers to
 //!   one tag switch with a call to the member's own impl in each arm.
-//! - Each lowered union surfaces exactly one [`IRUnionDecl`] in the
-//!   program's union map keyed by the same mangled symbol the type
-//!   carries.
-//! - The union of a recursive `type` alias lowers to
-//!   `IRType::NamedUnion` with the alias name, and its members live
-//!   on the decl.
+//! - Each package that lowers a union holds exactly one
+//!   [`IRUnionDecl`] for it, keyed by the same mangled symbol the
+//!   type carries. The members live on the decl. Two packages that
+//!   lower one anonymous union hold equal decls.
+//! - The union of a recursive `type` alias lowers to an
+//!   `IRType::Union` with the alias name, and the package of the
+//!   alias holds its decl.
 //! - A struct that holds its own union inline gets a boxed field.
 
-use koja_ir::{ConstValue, IRInstruction, IRType};
+use std::collections::BTreeMap;
+
+use koja_ir::{ConstValue, IRInstruction, IRScript, IRSymbol, IRType, IRUnionDecl};
 
 mod common;
 
 use common::{PACKAGE, all_instructions, lower_script_source as lower, script_function};
 
+/// The union decls that `package` holds in `script`.
+fn union_decls<'a>(script: &'a IRScript, package: &str) -> &'a BTreeMap<IRSymbol, IRUnionDecl> {
+    let package = script
+        .packages
+        .iter()
+        .find(|p| p.package == package)
+        .unwrap_or_else(|| panic!("expected a `{package}` package"));
+    &package.unions
+}
+
 #[test]
 fn union_widening_arg_lowers_to_union_wrap() {
     let source = "
-struct Post
-  title: String
-end
+        struct Post
+          title: String
+        end
 
-struct Comment
-  body: String
-end
+        struct Comment
+          body: String
+        end
 
-fn take(item: Post | Comment) -> Int
-  match item
-    _ -> 0
-  end
-end
+        fn take(item: Post | Comment) -> Int
+          match item
+            _ -> 0
+          end
+        end
 
-take(Post{title: \"hi\"})
-";
+        take(Post{title: \"hi\"})
+        ";
     let script = lower(source);
 
     let wrap_count = all_instructions(&script.blocks)
@@ -77,23 +90,23 @@ take(Post{title: \"hi\"})
 #[test]
 fn typed_binding_lowers_to_tag_test_and_payload_get() {
     let source = "
-struct Post
-  title: String
-end
+        struct Post
+          title: String
+        end
 
-struct Comment
-  body: String
-end
+        struct Comment
+          body: String
+        end
 
-fn describe(item: Post | Comment) -> String
-  match item
-    p: Post -> p.title
-    c: Comment -> c.body
-  end
-end
+        fn describe(item: Post | Comment) -> String
+          match item
+            p: Post -> p.title
+            c: Comment -> c.body
+          end
+        end
 
-describe(Post{title: \"hi\"})
-";
+        describe(Post{title: \"hi\"})
+        ";
     let script = lower(source);
     let describe_fn = script_function(&script, "describe");
 
@@ -223,28 +236,28 @@ fn union_member_canonicalization_yields_stable_mangle() {
     // dedupe is at type-mangle granularity, so a single decl
     // covers both surface forms.
     let source = "
-struct Post
-  title: String
-end
+        struct Post
+          title: String
+        end
 
-struct Comment
-  body: String
-end
+        struct Comment
+          body: String
+        end
 
-fn one(item: Post | Comment) -> Int
-  match item
-    _ -> 0
-  end
-end
+        fn one(item: Post | Comment) -> Int
+          match item
+            _ -> 0
+          end
+        end
 
-fn two(item: Comment | Post) -> Int
-  match item
-    _ -> 0
-  end
-end
+        fn two(item: Comment | Post) -> Int
+          match item
+            _ -> 0
+          end
+        end
 
-one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
-";
+        one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
+        ";
     let script = lower(source);
     // Scope to the test package so stdlib unions in autoimported
     // packages (e.g. `IO.Descriptor.write`'s `Binary | String`) don't inflate
@@ -261,19 +274,18 @@ one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
          to a single IRUnionDecl in `{PACKAGE}`, got {union_decl_count}",
     );
 
-    // `IRType::Union { members }` carries the canonical (sorted)
-    // member list. Both `one` and `two` should reference the *same*
-    // `IRType::Union` instance, including identical mangle and
-    // member ordering.
+    // Both `one` and `two` name the same `IRType::Union`, and its
+    // decl carries the canonical (sorted) member list.
     let one_param = &script_function(&script, "one").params[0].ty;
     let two_param = &script_function(&script, "two").params[0].ty;
     assert_eq!(
         one_param, two_param,
         "expected the canonical IRType::Union to compare equal across surface spellings",
     );
-    let IRType::Union { members, .. } = one_param else {
+    let IRType::Union(symbol) = one_param else {
         panic!("expected `one`'s param to lower to IRType::Union, got {one_param:?}");
     };
+    let members = &union_decls(&script, PACKAGE)[symbol.mangled()].members;
     assert_eq!(
         members.len(),
         2,
@@ -282,34 +294,102 @@ one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
 }
 
 #[test]
+fn each_package_that_lowers_an_anonymous_union_holds_an_equal_decl() {
+    // The stdlib names `Binary | String` in `IO.Descriptor.write`,
+    // and the script names it again. Each package declares the
+    // union, and the decls are equal.
+    let source = "
+        fn size(data: Binary | String) -> Int
+          match data
+            _ -> 0
+          end
+        end
+
+        size(\"hi\")
+        ";
+    let script = lower(source);
+
+    let holders: Vec<(&str, &IRUnionDecl)> = script
+        .packages
+        .iter()
+        .filter_map(|p| {
+            let decl = p.unions.get("Union_Binary_or_String")?;
+            Some((p.package.as_str(), decl))
+        })
+        .collect();
+    let names: Vec<&str> = holders.iter().map(|(name, _)| *name).collect();
+    assert!(
+        names.len() >= 2 && names.contains(&PACKAGE),
+        "expected `{PACKAGE}` and a stdlib package to declare the union, got {names:?}",
+    );
+    let (_, first) = holders[0];
+    assert_eq!(first.members, vec![IRType::Binary, IRType::String]);
+    for (name, decl) in &holders {
+        assert_eq!(*decl, first, "expected `{name}` to hold an equal decl");
+    }
+}
+
+#[test]
+fn anonymous_union_inside_a_recursive_alias_lands_in_the_alias_package() {
+    // Only the members of `Value` name `Bool | String`. No function
+    // lowers it, so the package of the alias must declare it.
+    let source = "
+        type Value = Int | List<Value> | Map<String, Bool | String>
+
+        fn depth(value: Value) -> Int
+          match value
+            _ -> 0
+          end
+        end
+
+        leaf: Value = 1
+        depth(leaf)
+        ";
+    let script = lower(source);
+
+    let decls = union_decls(&script, PACKAGE);
+    let alias = &decls[format!("{PACKAGE}.Value").as_str()];
+    let inner = &decls["Union_Bool_or_String"];
+    assert_eq!(inner.members, vec![IRType::Bool, IRType::String]);
+    assert_eq!(
+        alias.members[2],
+        IRType::Map {
+            key: Box::new(IRType::String),
+            value: Box::new(IRType::Union(inner.symbol.clone())),
+        },
+        "expected the map member to name the anonymous union by symbol",
+    );
+}
+
+#[test]
 fn recursive_alias_lowers_to_one_named_union() {
     // `by_name` names the alias and `spelled` writes its union out.
-    // Both lower to the same `IRType::NamedUnion`, and one decl keyed
-    // by the alias name holds the members.
+    // Both lower to the same `IRType::Union`, and one decl keyed by
+    // the alias name holds the members.
     let source = "
-type Value = Int | List<Value>
+        type Value = Int | List<Value>
 
-fn by_name(value: Value) -> Int
-  match value
-    _ -> 0
-  end
-end
+        fn by_name(value: Value) -> Int
+          match value
+            _ -> 0
+          end
+        end
 
-fn spelled(value: Int | List<Value>) -> Int
-  match value
-    _ -> 0
-  end
-end
+        fn spelled(value: Int | List<Value>) -> Int
+          match value
+            _ -> 0
+          end
+        end
 
-nested: Value = [1, [2]]
-by_name(nested) + spelled(nested)
-";
+        nested: Value = [1, [2]]
+        by_name(nested) + spelled(nested)
+        ";
     let script = lower(source);
 
     let by_name = &script_function(&script, "by_name").params[0].ty;
     let spelled = &script_function(&script, "spelled").params[0].ty;
-    let IRType::NamedUnion(symbol) = by_name else {
-        panic!("expected `by_name`'s param to lower to IRType::NamedUnion, got {by_name:?}");
+    let IRType::Union(symbol) = by_name else {
+        panic!("expected `by_name`'s param to lower to IRType::Union, got {by_name:?}");
     };
     assert_eq!(symbol.mangled(), format!("{PACKAGE}.Value"));
     assert_eq!(
@@ -345,21 +425,21 @@ fn struct_that_holds_its_own_union_gets_a_boxed_field() {
     // itself. The cycle breaker boxes the field, and the union is
     // sized after that.
     let source = "
-struct Node
-  next: Link
-end
+        struct Node
+          next: Link
+        end
 
-type Link = Int | Node
+        type Link = Int | Node
 
-fn depth(link: Link) -> Int
-  match link
-    _n: Int -> 0
-    node: Node -> 1 + depth(node.next)
-  end
-end
+        fn depth(link: Link) -> Int
+          match link
+            _n: Int -> 0
+            node: Node -> 1 + depth(node.next)
+          end
+        end
 
-depth(Node{next: Node{next: 3}})
-";
+        depth(Node{next: Node{next: 3}})
+        ";
     let script = lower(source);
 
     let node = script
@@ -371,8 +451,12 @@ depth(Node{next: Node{next: 3}})
             node.fields[0].ir_type
         );
     };
-    assert!(
-        matches!(inner.as_ref(), IRType::Union { .. }),
-        "expected a structural union behind the box, got {inner:?}",
+    let IRType::Union(symbol) = inner.as_ref() else {
+        panic!("expected a union behind the box, got {inner:?}");
+    };
+    assert_eq!(
+        symbol.mangled(),
+        format!("Union_Int64_or_{PACKAGE}.Node"),
+        "expected the anonymous union, since `Link` is not recursive",
     );
 }

@@ -24,7 +24,6 @@ use crate::binary_packing::pack_integer_segment;
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IRVariantTag;
 use crate::function::{FunctionKind, IRFunction, IRSymbol};
-use crate::generics::Instantiation;
 use crate::types::{ConstValue, IRType};
 
 use super::binary_literal::{ClassifiedSegment, ast_endianness_to_ir, classify_segment};
@@ -57,7 +56,7 @@ pub(super) fn lower_constant_pool_entry(
         return None;
     };
     let symbol = IRSymbol::from_identifier(&entry.identifier);
-    let value = match lower_constant_value(&def.value, registry, &mut output.instantiations) {
+    let value = match lower_constant_value(&def.value, registry, output) {
         Some(value) if pools_in_constant_pool(&value) => value,
         Some(_) => return None,
         None => synthesize_built_constant(&symbol, def, registry, output)?,
@@ -78,7 +77,7 @@ fn synthesize_built_constant(
     output: &mut LowerOutput,
 ) -> Option<IRConstantValue> {
     let init = symbol.derived(BUILT_INIT_SUFFIX);
-    let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
+    let ty = resolved_type_to_ir_type(&def.ty, registry, output);
     let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut().set_enclosing_symbol(init.clone());
     let entry = ctx.fresh_block("entry");
@@ -126,25 +125,21 @@ pub(super) enum ConstantRead {
 pub(super) fn constant_read_shape(
     id: GlobalRegistryId,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> Option<ConstantRead> {
     let entry = registry.get(id)?;
     let GlobalKind::Constant(Some(def)) = &entry.kind else {
         return None;
     };
-    Some(
-        match lower_constant_value(&def.value, registry, instantiations) {
-            Some(value) if !pools_in_constant_pool(&value) => {
-                let IRConstantValue::Primitive(value) = value else {
-                    unreachable!(
-                        "non-pooling IRConstantValue must be Primitive (pool admission rule)"
-                    );
-                };
-                ConstantRead::Inline(value)
-            }
-            _ => ConstantRead::Pooled,
-        },
-    )
+    Some(match lower_constant_value(&def.value, registry, output) {
+        Some(value) if !pools_in_constant_pool(&value) => {
+            let IRConstantValue::Primitive(value) = value else {
+                unreachable!("non-pooling IRConstantValue must be Primitive (pool admission rule)");
+            };
+            ConstantRead::Inline(value)
+        }
+        _ => ConstantRead::Pooled,
+    })
 }
 
 /// True when an [`IRConstantValue`] should live in the package
@@ -174,13 +169,13 @@ pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
 fn constant_value_from_registry(
     id: GlobalRegistryId,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> Option<IRConstantValue> {
     let entry = registry.get(id)?;
     let GlobalKind::Constant(Some(def)) = &entry.kind else {
         return None;
     };
-    lower_constant_value(&def.value, registry, instantiations)
+    lower_constant_value(&def.value, registry, output)
 }
 
 /// Recursively translate an already-resolved constant `Expr` into an
@@ -199,14 +194,14 @@ fn constant_value_from_registry(
 fn lower_constant_value(
     expr: &Expr,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> Option<IRConstantValue> {
     match &expr.coercion {
         Some(Coercion::UnionWiden(_)) => None,
         Some(Coercion::NumericWiden(_)) => {
-            widen_primitive(fold_constant_shape(expr, registry, instantiations)?)
+            widen_primitive(fold_constant_shape(expr, registry, output)?)
         }
-        None => fold_constant_shape(expr, registry, instantiations),
+        None => fold_constant_shape(expr, registry, output),
     }
 }
 
@@ -243,10 +238,10 @@ fn widen_primitive(value: IRConstantValue) -> Option<IRConstantValue> {
 fn fold_constant_shape(
     expr: &Expr,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> Option<IRConstantValue> {
     match &expr.kind {
-        ExprKind::Group { expr: inner } => lower_constant_value(inner, registry, instantiations),
+        ExprKind::Group { expr: inner } => lower_constant_value(inner, registry, output),
         ExprKind::Literal { value } => Some(IRConstantValue::Primitive(literal_to_const(
             value,
             literal_width(expr),
@@ -273,7 +268,7 @@ fn fold_constant_shape(
             {
                 return Some(IRConstantValue::Primitive(folded));
             }
-            let inner = lower_constant_value(operand, registry, instantiations)?;
+            let inner = lower_constant_value(operand, registry, output)?;
             negate_primitive(inner)
         }
         // Only the unit form folds to a bare tag. A payload variant
@@ -295,8 +290,7 @@ fn fold_constant_shape(
                 return None;
             };
             let (tag, _) = enum_def.lookup_variant(variant.as_str())?;
-            let IRType::Enum(symbol) =
-                resolved_type_to_ir_type(&expr.resolution, registry, instantiations)
+            let IRType::Enum(symbol) = resolved_type_to_ir_type(&expr.resolution, registry, output)
             else {
                 return None;
             };
@@ -326,7 +320,7 @@ fn fold_constant_shape(
             let mut canonical: Vec<Option<IRConstantValue>> = vec![None; struct_def.fields.len()];
             for init in fields {
                 let (index, _) = struct_def.lookup_field(init.name.as_str())?;
-                let value = lower_constant_value(&init.value, registry, instantiations)?;
+                let value = lower_constant_value(&init.value, registry, output)?;
                 canonical[index as usize] = Some(value);
             }
             let fields = canonical.into_iter().collect::<Option<Vec<_>>>()?;
@@ -339,7 +333,7 @@ fn fold_constant_shape(
         ExprKind::Ident {
             resolution: Resolution::Global(id),
             ..
-        } => constant_value_from_registry(*id, registry, instantiations),
+        } => constant_value_from_registry(*id, registry, output),
         _ => None,
     }
 }

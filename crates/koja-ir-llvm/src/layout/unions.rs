@@ -1,5 +1,5 @@
-//! Pre-emit phase for `IRType::Union { mangled, ... }`: build one
-//! [`super::UnionLayout`] per [`koja_ir::IRUnionDecl`] on
+//! Pre-emit phase for `IRType::Union`: build one
+//! [`super::UnionLayout`] per distinct [`koja_ir::IRUnionDecl`] on
 //! [`super::TypeLayouts`].
 //!
 //! ## Layout

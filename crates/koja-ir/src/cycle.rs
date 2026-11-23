@@ -140,9 +140,9 @@ fn collect_enum_edges(decl: &IREnumDecl, packages: &[IRPackage]) -> Vec<Edge> {
 /// size to `ty`'s value layout. Pointer-shaped wrappers stop the
 /// recursion, as they already break the size cycle for the LLVM layer.
 ///
-/// The walk into a named union ends, because each path from a
-/// recursive alias back to itself passes through a struct, an enum,
-/// or a pointer-shaped wrapper, and the walk stops at all of them.
+/// The walk into a union ends, because each path from a recursive
+/// alias back to itself passes through a struct, an enum, or a
+/// pointer-shaped wrapper, and the walk stops at all of them.
 fn inline_refs(ty: &IRType, packages: &[IRPackage]) -> Vec<IRSymbol> {
     let all_refs = |parts: &[IRType]| -> Vec<IRSymbol> {
         parts
@@ -153,9 +153,7 @@ fn inline_refs(ty: &IRType, packages: &[IRPackage]) -> Vec<IRSymbol> {
     match ty {
         IRType::Struct(symbol) | IRType::Enum(symbol) => vec![symbol.clone()],
         IRType::Tuple(elements) => all_refs(elements),
-        IRType::NamedUnion(_) | IRType::Union { .. } => {
-            all_refs(union_members_in(packages, ty).unwrap_or_default())
-        }
+        IRType::Union(_) => all_refs(union_members_in(packages, ty).unwrap_or_default()),
         IRType::Binary
         | IRType::Bits
         | IRType::Bool

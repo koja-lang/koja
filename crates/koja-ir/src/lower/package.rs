@@ -153,14 +153,9 @@ pub(crate) fn lower_package(
                         &mut functions,
                     );
                 }
-                // Only a recursive alias has a declaration. Every
-                // other alias lowers to its expansion at each use.
                 Item::TypeAlias(alias) => {
                     let identifier = Identifier::single(&pkg.package, alias.name.text.clone());
-                    let symbol = IRSymbol::from_identifier(&identifier);
-                    if let Some(decl) = output.named_unions.get(&symbol) {
-                        unions.insert(symbol, decl.clone());
-                    }
+                    declare_recursive_alias(&identifier, registry, output, &mut unions);
                 }
                 _ => {}
             }
@@ -169,6 +164,7 @@ pub(crate) fn lower_package(
     for synthesized in output.synthesized_functions.drain(..) {
         functions.insert(synthesized.symbol.clone(), synthesized);
     }
+    output.drain_pending_unions(&mut unions);
     IRPackage {
         constants,
         enums,
@@ -380,8 +376,7 @@ pub(crate) fn lower_function_inner(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRFunction> {
-    let return_type =
-        resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
+    let return_type = resolved_type_to_ir_type(&signature.return_type, registry, output);
     let def_location = def_location_of(function, def_file);
     let intrinsic = is_intrinsic(&function.annotations);
     let extern_c = is_extern_c(&function.annotations);
@@ -481,7 +476,7 @@ fn lower_params(
             )
         });
         let resolved = &signature.params[index].ty;
-        let ty = resolved_type_to_ir_type(resolved, ctx.registry, &mut ctx.output.instantiations);
+        let ty = resolved_type_to_ir_type(resolved, ctx.registry, ctx.output);
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
         params.push(promote_param(ctx, entry, ir_local, ty));
@@ -506,7 +501,7 @@ fn lower_intrinsic_params(
             )
         });
         let resolved = &signature.params[index].ty;
-        let ty = resolved_type_to_ir_type(resolved, ctx.registry, &mut ctx.output.instantiations);
+        let ty = resolved_type_to_ir_type(resolved, ctx.registry, ctx.output);
         let id = ctx.fresh_value(ty.clone());
         params.push(IRFunctionParam {
             id,
@@ -544,6 +539,11 @@ pub(super) fn function_definition<'a>(
 /// template's [`GlobalRegistryId`]) for the
 /// [`crate::generics::instantiate`] driver to specialize.
 ///
+/// A union maps to [`IRType::Union`]. An anonymous union gets its
+/// declaration here, through
+/// [`LowerOutput::declare_anonymous_union`]. The union of a recursive
+/// alias has its declaration already.
+///
 /// Panics on `Resolution::TypeParam`, because by the time IR lowers a
 /// type, every `Param` should have been substituted by the caller
 /// (typecheck for resolved expressions, the monomorphization driver
@@ -552,26 +552,26 @@ pub(super) fn function_definition<'a>(
 pub(crate) fn resolved_type_to_ir_type(
     ty: &ResolvedType,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> IRType {
     match ty {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => IRType::Function {
             params: params
                 .iter()
-                .map(|p| resolved_type_to_ir_type(p, registry, instantiations))
+                .map(|p| resolved_type_to_ir_type(p, registry, output))
                 .collect(),
-            ret: Box::new(resolved_type_to_ir_type(ret, registry, instantiations)),
+            ret: Box::new(resolved_type_to_ir_type(ret, registry, output)),
         },
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => IRType::Tuple(
             elements
                 .iter()
-                .map(|e| resolved_type_to_ir_type(e, registry, instantiations))
+                .map(|e| resolved_type_to_ir_type(e, registry, output))
                 .collect(),
         ),
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             type_args,
-        } => global_to_ir_type(*id, type_args, registry, instantiations),
+        } => global_to_ir_type(*id, type_args, registry, output),
         ResolvedType::Named {
             resolution,
             type_args,
@@ -584,16 +584,15 @@ pub(crate) fn resolved_type_to_ir_type(
             // The union of a recursive alias written out is that
             // alias, so both spellings lower to one type.
             if let Some(alias_id) = recursive_alias(ty, registry) {
-                return global_to_ir_type(alias_id, &[], registry, instantiations);
+                return global_to_ir_type(alias_id, &[], registry, output);
             }
             let ir_members: Vec<IRType> = members
                 .iter()
-                .map(|m| resolved_type_to_ir_type(m, registry, instantiations))
+                .map(|m| resolved_type_to_ir_type(m, registry, output))
                 .collect();
-            IRType::Union {
-                mangled: union_mangle(&ir_members),
-                members: ir_members,
-            }
+            let symbol = union_mangle(&ir_members);
+            output.declare_anonymous_union(&symbol, ir_members);
+            IRType::Union(symbol)
         }
         ResolvedType::Failed | ResolvedType::Unresolved => {
             panic!("IR lower: resolved_type_to_ir_type received {ty:?} (seal violation)")
@@ -602,11 +601,15 @@ pub(crate) fn resolved_type_to_ir_type(
 }
 
 /// Declare the union of each recursive alias in `registry` into
-/// `output.named_unions`. This runs before any function lowers, so
-/// every later lookup of an [`IRType::NamedUnion`] finds its members.
-/// A member that names the alias again lowers to the same
-/// `NamedUnion`, so the walk ends. `discover_unions` sets the payload
-/// size after the type cycles are broken.
+/// `output.unions`. This runs before any function lowers, so every
+/// later lookup of the union finds its members. A member that names
+/// the alias again lowers to the symbol of the alias, so the walk
+/// ends. The sizing pass sets the payload size after the type cycles
+/// are broken.
+///
+/// This runs outside every package, so it clears the anonymous
+/// unions that the members named. `lower_package` lowers the members
+/// again in the package of the alias, and that package declares them.
 pub(crate) fn lower_named_unions(registry: &GlobalRegistry, output: &mut LowerOutput) {
     let mut aliases: Vec<GlobalRegistryId> = registry
         .iter()
@@ -618,20 +621,51 @@ pub(crate) fn lower_named_unions(registry: &GlobalRegistry, output: &mut LowerOu
         let Some(ResolvedType::Union(members)) = registry.alias_expansion(id) else {
             panic!("IR lower: recursive alias {id} is not a union (lift invariant violation)");
         };
-        let symbol = match global_to_ir_type(id, &[], registry, &mut output.instantiations) {
-            IRType::NamedUnion(symbol) => symbol,
+        let symbol = match global_to_ir_type(id, &[], registry, output) {
+            IRType::Union(symbol) => symbol,
             other => panic!("IR lower: recursive alias {id} lowered to `{other:?}`"),
         };
         let members = members
             .iter()
-            .map(|member| resolved_type_to_ir_type(member, registry, &mut output.instantiations))
+            .map(|member| resolved_type_to_ir_type(member, registry, output))
             .collect();
         let decl = IRUnionDecl {
             max_payload_size: 0,
             members,
             symbol: symbol.clone(),
         };
-        output.named_unions.insert(symbol, decl);
+        output.unions.insert(symbol, decl);
+    }
+    output.pending_unions.clear();
+}
+
+/// Declare the union of the recursive alias `identifier` in the
+/// package that lowers it. Only a recursive alias has a declaration.
+/// Every other alias lowers to its expansion at each use. The
+/// members lower again here, so the package also declares each
+/// anonymous union that they name.
+fn declare_recursive_alias(
+    identifier: &Identifier,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+    unions: &mut BTreeMap<IRSymbol, IRUnionDecl>,
+) {
+    let Some((id, _)) = registry.lookup(identifier) else {
+        return;
+    };
+    if !registry.is_recursive_alias(id) {
+        return;
+    }
+    let symbol = IRSymbol::from_identifier(identifier);
+    let Some(decl) = output.unions.get(&symbol) else {
+        panic!("IR lower: recursive alias `{identifier}` has no declaration");
+    };
+    unions.insert(symbol, decl.clone());
+    let Some(ResolvedType::Union(members)) = registry.alias_expansion(id) else {
+        panic!("IR lower: recursive alias `{identifier}` is not a union");
+    };
+    for member in &members {
+        resolved_type_to_ir_type(member, registry, output);
     }
 }
 
@@ -639,7 +673,7 @@ fn global_to_ir_type(
     id: GlobalRegistryId,
     type_args: &[ResolvedType],
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> IRType {
     let entry = registry.get(id).unwrap_or_else(|| {
         panic!("IR lower: ResolvedType id {id} missing from registry (seal violation)",)
@@ -659,24 +693,24 @@ fn global_to_ir_type(
         // A recursive alias has no finite expansion. It lowers by
         // name, and `lower_named_unions` declares its members.
         if definition.recursive {
-            return IRType::NamedUnion(IRSymbol::from_identifier(&entry.identifier));
+            return IRType::Union(IRSymbol::from_identifier(&entry.identifier));
         }
-        return resolved_type_to_ir_type(&definition.expansion, registry, instantiations);
+        return resolved_type_to_ir_type(&definition.expansion, registry, output);
     }
     // Builtins lower structurally from their registry-stamped shape.
     // User-style stdlib structs (`Timestamp`, `Duration`, etc. from
     // auto-imported `Global.*` files) and enums (`Option<T>`) fall
     // through to the generic monomorphization path.
     if let GlobalKind::Builtin(definition) = &entry.kind {
-        return builtin_to_ir_type(definition.shape, id, type_args, registry, instantiations);
+        return builtin_to_ir_type(definition.shape, id, type_args, registry, output);
     }
     let template = IRSymbol::from_identifier(&entry.identifier);
     let translated: Vec<IRType> = type_args
         .iter()
-        .map(|arg| resolved_type_to_ir_type(arg, registry, instantiations))
+        .map(|arg| resolved_type_to_ir_type(arg, registry, output))
         .collect();
     if !translated.is_empty() {
-        instantiations.push(Instantiation {
+        output.instantiations.push(Instantiation {
             template: id,
             args: type_args.to_vec(),
             method_args: Vec::new(),
@@ -706,7 +740,7 @@ fn builtin_to_ir_type(
     id: GlobalRegistryId,
     type_args: &[ResolvedType],
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> IRType {
     assert_eq!(
         type_args.len(),
@@ -717,7 +751,7 @@ fn builtin_to_ir_type(
         type_args.len(),
     );
     if shape.arity() > 0 {
-        instantiations.push(Instantiation {
+        output.instantiations.push(Instantiation {
             template: id,
             args: type_args.to_vec(),
             method_args: Vec::new(),
@@ -728,7 +762,7 @@ fn builtin_to_ir_type(
         Box::new(resolved_type_to_ir_type(
             &type_args[index],
             registry,
-            instantiations,
+            output,
         ))
     };
     match shape {

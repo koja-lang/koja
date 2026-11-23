@@ -50,11 +50,12 @@ pub struct IRPackage {
     /// declared field layout for `IRType::Struct(symbol)` /
     /// `IRInstruction::StructInit` / `IRInstruction::FieldGet`.
     pub structs: BTreeMap<IRSymbol, IRStructDecl>,
-    /// Union declarations discovered during this package's lower,
-    /// with one entry per distinct mangled `IRType::Union { mangled }`
-    /// referenced anywhere in the package. Backends consult
-    /// `max_payload_size` to size the trailing `[M x i64]` payload
-    /// in the `{ i64, [M x i64] }` LLVM struct layout.
+    /// Union declarations, with one entry for each union this
+    /// package lowered and each recursive alias it defines. Another
+    /// package that lowers the same anonymous union holds an equal
+    /// declaration. Backends consult `max_payload_size` to size the
+    /// trailing `[M x i64]` payload in the `{ i64, [M x i64] }` LLVM
+    /// struct layout.
     pub unions: BTreeMap<IRSymbol, IRUnionDecl>,
 }
 

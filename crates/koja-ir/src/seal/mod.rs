@@ -11,9 +11,10 @@
 //! (block shape, dominance of operand definitions, branch targets,
 //! locals, tail calls), [`types`] (per-instruction operand and result
 //! types), [`structs`], [`enums`], and [`closures`] (decl shape and
-//! the instructions that project them), and [`constants`] (built
-//! constant inits and their startup order). Every `Call` must
-//! resolve to a function somewhere in the program or script.
+//! the instructions that project them), [`unions`] (decl shape), and
+//! [`constants`] (built constant inits and their startup order).
+//! Every `Call` must resolve to a function somewhere in the program
+//! or script.
 
 use crate::enum_decl::EnumPayloadInit;
 use crate::function::{IRInstruction, IRTerminator};
@@ -28,6 +29,7 @@ mod program;
 mod script;
 mod structs;
 mod types;
+mod unions;
 
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
@@ -47,14 +49,15 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         | IRType::Int16
         | IRType::Int32
         | IRType::Int64
-        // A named type. Its members are not part of this type.
-        | IRType::NamedUnion(_)
         | IRType::String
         | IRType::Struct(_)
         | IRType::UInt8
         | IRType::UInt16
         | IRType::UInt32
         | IRType::UInt64
+        // The members are not part of this type. `seal_union_decls`
+        // checks them on the declaration.
+        | IRType::Union(_)
         | IRType::Unit => {}
         IRType::CPtr(inner) => {
             require_supported_type(inner, &|| format!("{} (CPtr pointee)", location()))
@@ -85,11 +88,6 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
                 require_supported_type(element, &|| {
                     format!("{} (Tuple element[{idx}])", location())
                 });
-            }
-        }
-        IRType::Union { members, .. } => {
-            for (idx, member) in members.iter().enumerate() {
-                require_supported_type(member, &|| format!("{} (Union member[{idx}])", location()));
             }
         }
     }

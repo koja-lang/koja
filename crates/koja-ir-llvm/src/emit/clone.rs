@@ -42,11 +42,9 @@ pub(super) fn emit_clone<'ctx>(
         | IRType::UInt32
         | IRType::UInt64
         | IRType::Unit => lookup(values, source),
-        IRType::Enum(_)
-        | IRType::NamedUnion(_)
-        | IRType::Struct(_)
-        | IRType::Tuple(_)
-        | IRType::Union { .. } => lookup(values, source),
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union(_) => {
+            lookup(values, source)
+        }
         IRType::Function { .. } => {
             let closure_value = lookup(values, source);
             let env_ptr = closures::load_closure_env_ptr(ctx, closure_value, "clone")?;

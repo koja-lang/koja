@@ -297,8 +297,7 @@ pub(super) fn emit_tuple_get(
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
-    let element_ir =
-        resolved_type_to_ir_type(element_ty, ctx.registry, &mut ctx.output.instantiations);
+    let element_ir = resolved_type_to_ir_type(element_ty, ctx.registry, ctx.output);
     let extracted = ctx.fresh_value(element_ir.clone());
     ctx.cfg.append(
         block,

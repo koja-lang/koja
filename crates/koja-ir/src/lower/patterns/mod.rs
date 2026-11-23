@@ -298,8 +298,7 @@ pub(super) fn lower_pattern_check(
                      resolved_type (typecheck-resolve invariant violation)",
                 );
             });
-            let member_ir =
-                resolved_type_to_ir_type(resolved, ctx.registry, &mut ctx.output.instantiations);
+            let member_ir = resolved_type_to_ir_type(resolved, ctx.registry, ctx.output);
             let subject_ir = ctx.type_of(inputs.subject).clone();
             let Some(members) = ctx.output.union_members(&subject_ir) else {
                 panic!(
@@ -440,8 +439,7 @@ pub(super) fn field_type_for(
         _ => &[],
     };
     let substituted = substitute_resolved_type(declared_ty, subject_args, owner);
-    let ir_type =
-        resolved_type_to_ir_type(&substituted, ctx.registry, &mut ctx.output.instantiations);
+    let ir_type = resolved_type_to_ir_type(&substituted, ctx.registry, ctx.output);
     (substituted, ir_type)
 }
 

@@ -250,11 +250,7 @@ fn enum_pattern_metadata<'r>(
 ) -> EnumPatternMetadata<'r> {
     let entry = enum_entry_from_resolution(inputs.subject_ty, ctx.registry);
     let definition = enum_definition_from_entry(entry);
-    let enum_symbol = resolved_enum_symbol(
-        inputs.subject_ty,
-        ctx.registry,
-        &mut ctx.output.instantiations,
-    );
+    let enum_symbol = resolved_enum_symbol(inputs.subject_ty, ctx.registry, ctx.output);
     let (variant_index, variant) = definition
         .lookup_variant(variant_name.as_str())
         .unwrap_or_else(|| {

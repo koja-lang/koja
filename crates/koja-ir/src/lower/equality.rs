@@ -66,16 +66,14 @@ pub(super) fn lower_value_equality(
             emit_tuple_eq(lhs, rhs, elements, ctx, block)
         }
         ResolvedType::Anonymous(AnonymousKind::Function { .. }) => {
-            let ty =
-                resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
+            let ty = resolved_type_to_ir_type(&structural, ctx.registry, ctx.output);
             let dest = ctx.fresh_value(IRType::Bool);
             ctx.cfg
                 .append(block, IRInstruction::ClosureEquals { dest, lhs, rhs, ty });
             (dest, block)
         }
         ResolvedType::Union(members) => {
-            let union_ty =
-                resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
+            let union_ty = resolved_type_to_ir_type(&structural, ctx.registry, ctx.output);
             emit_union_eq((lhs, rhs), (members, &union_ty), ctx, block)
         }
         _ => {

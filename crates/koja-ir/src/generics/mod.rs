@@ -132,7 +132,8 @@ pub(crate) fn instantiate(
 }
 
 /// Route functions synthesized while specializing one template to
-/// that template's package.
+/// that template's package. The package also declares each anonymous
+/// union that the specialization named.
 fn drain_synthesized_into_packages(
     packages: &mut [IRPackage],
     output: &mut LowerOutput,
@@ -141,6 +142,7 @@ fn drain_synthesized_into_packages(
     for synthesized in output.synthesized_functions.drain(..) {
         insert_package_function(packages, owner, synthesized);
     }
+    output.drain_pending_unions_into(packages, owner);
 }
 
 /// Map every function template's `GlobalRegistryId` to its AST

@@ -3,9 +3,11 @@
 //! Packages hold their declarations in per-kind maps, so a
 //! cross-package lookup visits each package in turn. The passes that
 //! look up many symbols build a [`Declarations`] once and read from
-//! it. Building the index also proves that every mangled symbol is
-//! declared in exactly one package. Backends that make one-off
-//! lookups by mangled string go through [`find_in`] instead.
+//! it. Building the index also proves that every constant, enum,
+//! function, and struct symbol is declared in exactly one package,
+//! and that the copies of a union declaration are equal. Backends
+//! that make one-off lookups by mangled string go through
+//! [`find_in`] instead.
 
 use std::collections::BTreeMap;
 
@@ -28,8 +30,9 @@ pub(crate) struct Declarations<'a> {
 }
 
 impl<'a> Declarations<'a> {
-    /// Index every declaration in `packages`. Panics when one symbol
-    /// is declared in more than one package.
+    /// Index every declaration in `packages`. Panics when a constant,
+    /// enum, function, or struct symbol is declared in more than one
+    /// package, or when two declarations of one union symbol differ.
     pub(crate) fn new(packages: &'a [IRPackage]) -> Self {
         let mut declarations = Self {
             constants: BTreeMap::new(),
@@ -43,7 +46,7 @@ impl<'a> Declarations<'a> {
             index_unique(&mut declarations.enums, &package.enums, "enum");
             index_unique(&mut declarations.functions, &package.functions, "function");
             index_unique(&mut declarations.structs, &package.structs, "struct");
-            index_unique(&mut declarations.unions, &package.unions, "union");
+            index_unions(&mut declarations.unions, &package.unions);
         }
         declarations
     }
@@ -79,21 +82,13 @@ impl<'a> Declarations<'a> {
     pub(crate) fn union_decl(&self, symbol: &IRSymbol) -> Option<&'a IRUnionDecl> {
         self.unions.get(symbol).copied()
     }
-
-    /// The members of the union type `ty`. See [`union_members`].
-    pub(crate) fn union_members<'t>(&self, ty: &'t IRType) -> Option<&'t [IRType]>
-    where
-        'a: 't,
-    {
-        union_members(ty, |symbol| self.union_decl(symbol))
-    }
 }
 
 /// The members of the union type `ty` in canonical order, or `None`
-/// when `ty` is not a union. A named union keeps its members on its
-/// declaration, which this finds in `packages`. For a pass or a
-/// backend that holds the packages and no [`Declarations`].
-pub fn union_members_in<'a>(packages: &'a [IRPackage], ty: &'a IRType) -> Option<&'a [IRType]> {
+/// when `ty` is not a union. The members live on the declaration,
+/// which this finds in `packages`. For a pass or a backend that
+/// holds the packages and no [`Declarations`].
+pub fn union_members_in<'a>(packages: &'a [IRPackage], ty: &IRType) -> Option<&'a [IRType]> {
     union_members(ty, |symbol| {
         find_in(packages, |package| &package.unions, symbol.mangled())
     })
@@ -123,5 +118,65 @@ fn index_unique<'a, T>(
                 "IR seal violation: {kind} symbol `{symbol}` is registered in more than one package"
             );
         }
+    }
+}
+
+/// Index the union declarations of one package. Each package that
+/// names an anonymous union declares it, so a symbol can repeat. The
+/// index keeps the first declaration, and a repeat must equal it.
+fn index_unions<'a>(
+    index: &mut BTreeMap<&'a IRSymbol, &'a IRUnionDecl>,
+    declarations: &'a BTreeMap<IRSymbol, IRUnionDecl>,
+) {
+    for (symbol, declaration) in declarations {
+        let first = *index.entry(symbol).or_insert(declaration);
+        if first != declaration {
+            panic!("IR seal violation: union symbol `{symbol}` has two declarations that differ");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn union_decl(members: Vec<IRType>) -> IRUnionDecl {
+        IRUnionDecl {
+            max_payload_size: 0,
+            members,
+            symbol: IRSymbol::synthetic("U_shared".to_string()),
+        }
+    }
+
+    fn package_with(name: &str, decl: IRUnionDecl) -> IRPackage {
+        IRPackage {
+            constants: BTreeMap::new(),
+            enums: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            package: name.to_string(),
+            structs: BTreeMap::new(),
+            unions: BTreeMap::from([(decl.symbol.clone(), decl)]),
+        }
+    }
+
+    #[test]
+    fn an_equal_repeat_of_a_union_indexes_one_declaration() {
+        let decl = union_decl(vec![IRType::Int64, IRType::String]);
+        let packages = [
+            package_with("First", decl.clone()),
+            package_with("Second", decl.clone()),
+        ];
+        let declarations = Declarations::new(&packages);
+        assert_eq!(declarations.union_decl(&decl.symbol), Some(&decl));
+    }
+
+    #[test]
+    #[should_panic(expected = "union symbol `U_shared` has two declarations that differ")]
+    fn a_repeat_of_a_union_that_differs_panics() {
+        let packages = [
+            package_with("First", union_decl(vec![IRType::Int64, IRType::String])),
+            package_with("Second", union_decl(vec![IRType::Bool, IRType::String])),
+        ];
+        Declarations::new(&packages);
     }
 }

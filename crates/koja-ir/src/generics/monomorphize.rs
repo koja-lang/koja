@@ -51,7 +51,7 @@ pub(super) fn monomorphize(
     let arg_types: Vec<IRType> = inst
         .args
         .iter()
-        .map(|arg| resolved_type_to_ir_type(arg, registry, &mut output.instantiations))
+        .map(|arg| resolved_type_to_ir_type(arg, registry, output))
         .collect();
 
     match &entry.kind {
@@ -104,7 +104,7 @@ pub(super) fn monomorphize(
             let method_arg_types: Vec<IRType> = inst
                 .method_args
                 .iter()
-                .map(|arg| resolved_type_to_ir_type(arg, registry, &mut output.instantiations))
+                .map(|arg| resolved_type_to_ir_type(arg, registry, output))
                 .collect();
             let symbol = if inst.template == inst.owner {
                 assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
@@ -191,7 +191,7 @@ fn monomorphize_struct(
     let mut fields = Vec::with_capacity(definition.fields.len());
     for (index, field) in definition.fields.iter().enumerate() {
         let substituted = substitute_resolved_type(&field.ty, &inst.args, inst.owner);
-        let ir_type = resolved_type_to_ir_type(&substituted, registry, &mut output.instantiations);
+        let ir_type = resolved_type_to_ir_type(&substituted, registry, output);
         fields.push(IRStructField {
             index: index as u32,
             ir_type,
@@ -217,11 +217,7 @@ fn monomorphize_enum(
                     let substituted = substitute_resolved_type(&field.ty, &inst.args, inst.owner);
                     ir_fields.push(IRStructField {
                         index: idx as u32,
-                        ir_type: resolved_type_to_ir_type(
-                            &substituted,
-                            registry,
-                            &mut output.instantiations,
-                        ),
+                        ir_type: resolved_type_to_ir_type(&substituted, registry, output),
                         name: field.name.clone(),
                     });
                 }
@@ -232,7 +228,7 @@ fn monomorphize_enum(
                     .iter()
                     .map(|ty| {
                         let substituted = substitute_resolved_type(ty, &inst.args, inst.owner);
-                        resolved_type_to_ir_type(&substituted, registry, &mut output.instantiations)
+                        resolved_type_to_ir_type(&substituted, registry, output)
                     })
                     .collect();
                 IRVariantPayload::Tuple(translated)

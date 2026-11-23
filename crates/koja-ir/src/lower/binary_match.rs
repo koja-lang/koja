@@ -113,7 +113,7 @@ fn lower_segment(
             let ty = super::package::resolved_type_to_ir_type(
                 &segment.value.resolution,
                 ctx.registry,
-                &mut ctx.output.instantiations,
+                ctx.output,
             );
             ensure_local_declared(local, &ty, ctx);
             Some(LoweredBinaryPattern::BindInt {
