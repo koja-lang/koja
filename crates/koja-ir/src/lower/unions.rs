@@ -10,7 +10,10 @@
 //! through a protocol bound uses the same switch, with one call to
 //! the member's own impl per arm. [`emit_union_widen`] rides the
 //! same switch to re-tag a union value into a wider union, one
-//! [`emit_union_wrap`] per source member.
+//! [`emit_union_wrap`] per source member. [`emit_union_narrow`] goes
+//! the other way for a typed binding that names a sub-union. It
+//! switches over the members of the narrower union only, so it has a
+//! switch of its own.
 
 use koja_ast::ast::{Arg, Expr};
 use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
@@ -298,6 +301,70 @@ pub(super) fn emit_union_widen(
     });
     drop_discarded_temp(ctx, after, value);
     (widened, after)
+}
+
+/// Narrow the union `value` of type `source_ty` into `target_ty`, a
+/// union of some of its members. The caller has tested that the value
+/// carries one of those members. Each arm of the tag switch wraps its
+/// payload with the target's index for that member. No arm acquires
+/// the payload, so the result borrows the storage of `value`, the
+/// same as a typed binding of one member.
+pub(super) fn emit_union_narrow(
+    value: ValueId,
+    source_ty: &IRType,
+    target_ty: &IRType,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> (ValueId, IRBlockId) {
+    let source_members = declared_union_members(source_ty, ctx);
+    let target_members = declared_union_members(target_ty, ctx);
+    let tag = emit_union_tag(value, source_ty, ctx, block);
+    let merge = ctx.fresh_block("union_narrow_merge");
+    let result = ctx.declare_block_param(merge, target_ty.clone());
+    let last = target_members.len() - 1;
+    let mut current = block;
+    for (index, member_ir) in target_members.iter().enumerate() {
+        let source_index = source_members
+            .iter()
+            .position(|m| m == member_ir)
+            .unwrap_or_else(|| {
+                panic!(
+                    "IR lower: member `{member_ir:?}` of the narrowed union is not in \
+                     source union `{source_ty:?}` (typecheck invariant violation)",
+                )
+            }) as u8;
+        let arm_block = if index == last {
+            current
+        } else {
+            let is_member = emit_tag_eq(tag, source_index, ctx, current);
+            let arm_block = ctx.fresh_block("union_narrow_member");
+            let next = ctx.fresh_block("union_narrow_next");
+            ctx.cfg.set_terminator(
+                current,
+                IRTerminator::CondBranch {
+                    cond: is_member,
+                    else_target: BranchTarget::to(next),
+                    then_target: BranchTarget::to(arm_block),
+                },
+            );
+            current = next;
+            arm_block
+        };
+        let payload = emit_union_payload(value, source_index, member_ir, source_ty, ctx, arm_block);
+        let wrapped = emit_union_wrap(payload, target_ty, ctx, arm_block);
+        ctx.cfg.set_terminator(
+            arm_block,
+            IRTerminator::Branch(BranchTarget::with_args(merge, vec![wrapped])),
+        );
+    }
+    (result, merge)
+}
+
+fn declared_union_members(ty: &IRType, ctx: &FnLowerCtx<'_>) -> Vec<IRType> {
+    ctx.output
+        .union_members(ty)
+        .unwrap_or_else(|| panic!("IR lower: union narrow on non-Union type `{ty:?}`"))
+        .to_vec()
 }
 
 /// Render the carried member through its own `format`. Function

@@ -125,7 +125,7 @@ fn resolve_struct_metadata(
         .map(|field| ResolvedStructField {
             default: field.default.clone(),
             name: field.name.clone(),
-            ty: substitute(&field.ty, &subst),
+            ty: substitute(&field.ty, &subst, resolver.registry),
         })
         .collect();
     Some(StructPatternMetadata {

@@ -2,7 +2,7 @@
 //!
 //! [`substitute_in_function`] walks every [`ResolvedType`] slot
 //! reachable from a function's body and rewrites it via
-//! [`super::substitute_resolved_type`]. Mono drives this on a cloned
+//! [`koja_typecheck::substitute`]. Mono drives this on a cloned
 //! [`Function`] before re-lowering, so the body sees concrete
 //! resolutions everywhere a `TypeParam` previously stood.
 //!
@@ -12,34 +12,33 @@
 
 use koja_ast::ast::{Expr, ExprKind, Function, LValue, Pattern};
 use koja_ast::coercion::Coercion;
-use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
+use koja_ast::identifier::ResolvedType;
 use koja_ast::visit_mut::{self, VisitorMut};
-use koja_typecheck::{FunctionSignature, ResolvedParam};
-
-use super::substitute_resolved_type;
+use koja_typecheck::{FunctionSignature, GlobalRegistry, ResolvedParam, Substitution, substitute};
 
 /// Substitute every [`ResolvedType`] reachable from `function`'s body
 /// in place. Caller is responsible for cloning before substituting if
 /// the original needs to stay intact (mono always clones).
 pub(super) fn substitute_in_function(
     function: &mut Function,
-    args: &[ResolvedType],
-    owner: GlobalRegistryId,
+    subst: &Substitution,
+    registry: &GlobalRegistry,
 ) {
     let Some(body) = function.body.as_mut() else {
         return;
     };
-    visit_mut::walk_body_mut(&mut Substituter { args, owner }, body);
+    let mut substituter = Substituter { registry, subst };
+    visit_mut::walk_body_mut(&mut substituter, body);
 }
 
 /// Clone `signature` with every `params[].ty` and `return_type`
-/// rewritten via [`substitute_resolved_type`]. Used by mono to feed
+/// rewritten via [`substitute`]. Used by mono to feed
 /// [`crate::lower::package::lower_function_inner`] a concrete shape
 /// without mutating the registry-owned template.
 pub(super) fn substitute_signature(
     signature: &FunctionSignature,
-    args: &[ResolvedType],
-    owner: GlobalRegistryId,
+    subst: &Substitution,
+    registry: &GlobalRegistry,
 ) -> FunctionSignature {
     FunctionSignature {
         declared_fallible: signature.declared_fallible,
@@ -49,14 +48,14 @@ pub(super) fn substitute_signature(
             .iter()
             .map(|param| ResolvedParam {
                 name: param.name.clone(),
-                ty: substitute_resolved_type(&param.ty, args, owner),
+                ty: substitute(&param.ty, subst, registry),
             })
             .collect(),
-        return_type: substitute_resolved_type(&signature.return_type, args, owner),
+        return_type: substitute(&signature.return_type, subst, registry),
         impl_args: signature
             .impl_args
             .iter()
-            .map(|ty| substitute_resolved_type(ty, args, owner))
+            .map(|ty| substitute(ty, subst, registry))
             .collect(),
     }
 }
@@ -67,13 +66,13 @@ pub(super) fn substitute_signature(
 /// multi-segment assignment target, and the resolved type of a
 /// typed-binding pattern.
 struct Substituter<'a> {
-    args: &'a [ResolvedType],
-    owner: GlobalRegistryId,
+    registry: &'a GlobalRegistry,
+    subst: &'a Substitution,
 }
 
 impl Substituter<'_> {
     fn rewrite(&self, slot: &mut ResolvedType) {
-        *slot = substitute_resolved_type(slot, self.args, self.owner);
+        *slot = substitute(slot, self.subst, self.registry);
     }
 }
 

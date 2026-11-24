@@ -1,6 +1,6 @@
 # Typed binding patterns in `match` arms. On a union subject, a typed
-# binding selects one member. On any other subject, it binds the value
-# the same as a plain binding.
+# binding selects one member, or a union of some of the members. On
+# any other subject, it binds the value the same as a plain binding.
 
 # Union subjects
 struct Post
@@ -32,6 +32,21 @@ fn summarize(c: Content) -> String
   end
 end
 
+fn flag_or_text(rest: Bool | String) -> String
+  match rest
+    flag: Bool -> "bool #{flag}"
+    text: String -> "string #{text}"
+  end
+end
+
+# `rest` names two of the three members and binds a `Bool | String`.
+fn classify(value: Bool | Int | String) -> String
+  match value
+    n: Int -> "int #{n}"
+    rest: Bool | String -> flag_or_text(rest)
+  end
+end
+
 post = Post{title: "Hello World"}
 comment = Comment{body: "Great post!"}
 ad = Ad{url: "https://example.com"}
@@ -42,6 +57,11 @@ describe(ad).print()
 
 summarize(Post{title: "Summary"}).print()
 summarize(Comment{body: "Nice"}).print()
+
+# The string is a concat result, so the bound union holds a heap value.
+IO.puts(classify(8))
+IO.puts(classify(true))
+IO.puts(classify("su" <> "b"))
 
 # Subjects that are not unions
 struct Point

@@ -148,11 +148,12 @@ pub(super) fn lower_result_ty(resolution: &ResolvedType, ctx: &mut FnLowerCtx<'_
     resolved_type_to_ir_type(resolution, ctx.registry, ctx.output)
 }
 
-/// Emit `lhs == rhs` over two `Int8` values in `block` and return
-/// the `Bool` result.
-pub(super) fn emit_int8_eq(
+/// Emit the comparison `lhs op rhs` over two `Int8` values in `block`
+/// and return the `Bool` result.
+fn emit_int8_compare(
     lhs: ValueId,
     rhs: ValueId,
+    op: IRBinOp,
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
@@ -162,12 +163,43 @@ pub(super) fn emit_int8_eq(
         IRInstruction::BinaryOp {
             dest,
             lhs,
-            op: IRBinOp::Eq,
+            op,
             operand_ty: IRType::Int8,
             rhs,
         },
     );
     dest
+}
+
+/// Emit `lhs == rhs` over two `Int8` values in `block` and return
+/// the `Bool` result.
+pub(super) fn emit_int8_eq(
+    lhs: ValueId,
+    rhs: ValueId,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> ValueId {
+    emit_int8_compare(lhs, rhs, IRBinOp::Eq, ctx, block)
+}
+
+/// Emit the comparison `tag op const(index)` in `block` and return
+/// the `Bool` result.
+fn emit_tag_compare(
+    tag: ValueId,
+    index: u8,
+    op: IRBinOp,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> ValueId {
+    let const_dest = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest: const_dest,
+            value: ConstValue::Int8(index as i8),
+        },
+    );
+    emit_int8_compare(tag, const_dest, op, ctx, block)
 }
 
 /// Emit `tag == const(expected)` in `block` and return the `Bool`
@@ -178,15 +210,18 @@ pub(super) fn emit_tag_eq(
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
-    let const_dest = ctx.fresh_value(IRType::Int8);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Const {
-            dest: const_dest,
-            value: ConstValue::Int8(expected as i8),
-        },
-    );
-    emit_int8_eq(tag, const_dest, ctx, block)
+    emit_tag_compare(tag, expected, IRBinOp::Eq, ctx, block)
+}
+
+/// Emit `tag != const(excluded)` in `block` and return the `Bool`
+/// result. `tag` is an already extracted enum or union tag byte.
+pub(super) fn emit_tag_ne(
+    tag: ValueId,
+    excluded: u8,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> ValueId {
+    emit_tag_compare(tag, excluded, IRBinOp::NotEq, ctx, block)
 }
 
 /// Emit a fresh `Const::Unit` in `block` and return its `ValueId`.

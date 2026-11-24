@@ -122,7 +122,10 @@ pub(super) fn resolve_spawn(
     let subst = Substitution::from_args(target_id, &target_args);
     ResolvedType::Named {
         resolution: Resolution::Global(ref_id),
-        type_args: vec![substitute(msg_ty, &subst), substitute(reply_ty, &subst)],
+        type_args: vec![
+            substitute(msg_ty, &subst, resolver.registry),
+            substitute(reply_ty, &subst, resolver.registry),
+        ],
     }
 }
 

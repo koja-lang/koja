@@ -146,7 +146,8 @@ pub(super) fn resolve_struct_construction(
         type_params: &type_params,
     };
     let seeded_subst = seed_subst_from_expected(callee, expected, resolver.registry);
-    let substituted_fields = substitute_declared_fields(&definition.fields, &seeded_subst);
+    let substituted_fields =
+        substitute_declared_fields(&definition.fields, &seeded_subst, resolver.registry);
     walk_field_inits(&substituted_fields, fields, resolver, diagnostics);
     let subst = infer_struct_type_args(
         callee,
@@ -157,7 +158,8 @@ pub(super) fn resolve_struct_construction(
         resolver.bound_context(),
         diagnostics,
     );
-    let substituted_fields = substitute_declared_fields(&definition.fields, &subst);
+    let substituted_fields =
+        substitute_declared_fields(&definition.fields, &subst, resolver.registry);
     validate_named_fields(
         &owner,
         struct_id,
@@ -216,13 +218,14 @@ pub(super) fn walk_field_inits(
 fn substitute_declared_fields(
     declared: &[ResolvedStructField],
     subst: &Substitution,
+    registry: &GlobalRegistry,
 ) -> Vec<ResolvedStructField> {
     declared
         .iter()
         .map(|field| ResolvedStructField {
             default: field.default.clone(),
             name: field.name.clone(),
-            ty: substitute(&field.ty, subst),
+            ty: substitute(&field.ty, subst, registry),
         })
         .collect()
 }
@@ -490,5 +493,5 @@ pub(super) fn resolve_field_access(
     // method on `struct Bag<T>`) the field type's `TypeParam`
     // round-trips back to itself.
     let subst = Substitution::from_args(struct_id, receiver_args);
-    substitute(&declared.ty, &subst)
+    substitute(&declared.ty, &subst, resolver.registry)
 }

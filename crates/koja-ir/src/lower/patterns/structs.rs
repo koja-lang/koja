@@ -21,10 +21,10 @@ use super::super::ctx::FnLowerCtx;
 use super::super::structs::{resolved_struct_symbol, struct_definition_from_resolution};
 use super::{
     BindOp, BindStep, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep,
-    ensure_local_declared, field_type_for, global_id_of, lower_pattern_check, require_local,
-    whole_subject_local,
+    emit_bind_step, ensure_local_declared, field_type_for, global_id_of, lower_pattern_check,
+    require_local, whole_subject_local,
 };
-use crate::function::{IRBlockId, IRInstruction, IRSymbol};
+use crate::function::{IRBlockId, IRSymbol};
 use crate::types::{IRType, ValueId};
 
 pub(super) fn lower_struct_check(
@@ -130,7 +130,7 @@ pub(super) fn lower_subpattern_into(
     steps: &mut Vec<TestStep>,
     binds: &mut Vec<PayloadBind>,
 ) {
-    if let Some(ir_local) = whole_subject_local(pattern, sub_ir_type) {
+    if let Some(ir_local) = whole_subject_local(pattern, sub_ir_type, ctx) {
         ensure_local_declared(ir_local, sub_ir_type, ctx);
         ctx.mark_slot_borrowed(ir_local);
         binds.push(PayloadBind {
@@ -163,13 +163,8 @@ pub(super) fn lower_subpattern_into(
             if !steps.is_empty() {
                 *current_block = ctx.fresh_block("match_and_field");
             }
-            let sub_value = emit_subpattern_projection(
-                extraction_source,
-                &prefix,
-                sub_ir_type,
-                ctx,
-                *current_block,
-            );
+            let sub_value =
+                emit_subpattern_projection(extraction_source, &prefix, ctx, *current_block);
             let nested_inputs = PatternInputs {
                 subject: sub_value,
                 subject_ty: sub_resolved_ty,
@@ -186,8 +181,9 @@ pub(super) fn lower_subpattern_into(
 
 /// True when `pattern` lowers to a [`PatternCheck::CatchAll`] against
 /// a subject of the given type. A wildcard and a plain binding always
-/// do. A typed binding does when the subject is not a union. A struct
-/// or tuple destructure does when every sub-pattern does. Used by
+/// do. A typed binding does when it binds its whole subject, as
+/// [`whole_subject_local`] decides. A struct or tuple destructure
+/// does when every sub-pattern does. Used by
 /// [`lower_subpattern_into`] to skip the projection-and-block-mint
 /// dance for nested patterns that contribute no runtime predicates.
 ///
@@ -203,7 +199,7 @@ fn is_static_catch_all(
     match pattern {
         Pattern::Wildcard { .. } => true,
         Pattern::Binding { .. } | Pattern::TypedBinding { .. } => {
-            whole_subject_local(pattern, sub_ir_type).is_some()
+            whole_subject_local(pattern, sub_ir_type, ctx).is_some()
         }
         Pattern::Struct { fields, .. } => {
             let (definition, _, owner) =
@@ -348,81 +344,29 @@ fn collect_catch_all_binds(
     }
 }
 
-/// Emit the single IR instruction described by `prefix.op` reading
+/// Emit the single IR instruction described by `prefix` reading
 /// from `source` into `block`. Returns the fresh `ValueId` holding
 /// the sub-pattern's input. Used to surface a field value (or an
 /// enum payload value) so a nested non-binding pattern can test
 /// against it.
+///
+/// `block` is a test block, and the match driver sets its terminator
+/// after the pattern lowers. A step that ends in a different block
+/// would lose its control flow there, so a prefix must be one
+/// instruction.
 fn emit_subpattern_projection(
     source: ValueId,
     prefix: &BindStep,
-    sub_ir_type: &IRType,
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
-    let dest = ctx.fresh_value(sub_ir_type.clone());
-    match &prefix.op {
-        BindOp::StructField {
-            field_index,
-            struct_symbol,
-        } => {
-            ctx.cfg.append(
-                block,
-                IRInstruction::FieldGet {
-                    base: source,
-                    dest,
-                    field_index: *field_index,
-                    field_type: sub_ir_type.clone(),
-                    struct_symbol: struct_symbol.clone(),
-                },
-            );
-        }
-        BindOp::EnumPayloadField {
-            enum_symbol,
-            payload_index,
-            tag,
-        } => {
-            ctx.cfg.append(
-                block,
-                IRInstruction::EnumPayloadFieldGet {
-                    dest,
-                    field_type: sub_ir_type.clone(),
-                    payload_index: *payload_index,
-                    tag: *tag,
-                    ty: enum_symbol.clone(),
-                    value: source,
-                },
-            );
-        }
-        BindOp::TupleElement { index } => {
-            ctx.cfg.append(
-                block,
-                IRInstruction::TupleGet {
-                    base: source,
-                    dest,
-                    element_type: sub_ir_type.clone(),
-                    index: *index,
-                },
-            );
-        }
-        BindOp::UnionPayload {
-            member_index,
-            member_type,
-            union_type,
-        } => {
-            ctx.cfg.append(
-                block,
-                IRInstruction::UnionPayloadGet {
-                    dest,
-                    member_index: *member_index,
-                    member_type: member_type.clone(),
-                    ty: union_type.clone(),
-                    value: source,
-                },
-            );
-        }
-    }
-    dest
+    let (value, after) = emit_bind_step(prefix, source, ctx, block);
+    assert_eq!(
+        after, block,
+        "IR lower: the projection of a nested pattern subject must stay in its \
+         test block",
+    );
+    value
 }
 
 /// Merge a nested pattern's [`PatternCheck`] into the outer

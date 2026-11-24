@@ -3,6 +3,9 @@
 "https://example.com"
 "Summary"
 "Nice"
+int 8
+bool true
+string sub
 int 3
 count 4
 some 5

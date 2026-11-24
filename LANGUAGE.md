@@ -1201,6 +1201,15 @@ match pet
 end
 ```
 
+A binding can also name a union of some of the members. The arm runs for each of those members, and the binding has that smaller union type:
+
+```koja
+match pet
+  cat: Cat -> cat.name
+  other: Dog | Fish -> other.format()
+end
+```
+
 A union satisfies a [trait bound](#trait-bounds) when every member implements the protocol. A call through the bound runs the function of the member the value holds:
 
 ```koja

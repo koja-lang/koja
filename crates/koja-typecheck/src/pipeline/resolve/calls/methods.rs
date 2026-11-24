@@ -364,10 +364,10 @@ pub(super) fn infer_method_call_type_args(
         .iter()
         .map(|p| ResolvedParam {
             name: p.name.clone(),
-            ty: substitute(&p.ty, &subst),
+            ty: substitute(&p.ty, &subst, ctx.registry),
         })
         .collect();
-    let substituted_return = substitute(&sig.return_type, &subst);
+    let substituted_return = substitute(&sig.return_type, &subst, ctx.registry);
     *outputs.method_type_args = subst.args(method.id);
     *outputs.receiver_type_args = subst.args(receiver.id);
     (substituted_params, substituted_return)

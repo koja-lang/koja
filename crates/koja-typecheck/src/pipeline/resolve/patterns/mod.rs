@@ -179,14 +179,11 @@ pub(super) fn resolve_pattern(
             let peeled_subject = peel_alias(subject_ty, resolver.registry);
             match &peeled_subject {
                 ResolvedType::Union(members) => {
-                    if !members
-                        .iter()
-                        .any(|m| types_equivalent(m, &resolved, resolver.registry))
-                    {
+                    if let Err(missing) = named_members(&resolved, members, resolver.registry) {
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "type `{}` is not a member of union `{}`",
-                                display_resolution(&resolved, resolver.registry),
+                                display_resolution(&missing, resolver.registry),
                                 display_resolution(subject_ty, resolver.registry),
                             ),
                             *span,
@@ -213,6 +210,33 @@ pub(super) fn resolve_pattern(
             *local_id = Some(id);
             *resolved_type = Some(resolved);
         }
+    }
+}
+
+/// The members of the subject union that a typed binding names, as
+/// indexes into `members`. One index when the binding names one
+/// member, and one index for each member when it names a union of
+/// members. The error is the first type that the binding names and
+/// the subject union does not hold.
+fn named_members(
+    bound: &ResolvedType,
+    members: &[ResolvedType],
+    registry: &GlobalRegistry,
+) -> Result<Vec<usize>, ResolvedType> {
+    let member_index = |ty: &ResolvedType| {
+        members
+            .iter()
+            .position(|member| types_equivalent(member, ty, registry))
+    };
+    if let Some(index) = member_index(bound) {
+        return Ok(vec![index]);
+    }
+    match peel_alias(bound, registry) {
+        ResolvedType::Union(bound_members) => bound_members
+            .into_iter()
+            .map(|member| member_index(&member).ok_or(member))
+            .collect(),
+        _ => Err(bound.clone()),
     }
 }
 

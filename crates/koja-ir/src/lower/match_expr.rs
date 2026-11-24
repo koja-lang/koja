@@ -24,7 +24,9 @@
 //! `CondBranch` on the guard's value, branching to the arm's body
 //! on true and to the same fall-through on false. Without a guard,
 //! the success block *is* the body block and binds happen at its
-//! head as before.
+//! head as before. The one exception is a bind that narrows a union
+//! (a typed binding of a sub-union). It is a tag switch, so the
+//! guard or the body continues in the merge block of that switch.
 //!
 //! Block allocation is lazy. Body / guard / next-test blocks are
 //! minted only after the arm's [`PatternCheck`] is known. This way
@@ -44,8 +46,8 @@ use super::ctx::FnLowerCtx;
 use super::expr::lower_expr;
 use super::ownership::drop_discarded_temp;
 use super::patterns::{
-    BindOp, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
-    whole_subject_local,
+    ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, emit_bind_step,
+    lower_pattern_check, whole_subject_local,
 };
 
 /// AST-side inputs to [`lower_match`].
@@ -125,16 +127,19 @@ pub(super) fn lower_match(
         } else {
             success_block
         };
-        match check {
+        // The binds start in the success block. A union narrow ends
+        // in a block of its own, so the guard and the body continue
+        // from the block that the binds hand back.
+        let bound_block = match check {
             PatternCheck::CatchAll { binds } => {
                 ctx.cfg.set_terminator(
                     current_test,
                     IRTerminator::Branch(BranchTarget::to(success_block)),
                 );
-                emit_payload_binds(&binds, success_block, subject_value, ctx);
                 if arm.guard.is_none() {
                     closed_chain = true;
                 }
+                emit_payload_binds(&binds, success_block, subject_value, ctx)
             }
             PatternCheck::Tests {
                 chain_mode,
@@ -142,11 +147,16 @@ pub(super) fn lower_match(
                 steps,
             } => {
                 wire_test_chain(&steps, chain_mode, success_block, fall_through, ctx);
-                emit_payload_binds(&payload_binds, success_block, subject_value, ctx);
+                emit_payload_binds(&payload_binds, success_block, subject_value, ctx)
             }
-        }
+        };
+        let body_block = if arm.guard.is_some() {
+            body_block
+        } else {
+            bound_block
+        };
         if let Some(guard) = &arm.guard {
-            let (guard_value, after) = lower_expr(guard, ctx, success_block)?;
+            let (guard_value, after) = lower_expr(guard, ctx, bound_block)?;
             ctx.cfg.set_terminator(
                 after,
                 IRTerminator::CondBranch {
@@ -203,7 +213,7 @@ fn bind_slots(
     pattern: &Pattern,
     subject: ValueId,
     check: &PatternCheck,
-    ctx: &FnLowerCtx<'_>,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Vec<(IRLocalId, IRType)> {
     let payload_binds = match check {
         PatternCheck::CatchAll { binds } => binds,
@@ -220,7 +230,7 @@ fn bind_slots(
         })
         .collect();
     let subject_ir = ctx.type_of(subject);
-    if let Some(local) = whole_subject_local(pattern, &subject_ir) {
+    if let Some(local) = whole_subject_local(pattern, &subject_ir, ctx) {
         slots.push((local, subject_ir));
     }
     slots
@@ -250,78 +260,21 @@ fn wire_test_chain(
     }
 }
 
+/// Emit every bind of an arm, starting in `block`. Returns the block
+/// that control continues in. That is `block` itself unless a bind
+/// narrows a union, which is a tag switch and leaves control in its
+/// merge block. See [`emit_bind_step`].
 fn emit_payload_binds(
     binds: &[PayloadBind],
-    body_block: IRBlockId,
+    block: IRBlockId,
     subject: ValueId,
     ctx: &mut FnLowerCtx<'_>,
-) {
+) -> IRBlockId {
+    let mut body_block = block;
     for bind in binds {
         let mut current = subject;
         for step in &bind.chain {
-            let dest = ctx.fresh_value(step.output_type.clone());
-            match &step.op {
-                BindOp::EnumPayloadField {
-                    enum_symbol,
-                    payload_index,
-                    tag,
-                } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::EnumPayloadFieldGet {
-                            dest,
-                            field_type: step.output_type.clone(),
-                            payload_index: *payload_index,
-                            tag: *tag,
-                            ty: enum_symbol.clone(),
-                            value: current,
-                        },
-                    );
-                }
-                BindOp::StructField {
-                    field_index,
-                    struct_symbol,
-                } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::FieldGet {
-                            base: current,
-                            dest,
-                            field_index: *field_index,
-                            field_type: step.output_type.clone(),
-                            struct_symbol: struct_symbol.clone(),
-                        },
-                    );
-                }
-                BindOp::TupleElement { index } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::TupleGet {
-                            base: current,
-                            dest,
-                            element_type: step.output_type.clone(),
-                            index: *index,
-                        },
-                    );
-                }
-                BindOp::UnionPayload {
-                    member_index,
-                    member_type,
-                    union_type,
-                } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::UnionPayloadGet {
-                            dest,
-                            member_index: *member_index,
-                            member_type: member_type.clone(),
-                            ty: union_type.clone(),
-                            value: current,
-                        },
-                    );
-                }
-            }
-            current = dest;
+            (current, body_block) = emit_bind_step(step, current, ctx, body_block);
         }
         ctx.cfg.append(
             body_block,
@@ -331,6 +284,7 @@ fn emit_payload_binds(
             },
         );
     }
+    body_block
 }
 
 /// Lazily mint a single `Unreachable`-terminated trap block shared

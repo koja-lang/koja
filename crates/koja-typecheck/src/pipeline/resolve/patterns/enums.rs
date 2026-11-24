@@ -144,7 +144,12 @@ fn resolve_enum_tuple_element_types(
         ));
     }
     let subst = build_enum_substitution(target.enum_id, subject_ty);
-    Some(declared.iter().map(|ty| substitute(ty, &subst)).collect())
+    Some(
+        declared
+            .iter()
+            .map(|ty| substitute(ty, &subst, resolver.registry))
+            .collect(),
+    )
 }
 
 struct EnumStructPatternMetadata {
@@ -189,7 +194,7 @@ fn resolve_enum_struct_metadata(
         .map(|field| ResolvedStructField {
             default: field.default.clone(),
             name: field.name.clone(),
-            ty: substitute(&field.ty, &subst),
+            ty: substitute(&field.ty, &subst, resolver.registry),
         })
         .collect();
     Some(EnumStructPatternMetadata {

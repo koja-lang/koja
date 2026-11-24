@@ -17,8 +17,9 @@ use std::collections::BTreeSet;
 use koja_ast::ast::{FieldPattern, Literal, Name, Pattern};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, ResolvedType};
 
-use super::super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
+use super::super::types::{display_resolution, is_primitive, peel_alias};
 use super::literals::literal_repr;
+use super::named_members;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     EnumDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
@@ -199,8 +200,9 @@ fn named_global(ty: &ResolvedType) -> Option<(GlobalRegistryId, &[ResolvedType])
 fn substituted(
     types: impl Iterator<Item = ResolvedType>,
     subst: &Substitution,
+    registry: &GlobalRegistry,
 ) -> Vec<ResolvedType> {
-    types.map(|ty| substitute(&ty, subst)).collect()
+    types.map(|ty| substitute(&ty, subst, registry)).collect()
 }
 
 /// Types of `ctor`'s payload columns when it builds a value of `ty`.
@@ -217,7 +219,11 @@ fn field_types(
             _ => struct_of(&peeled, registry)
                 .map(|(id, definition, type_args)| {
                     let subst = Substitution::from_args(id, type_args);
-                    substituted(definition.fields.iter().map(|f| f.ty.clone()), &subst)
+                    substituted(
+                        definition.fields.iter().map(|f| f.ty.clone()),
+                        &subst,
+                        registry,
+                    )
                 })
                 .unwrap_or_default(),
         },
@@ -227,10 +233,10 @@ fn field_types(
                 let subst = Substitution::from_args(id, type_args);
                 Some(match &variant.data {
                     ResolvedVariantData::Struct(fields) => {
-                        substituted(fields.iter().map(|f| f.ty.clone()), &subst)
+                        substituted(fields.iter().map(|f| f.ty.clone()), &subst, registry)
                     }
                     ResolvedVariantData::Tuple(elements) => {
-                        substituted(elements.iter().cloned(), &subst)
+                        substituted(elements.iter().cloned(), &subst, registry)
                     }
                     ResolvedVariantData::Unit => Vec::new(),
                 })
@@ -272,7 +278,7 @@ fn deconstruct(
             if declared_elements.len() != elements.len() {
                 return None;
             }
-            let element_types = substituted(declared_elements.iter().cloned(), &subst);
+            let element_types = substituted(declared_elements.iter().cloned(), &subst, registry);
             let fields = deconstruct_elements(elements, &element_types, registry)?;
             Some(constructor(Constructor::Variant(tag), fields))
         }
@@ -316,10 +322,15 @@ fn deconstruct(
             let ResolvedType::Union(members) = &peeled else {
                 return Some(WILDCARD);
             };
-            let index = members
-                .iter()
-                .position(|member| types_equivalent(member, bound, registry))?;
-            Some(constructor(Constructor::UnionMember(index), Vec::new()))
+            let indexes = named_members(bound, members, registry).ok()?;
+            let union_member =
+                |index: &usize| constructor(Constructor::UnionMember(*index), Vec::new());
+            Some(match indexes.as_slice() {
+                [index] => union_member(index),
+                // A binding that names a union of members matches
+                // each one of them.
+                indexes => DeconstructedPattern::Or(indexes.iter().map(union_member).collect()),
+            })
         }
     }
 }
@@ -363,7 +374,7 @@ fn deconstruct_fields(
     let mut fields = vec![WILDCARD; declared.len()];
     for field in listed {
         let index = declared.iter().position(|d| d.name == field.name.text)?;
-        let field_ty = substitute(&declared[index].ty, subst);
+        let field_ty = substitute(&declared[index].ty, subst, registry);
         fields[index] = deconstruct(&field.pattern, &field_ty, registry)?;
     }
     Some(fields)

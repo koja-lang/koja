@@ -19,6 +19,10 @@
 //!
 //! A typed binding on a subject that is not a union lowers as a
 //! plain binding, at the top of a pattern and in nested positions.
+//! On a union subject, a typed binding that names the whole union
+//! does the same. A typed binding that names some of the members
+//! tests the tag against each member it leaves out, and re-tags the
+//! value into the bound union.
 //!
 //! [`BlockParam`]: koja_ir::BlockParam
 
@@ -1220,6 +1224,107 @@ fn match_nested_typed_binding_leaves_add_no_test_block() {
     assert_eq!(
         writes, 2,
         "body block should emit one LocalWrite for each of `n` and `s`",
+    );
+}
+
+#[test]
+fn match_typed_binding_of_a_sub_union_tests_the_other_tags_and_narrows() {
+    // `rest: Bool | String` leaves out one member of the subject, so
+    // the arm has one `tag != Int` test. The bind re-tags the value
+    // into `Bool | String` with one `UnionWrap` for each bound member.
+    let source = "
+        fn kind(value: Bool | Int | String) -> Int
+          match value
+            rest: Bool | String ->
+              match rest
+                _b: Bool -> 1
+                _s: String -> 2
+              end
+            n: Int -> n
+          end
+        end
+
+        kind(\"a\")
+        ";
+
+    let script = lower(source);
+    let kind = script_function(&script, "kind");
+
+    let tag_tests = entry_block(&kind.blocks)
+        .instructions
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                IRInstruction::BinaryOp {
+                    op: IRBinOp::NotEq,
+                    operand_ty: IRType::Int8,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        tag_tests, 1,
+        "the sub-union arm should test the tag against the one member it leaves out",
+    );
+    let wraps = all_instructions(&kind.blocks)
+        .filter(|i| matches!(i, IRInstruction::UnionWrap { .. }))
+        .count();
+    assert_eq!(
+        wraps, 2,
+        "each bound member should be wrapped into the bound union one time",
+    );
+    let merge = block_labeled(&kind.blocks, "union_narrow_merge");
+    assert_eq!(
+        branch_targets_into(&kind.blocks, merge.id).len(),
+        2,
+        "the narrow should reach its merge block from one block for each bound member",
+    );
+    assert_eq!(
+        merge.params.len(),
+        1,
+        "the narrowed value should arrive in the merge block as a block param",
+    );
+    assert!(
+        matches!(merge.params[0].ty, IRType::Union(_)),
+        "the narrowed value should be a union, got {:?}",
+        merge.params[0].ty,
+    );
+}
+
+#[test]
+fn match_typed_binding_of_the_whole_union_subject_lowers_as_binding() {
+    // The binding names the same union as the subject, so there is no
+    // tag to test and no value to re-tag.
+    let source = "
+        fn whole(value: Bool | Int | String) -> Bool | Int | String
+          match value
+            all: Bool | Int | String -> all
+          end
+        end
+
+        whole(1)
+        ";
+
+    let script = lower(source);
+    let whole = script_function(&script, "whole");
+
+    let has_write =
+        all_instructions(&whole.blocks).any(|i| matches!(i, IRInstruction::LocalWrite { .. }));
+    assert!(
+        has_write,
+        "typed binding `all` should emit a `LocalWrite` capturing the subject value",
+    );
+    let has_union_op = all_instructions(&whole.blocks).any(|i| {
+        matches!(
+            i,
+            IRInstruction::UnionTagGet { .. } | IRInstruction::UnionWrap { .. }
+        )
+    });
+    assert!(
+        !has_union_op,
+        "a binding of the whole union should emit no `UnionTagGet` and no `UnionWrap`",
     );
 }
 

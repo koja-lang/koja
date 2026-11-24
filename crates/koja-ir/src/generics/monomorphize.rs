@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use koja_ast::identifier::{Identifier, ResolvedType};
 use koja_typecheck::{
     BuiltinShape, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
-    ResolvedVariantData, StructDefinition,
+    ResolvedVariantData, StructDefinition, Substitution, substitute,
 };
 
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
@@ -26,7 +26,7 @@ use crate::struct_decl::{IRStructDecl, IRStructField};
 use crate::types::IRType;
 
 use super::substitute::{substitute_in_function, substitute_signature};
-use super::{FunctionAstEntry, FunctionAstIndex, Instantiation, substitute_resolved_type};
+use super::{FunctionAstEntry, FunctionAstIndex, Instantiation};
 
 /// Specialize one [`Instantiation`] into a concrete decl on the
 /// owning [`IRPackage`]. Surfaces any nested instantiations
@@ -188,9 +188,10 @@ fn monomorphize_struct(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> IRStructDecl {
+    let subst = Substitution::from_args(inst.owner, &inst.args);
     let mut fields = Vec::with_capacity(definition.fields.len());
     for (index, field) in definition.fields.iter().enumerate() {
-        let substituted = substitute_resolved_type(&field.ty, &inst.args, inst.owner);
+        let substituted = substitute(&field.ty, &subst, registry);
         let ir_type = resolved_type_to_ir_type(&substituted, registry, output);
         fields.push(IRStructField {
             index: index as u32,
@@ -208,13 +209,14 @@ fn monomorphize_enum(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> IREnumDecl {
+    let subst = Substitution::from_args(inst.owner, &inst.args);
     let mut variants = Vec::with_capacity(definition.variants.len());
     for (index, variant) in definition.variants.iter().enumerate() {
         let payload = match &variant.data {
             ResolvedVariantData::Struct(fields) => {
                 let mut ir_fields = Vec::with_capacity(fields.len());
                 for (idx, field) in fields.iter().enumerate() {
-                    let substituted = substitute_resolved_type(&field.ty, &inst.args, inst.owner);
+                    let substituted = substitute(&field.ty, &subst, registry);
                     ir_fields.push(IRStructField {
                         index: idx as u32,
                         ir_type: resolved_type_to_ir_type(&substituted, registry, output),
@@ -227,7 +229,7 @@ fn monomorphize_enum(
                 let translated = types
                     .iter()
                     .map(|ty| {
-                        let substituted = substitute_resolved_type(ty, &inst.args, inst.owner);
+                        let substituted = substitute(ty, &subst, registry);
                         resolved_type_to_ir_type(&substituted, registry, output)
                     })
                     .collect();
@@ -262,13 +264,15 @@ fn monomorphize_function(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRFunction> {
+    let owner_subst = Substitution::from_args(inst.owner, &inst.args);
     let mut substituted_ast = ast_entry.function.clone();
-    substitute_in_function(&mut substituted_ast, &inst.args, inst.owner);
-    let mut substituted_signature = substitute_signature(signature, &inst.args, inst.owner);
+    substitute_in_function(&mut substituted_ast, &owner_subst, registry);
+    let mut substituted_signature = substitute_signature(signature, &owner_subst, registry);
     if !inst.method_args.is_empty() {
-        substitute_in_function(&mut substituted_ast, &inst.method_args, inst.template);
+        let method_subst = Substitution::from_args(inst.template, &inst.method_args);
+        substitute_in_function(&mut substituted_ast, &method_subst, registry);
         substituted_signature =
-            substitute_signature(&substituted_signature, &inst.method_args, inst.template);
+            substitute_signature(&substituted_signature, &method_subst, registry);
     }
     lower_function_inner(
         &substituted_ast,

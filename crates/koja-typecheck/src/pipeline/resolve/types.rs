@@ -493,7 +493,7 @@ pub(super) fn verify_bounds(
                 args: bound
                     .args
                     .iter()
-                    .map(|arg| substitute(arg, subst))
+                    .map(|arg| substitute(arg, subst, ctx.registry))
                     .collect(),
                 protocol_id: bound.protocol_id,
             };
