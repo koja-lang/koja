@@ -189,6 +189,36 @@ pub(super) fn emit_tag_eq(
     emit_int8_eq(tag, const_dest, ctx, block)
 }
 
+/// Emit `tag != const(excluded)` in `block` and return the `Bool`
+/// result. `tag` is an already extracted enum or union tag byte.
+pub(super) fn emit_tag_ne(
+    tag: ValueId,
+    excluded: u8,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> ValueId {
+    let const_dest = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest: const_dest,
+            value: ConstValue::Int8(excluded as i8),
+        },
+    );
+    let dest = ctx.fresh_value(IRType::Bool);
+    ctx.cfg.append(
+        block,
+        IRInstruction::BinaryOp {
+            dest,
+            lhs: tag,
+            op: IRBinOp::NotEq,
+            operand_ty: IRType::Int8,
+            rhs: const_dest,
+        },
+    );
+    dest
+}
+
 /// Emit a fresh `Const::Unit` in `block` and return its `ValueId`.
 pub(super) fn emit_unit(ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
     let dest = ctx.fresh_value(IRType::Unit);

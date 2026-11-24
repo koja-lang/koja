@@ -29,16 +29,23 @@
 //! - **Display**: alias names round-trip in diagnostics: a
 //!   `type Pet = Cat | Dog` mismatch reports `Pet`, not the expanded
 //!   `Cat | Dog`.
+//! - **Substitution**: a union that names a type parameter is
+//!   canonical again after the parameter gets its type. `String | T`
+//!   is `String` at `T = String`, and a flat, sorted union at
+//!   `T = Int | Bool`.
 
 use koja_ast::ast::{ExprKind, Statement};
 use koja_ast::coercion::Coercion;
+use koja_ast::identifier::ResolvedType;
 use koja_ast::util::dedent;
+use koja_typecheck::{Substitution, peel_alias, substitute};
 
 mod common;
 
 use common::{
-    assert_script_fails_with, bool_type, diagnostic_messages, package_leaf, script_body,
-    trailing_expr, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    PACKAGE, assert_script_fails_with, bool_type, diagnostic_messages, global_named, int_type,
+    package_leaf, registry_id, script_body, string_type, struct_definition, trailing_expr,
+    trailing_resolution, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
     warning_messages,
 };
 
@@ -1072,5 +1079,148 @@ fn typed_binding_member_not_in_union_diagnoses() {
     assert_script_fails_with(
         source,
         &["type `TestApp.C` is not a member of union `TestApp.A | TestApp.B`"],
+    );
+}
+
+const HOLDER_PRELUDE: &str = "
+    struct Holder<T>
+      value: String | T
+    end
+    ";
+
+fn holder_script(tail: &str) -> String {
+    format!("{}{}", dedent(HOLDER_PRELUDE), dedent(tail))
+}
+
+#[test]
+fn substituted_union_collapses_an_equal_member() {
+    // `String | T` at `T = String` is `String`, not `String | String`.
+    let source = holder_script(
+        "
+        same: Holder<String> = Holder{value: \"a\"}
+        text: String = same.value
+        same.value
+        ",
+    );
+    let checked = typecheck(&source);
+    assert_eq!(trailing_resolution(&checked), string_type(&checked));
+}
+
+#[test]
+fn substituted_union_flattens_a_union_argument() {
+    // `String | T` at `T = Int | Bool` is the flat, sorted union. A
+    // member of the argument is then a member of the field type.
+    let source = holder_script(
+        "
+        wide: Holder<Int | Bool> = Holder{value: true}
+        value: Bool | Int | String = wide.value
+        wide.value
+        ",
+    );
+    let checked = typecheck(&source);
+    assert_eq!(
+        trailing_resolution(&checked),
+        ResolvedType::Union(vec![
+            bool_type(&checked),
+            int_type(&checked),
+            string_type(&checked),
+        ]),
+    );
+}
+
+#[test]
+fn substituted_union_peels_an_alias_argument() {
+    let source = holder_script(
+        "
+        type Small = Int | Bool
+
+        small: Small = true
+        ",
+    );
+    let checked = typecheck(&source);
+    let template = &struct_definition(&checked, "Holder").fields[0].ty;
+    let holder_id = registry_id(&checked, PACKAGE, &["Holder"]);
+    let subst = Substitution::from_args(holder_id, &[package_leaf(&checked, "Small")]);
+    assert_eq!(
+        substitute(template, &subst, &checked.registry),
+        ResolvedType::Union(vec![
+            bool_type(&checked),
+            int_type(&checked),
+            string_type(&checked),
+        ]),
+    );
+}
+
+#[test]
+fn substituted_union_is_canonical_inside_a_type_argument() {
+    let source = "
+        struct Bag<T>
+          items: List<String | T>
+        end
+
+          items: List<Int | String> = []
+          bag: Bag<Int> = Bag{items: items}
+          bag.items
+        ";
+    let checked = typecheck(&dedent(source));
+    let member = ResolvedType::Union(vec![int_type(&checked), string_type(&checked)]);
+    assert_eq!(
+        trailing_resolution(&checked),
+        global_named(&checked, "List", vec![member]),
+    );
+}
+
+#[test]
+fn match_on_a_collapsed_field_takes_one_arm() {
+    // The field type is `String`, so the typed binding names the
+    // whole subject and one arm is exhaustive.
+    let source = holder_script(
+        "
+        same: Holder<String> = Holder{value: \"a\"}
+        match same.value
+          s: String -> s
+        end
+        ",
+    );
+    let checked = typecheck(&source);
+    assert_eq!(trailing_resolution(&checked), string_type(&checked));
+}
+
+#[test]
+fn generic_return_union_collapses_at_the_call() {
+    // `Int | T` at `T = Int` is `Int`, so the call fits an `Int` slot.
+    let source = "
+        fn pick<T>(item: T, flag: Bool) -> Int | T
+          if flag
+            return item
+          end
+          0
+        end
+
+          n: Int = pick(7, true)
+          pick(7, true)
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn substituted_union_takes_a_recursive_alias_argument() {
+    // `String | T` at `T = Value` is the union that `Value` names,
+    // because `String` is already a member of it.
+    let source = holder_script(
+        "
+        type Value = Bool | Int | String | List<Value>
+
+        items: List<Value> = []
+        holder: Holder<Value> = Holder{value: items}
+        value: Value = holder.value
+        holder.value
+        ",
+    );
+    let checked = typecheck(&source);
+    assert_eq!(
+        trailing_resolution(&checked),
+        peel_alias(&package_leaf(&checked, "Value"), &checked.registry),
     );
 }

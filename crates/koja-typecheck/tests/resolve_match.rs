@@ -1276,6 +1276,83 @@ fn match_typed_binding_of_the_subject_type_binds() {
 }
 
 #[test]
+fn match_typed_binding_of_a_sub_union_binds_and_covers_its_members() {
+    // `rest: Bool | String` names two members of the subject. The arm
+    // covers both, so the match needs no catch-all, and the body sees
+    // `rest` as a `Bool | String`.
+    let source = "
+          x: Bool | Int | String = 1
+          match x
+            n: Int -> \"int\"
+            rest: Bool | String ->
+              narrow: Bool | String = rest
+              \"rest\"
+          end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), string_type(&checked));
+    let ExprKind::Match { arms, .. } = &trailing_expr(&checked).kind else {
+        panic!("expected ExprKind::Match");
+    };
+    let Pattern::TypedBinding { resolved_type, .. } = &arms[1].pattern else {
+        panic!("expected Pattern::TypedBinding for arm 1");
+    };
+    assert_eq!(
+        resolved_type.as_ref(),
+        Some(&ResolvedType::Union(vec![
+            bool_type(&checked),
+            string_type(&checked),
+        ])),
+    );
+}
+
+#[test]
+fn match_typed_binding_of_a_sub_union_leaves_other_members_missing() {
+    let source = "
+          x: Bool | Float | Int | String = 1
+          match x
+            n: Int -> \"int\"
+            rest: Bool | Float -> \"rest\"
+          end
+        ";
+    assert_script_fails_with(source, &["Missing pattern(s) `String`"]);
+}
+
+#[test]
+fn match_arm_after_a_sub_union_binding_warns_unreachable() {
+    let source = "
+          x: Bool | Int | String = 1
+          match x
+            rest: Bool | String -> \"rest\"
+            b: Bool -> \"bool\"
+            n: Int -> \"int\"
+          end
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings.iter().any(|m| m.contains("unreachable")),
+        "expected an unreachable warning for the `Bool` arm, got {warnings:?}",
+    );
+}
+
+#[test]
+fn match_typed_binding_of_a_sub_union_rejects_a_type_outside_the_subject() {
+    let source = "
+          x: Bool | Int | String = 1
+          match x
+            rest: Bool | Float -> \"rest\"
+            n: Int -> \"int\"
+            s: String -> s
+          end
+        ";
+    assert_script_fails_with(
+        source,
+        &["type `Float` is not a member of union `Bool | Int | String`"],
+    );
+}
+
+#[test]
 fn match_nested_enum_payload_arms_combine_into_outer_coverage() {
     // `Some(Red)` and `Some(Green)` together cover every `Some`, so
     // no catch-all is needed and nothing warns.

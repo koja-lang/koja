@@ -18,9 +18,9 @@
 //!   triple to the right [`monomorphize`] arm: struct, enum, or
 //!   function. Each arm substitutes the discovered args into the
 //!   template's typecheck definition / AST body via
-//!   [`substitute_resolved_type`] (a local copy, as the typecheck
-//!   variant lives in a different layer with a different
-//!   invariant about Phantom slots), then re-lowers the
+//!   [`koja_typecheck::substitute`], the same function the typecheck
+//!   uses, so a substituted union has one canonical form in both
+//!   layers. Each arm then re-lowers the
 //!   substituted shape into a concrete [`crate::IRStructDecl`] /
 //!   [`crate::IREnumDecl`] / [`crate::IRFunction`].
 //! - [`FunctionAstIndex`]: registry-id to AST-`Function`-borrow
@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use koja_ast::ast::{Function, ImplMember, Item, name_texts};
-use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 use koja_typecheck::{CheckedPackage, GlobalRegistry};
 
 use crate::lower::LowerOutput;
@@ -257,132 +257,5 @@ fn insert_function<'a>(
 ) {
     if let Some((id, _)) = registry.lookup_function(identifier, function.params.len()) {
         map.insert(id, FunctionAstEntry { def_file, function });
-    }
-}
-
-/// Substitute `args` into `template`, replacing every leaf
-/// [`Resolution::TypeParam { owner, .. }`][Resolution::TypeParam]
-/// whose `owner` matches with `args[index]`. Other heads recurse
-/// into their `type_args`.
-///
-/// Local copy of the typecheck-side substitution. The contract
-/// here is "every Param leaf has a concrete arg" (enforced by the
-/// inference-then-substitute flow at construction sites in
-/// typecheck), so this helper panics on out-of-range index instead of
-/// substituting to `ResolvedType::Unresolved` like the typecheck
-/// variant does for unresolved Phantom slots.
-pub(crate) fn substitute_resolved_type(
-    template: &ResolvedType,
-    args: &[ResolvedType],
-    owner: GlobalRegistryId,
-) -> ResolvedType {
-    match template {
-        ResolvedType::Named {
-            resolution:
-                Resolution::TypeParam {
-                    owner: param_owner,
-                    index,
-                },
-            ..
-        } if *param_owner == owner => {
-            args.get(index.as_u32() as usize)
-                .cloned()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "IR generics: TypeParam index {} out of range \
-                     (owner `{owner}`, args.len() == {})",
-                        index.as_u32(),
-                        args.len(),
-                    );
-                })
-        }
-        ResolvedType::Named {
-            resolution,
-            type_args,
-        } => ResolvedType::Named {
-            resolution: *resolution,
-            type_args: type_args
-                .iter()
-                .map(|arg| substitute_resolved_type(arg, args, owner))
-                .collect(),
-        },
-        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            ResolvedType::Anonymous(AnonymousKind::Function {
-                params: params
-                    .iter()
-                    .map(|p| substitute_resolved_type(p, args, owner))
-                    .collect(),
-                ret: Box::new(substitute_resolved_type(ret, args, owner)),
-            })
-        }
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            ResolvedType::Anonymous(AnonymousKind::Tuple {
-                elements: elements
-                    .iter()
-                    .map(|e| substitute_resolved_type(e, args, owner))
-                    .collect(),
-            })
-        }
-        ResolvedType::Union(members) => ResolvedType::Union(
-            members
-                .iter()
-                .map(|m| substitute_resolved_type(m, args, owner))
-                .collect(),
-        ),
-        ResolvedType::Failed => ResolvedType::Failed,
-        ResolvedType::Unresolved => ResolvedType::Unresolved,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use koja_ast::identifier::TypeParamIndex;
-
-    use super::*;
-
-    fn parameter(owner: GlobalRegistryId, index: u32) -> ResolvedType {
-        ResolvedType::Named {
-            resolution: Resolution::TypeParam {
-                index: TypeParamIndex::new(index),
-                owner,
-            },
-            type_args: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn substitutes_matching_owner_through_nested_shapes() {
-        let owner = GlobalRegistryId::new(1);
-        let concrete = ResolvedType::Named {
-            resolution: Resolution::Global(GlobalRegistryId::new(2)),
-            type_args: Vec::new(),
-        };
-        let template = ResolvedType::Anonymous(AnonymousKind::Function {
-            params: vec![ResolvedType::Union(vec![
-                parameter(owner, 0),
-                ResolvedType::Unresolved,
-            ])],
-            ret: Box::new(parameter(owner, 0)),
-        });
-
-        let substituted =
-            substitute_resolved_type(&template, std::slice::from_ref(&concrete), owner);
-        let ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) = substituted else {
-            panic!("expected function type");
-        };
-        assert_eq!(*ret, concrete);
-        assert!(matches!(&params[0], ResolvedType::Union(members) if members[0] == concrete),);
-    }
-
-    #[test]
-    fn unrelated_owner_parameter_stays_generic() {
-        let owner = GlobalRegistryId::new(1);
-        let other = GlobalRegistryId::new(2);
-        let template = parameter(other, 0);
-
-        assert_eq!(
-            substitute_resolved_type(&template, &[ResolvedType::Unresolved], owner),
-            template,
-        );
     }
 }

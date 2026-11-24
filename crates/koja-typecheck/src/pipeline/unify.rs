@@ -17,7 +17,9 @@ use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
 
-use crate::pipeline::resolve::types::{is_primitive, peel_alias, types_equivalent};
+use crate::pipeline::resolve::types::{
+    canonical_union, is_primitive, peel_alias, types_equivalent,
+};
 use crate::registry::GlobalRegistry;
 
 /// A type parameter unified to two distinct concrete types across two
@@ -363,17 +365,32 @@ pub(crate) fn unify_into(
 /// Phantom slots substitute to [`ResolvedType::Unresolved`]. Leaves
 /// owned by out-of-scope owners (e.g. an outer-fn type-param when the
 /// substitution only covers an inner call) round-trip unchanged.
-pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType {
+///
+/// A union is built again through [`canonical_union`], because a
+/// member that was a type parameter can now equal another member or
+/// be a union itself. `String | T` is `String` at `T = String`, and
+/// `Bool | Int | String` at `T = Bool | Int`.
+pub fn substitute(
+    template: &ResolvedType,
+    subst: &Substitution,
+    registry: &GlobalRegistry,
+) -> ResolvedType {
     match template {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             ResolvedType::Anonymous(AnonymousKind::Function {
-                params: params.iter().map(|p| substitute(p, subst)).collect(),
-                ret: Box::new(substitute(ret, subst)),
+                params: params
+                    .iter()
+                    .map(|p| substitute(p, subst, registry))
+                    .collect(),
+                ret: Box::new(substitute(ret, subst, registry)),
             })
         }
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
             ResolvedType::Anonymous(AnonymousKind::Tuple {
-                elements: elements.iter().map(|e| substitute(e, subst)).collect(),
+                elements: elements
+                    .iter()
+                    .map(|e| substitute(e, subst, registry))
+                    .collect(),
             })
         }
         ResolvedType::Named {
@@ -388,11 +405,18 @@ pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType
             type_args,
         } => ResolvedType::Named {
             resolution: *resolution,
-            type_args: type_args.iter().map(|arg| substitute(arg, subst)).collect(),
+            type_args: type_args
+                .iter()
+                .map(|arg| substitute(arg, subst, registry))
+                .collect(),
         },
-        ResolvedType::Union(members) => {
-            ResolvedType::Union(members.iter().map(|m| substitute(m, subst)).collect())
-        }
+        ResolvedType::Union(members) => canonical_union(
+            members
+                .iter()
+                .map(|m| substitute(m, subst, registry))
+                .collect(),
+            registry,
+        ),
         ResolvedType::Failed => ResolvedType::Failed,
         ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
@@ -454,7 +478,7 @@ mod tests {
         unify_into(&template, &actual, &mut substitution, &registry)
             .expect("dual-scope unification should succeed");
 
-        assert_eq!(substitute(&template, &substitution), actual);
+        assert_eq!(substitute(&template, &substitution, &registry), actual);
     }
 
     #[test]
@@ -470,23 +494,58 @@ mod tests {
         unify_into(&template, &int64, &mut substitution, &registry)
             .expect("equivalent rebinding succeeds");
 
-        assert_eq!(substitute(&template, &substitution), int);
+        assert_eq!(substitute(&template, &substitution, &registry), int);
     }
 
     #[test]
     fn from_args_substitutes_nested_type_parameter() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
         let owner = GlobalRegistryId::new(100);
-        let replacement = ResolvedType::leaf(Resolution::Global(GlobalRegistryId::new(200)));
-        let substitution = Substitution::from_args(owner, from_ref(&replacement));
-        let template = ResolvedType::Union(vec![
-            parameter(owner, 0),
-            ResolvedType::leaf(Resolution::Global(GlobalRegistryId::new(300))),
-        ]);
+        let boolean = registry.primitive("Bool");
+        let int = registry.primitive("Int");
+        let string = registry.primitive("String");
+        let template = ResolvedType::Union(vec![string.clone(), parameter(owner, 0)]);
+        let cases = [
+            (
+                int.clone(),
+                ResolvedType::Union(vec![int.clone(), string.clone()]),
+            ),
+            (string.clone(), string.clone()),
+            (
+                ResolvedType::Union(vec![boolean.clone(), int.clone()]),
+                ResolvedType::Union(vec![boolean.clone(), int.clone(), string.clone()]),
+            ),
+            (
+                ResolvedType::Union(vec![int.clone(), string.clone()]),
+                ResolvedType::Union(vec![int.clone(), string.clone()]),
+            ),
+        ];
 
-        let ResolvedType::Union(members) = substitute(&template, &substitution) else {
-            panic!("union shape should be preserved");
-        };
-        assert_eq!(members[0], replacement);
+        for (arg, expected) in cases {
+            let substitution = Substitution::from_args(owner, from_ref(&arg));
+            assert_eq!(substitute(&template, &substitution, &registry), expected);
+        }
+    }
+
+    #[test]
+    fn from_args_substitutes_union_of_two_type_parameters() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let owner = GlobalRegistryId::new(100);
+        let int = registry.primitive("Int");
+        let string = registry.primitive("String");
+        let template = ResolvedType::Union(vec![parameter(owner, 0), parameter(owner, 1)]);
+        let cases = [
+            (
+                vec![string.clone(), int.clone()],
+                ResolvedType::Union(vec![int.clone(), string.clone()]),
+            ),
+            (vec![int.clone(), int.clone()], int.clone()),
+        ];
+
+        for (args, expected) in cases {
+            let substitution = Substitution::from_args(owner, &args);
+            assert_eq!(substitute(&template, &substitution, &registry), expected);
+        }
     }
 
     #[test]
@@ -511,5 +570,18 @@ mod tests {
             .expect("structural mismatch is deferred");
 
         assert_eq!(substitution.args(owner), vec![ResolvedType::Unresolved]);
+    }
+
+    #[test]
+    fn union_of_two_unfilled_slots_collapses_to_unresolved() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let owner = GlobalRegistryId::new(100);
+        let template = ResolvedType::Union(vec![parameter(owner, 0), parameter(owner, 1)]);
+        let substitution = Substitution::single(owner, 2);
+
+        assert_eq!(
+            substitute(&template, &substitution, &registry),
+            ResolvedType::Unresolved,
+        );
     }
 }

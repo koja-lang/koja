@@ -107,7 +107,7 @@ impl GlobalRegistry {
             conformance
                 .protocol_args
                 .iter()
-                .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
+                .map(|arg| crate::pipeline::unify::substitute(arg, &substitution, self))
                 .collect(),
         )
     }
@@ -167,7 +167,7 @@ impl GlobalRegistry {
                         let actual = record
                             .protocol_args
                             .iter()
-                            .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
+                            .map(|arg| crate::pipeline::unify::substitute(arg, &substitution, self))
                             .collect::<Vec<_>>();
                         self.type_args_equivalent(&actual, expected)
                     })
@@ -193,7 +193,7 @@ impl GlobalRegistry {
                     args: bound
                         .args
                         .iter()
-                        .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
+                        .map(|arg| crate::pipeline::unify::substitute(arg, &substitution, self))
                         .collect(),
                     protocol_id: bound.protocol_id,
                 };

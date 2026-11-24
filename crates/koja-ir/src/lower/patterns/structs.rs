@@ -130,7 +130,7 @@ pub(super) fn lower_subpattern_into(
     steps: &mut Vec<TestStep>,
     binds: &mut Vec<PayloadBind>,
 ) {
-    if let Some(ir_local) = whole_subject_local(pattern, sub_ir_type) {
+    if let Some(ir_local) = whole_subject_local(pattern, sub_ir_type, ctx) {
         ensure_local_declared(ir_local, sub_ir_type, ctx);
         ctx.mark_slot_borrowed(ir_local);
         binds.push(PayloadBind {
@@ -186,8 +186,9 @@ pub(super) fn lower_subpattern_into(
 
 /// True when `pattern` lowers to a [`PatternCheck::CatchAll`] against
 /// a subject of the given type. A wildcard and a plain binding always
-/// do. A typed binding does when the subject is not a union. A struct
-/// or tuple destructure does when every sub-pattern does. Used by
+/// do. A typed binding does when it binds its whole subject, as
+/// [`whole_subject_local`] decides. A struct or tuple destructure
+/// does when every sub-pattern does. Used by
 /// [`lower_subpattern_into`] to skip the projection-and-block-mint
 /// dance for nested patterns that contribute no runtime predicates.
 ///
@@ -203,7 +204,7 @@ fn is_static_catch_all(
     match pattern {
         Pattern::Wildcard { .. } => true,
         Pattern::Binding { .. } | Pattern::TypedBinding { .. } => {
-            whole_subject_local(pattern, sub_ir_type).is_some()
+            whole_subject_local(pattern, sub_ir_type, ctx).is_some()
         }
         Pattern::Struct { fields, .. } => {
             let (definition, _, owner) =
@@ -405,6 +406,10 @@ fn emit_subpattern_projection(
                 },
             );
         }
+        BindOp::UnionNarrow { .. } => panic!(
+            "IR lower: a union narrow binds a leaf and never projects the subject \
+             of a nested pattern",
+        ),
         BindOp::UnionPayload {
             member_index,
             member_type,

@@ -30,6 +30,9 @@
 //! - [`or_pattern`]: `A | B | C` chained through fresh
 //!   `match_or_alt_<n>` blocks, one [`TestStep`] per alternative
 //!   under [`ChainMode::Or`].
+//! - [`sub_union`]: a typed binding that names a union of members
+//!   of the subject union. One [`TestStep`] for each member the
+//!   binding leaves out, and one [`BindOp::UnionNarrow`] bind.
 //! - [`literals`]: the `subject == const(value)` emission shared
 //!   between the dispatcher's `Pattern::Literal` arm and the
 //!   or-pattern literal-alternative arm.
@@ -38,6 +41,7 @@ mod enums;
 mod literals;
 mod or_pattern;
 mod structs;
+mod sub_union;
 mod tuples;
 
 use std::collections::HashSet;
@@ -45,13 +49,13 @@ use std::collections::HashSet;
 use koja_ast::ast::{Diagnostic, ExprKind, Name, Pattern};
 use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{pattern_kind_label, pattern_span};
+use koja_typecheck::{Substitution, substitute};
 
 use super::arms::{emit_tag_eq, lower_result_ty};
 use super::ctx::FnLowerCtx;
 use super::package::resolved_type_to_ir_type;
 use crate::enum_decl::IRVariantTag;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
-use crate::generics::substitute_resolved_type;
 use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
 
@@ -186,7 +190,12 @@ pub(super) struct BindStep {
 /// `FieldGet` (no tag, since the input is already a struct).
 /// `TupleElement` emits `TupleGet` (index-addressed, no decl).
 /// `UnionPayload` emits `UnionPayloadGet` (tag-gated extraction
-/// against a tagged union member).
+/// against a tagged union member). `UnionNarrow` is the one step
+/// that is not a single instruction. It re-tags a union of type
+/// `source_type` into the sub-union that is the step's `output_type`,
+/// through the tag switch of
+/// [`emit_union_narrow`](super::unions::emit_union_narrow). It binds
+/// a leaf, so it is always the last step of a chain.
 #[derive(Clone)]
 pub(super) enum BindOp {
     EnumPayloadField {
@@ -200,6 +209,9 @@ pub(super) enum BindOp {
     },
     TupleElement {
         index: u32,
+    },
+    UnionNarrow {
+        source_type: IRType,
     },
     UnionPayload {
         member_index: u8,
@@ -293,17 +305,11 @@ pub(super) fn lower_pattern_check(
             ..
         } => {
             let subject_ir = ctx.type_of(inputs.subject);
-            if whole_subject_local(pattern, &subject_ir).is_some() {
+            if whole_subject_local(pattern, &subject_ir, ctx).is_some() {
                 lower_binding_check(*local_id, name, &inputs, ctx, block);
                 return Ok((PatternCheck::CatchAll { binds: Vec::new() }, block));
             }
-            let resolved = resolved_type.as_ref().unwrap_or_else(|| {
-                panic!(
-                    "IR lower: typed-binding pattern `{name}` reaches lower without a \
-                     resolved_type (typecheck-resolve invariant violation)",
-                );
-            });
-            let member_ir = resolved_type_to_ir_type(resolved, ctx.registry, ctx.output);
+            let member_ir = typed_binding_ir_type(name, resolved_type, ctx);
             let Some(members) = ctx.output.union_members(&subject_ir) else {
                 panic!(
                     "IR lower: typed-binding pattern `{name}` reaches lower with \
@@ -311,18 +317,20 @@ pub(super) fn lower_pattern_check(
                      violation",
                 );
             };
-            let member_index = members
-                .iter()
-                .position(|m| m == &member_ir)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "IR lower: typed-binding pattern `{name}` member \
-                         `{member_ir:?}` is not in subject union `{subject_ir:?}` \
-                         (typecheck-resolve invariant violation)",
-                    )
-                }) as u8;
-            let cond = emit_union_tag_eq(inputs.subject, &subject_ir, member_index, ctx, block);
             let local = require_local(*local_id, name);
+            // A type that is not one member names a union of members.
+            let Some(member_index) = members.iter().position(|m| m == &member_ir) else {
+                return Ok(sub_union::lower_sub_union_check(
+                    local,
+                    &member_ir,
+                    inputs.subject,
+                    &subject_ir,
+                    ctx,
+                    block,
+                ));
+            };
+            let member_index = member_index as u8;
+            let cond = emit_union_tag_eq(inputs.subject, &subject_ir, member_index, ctx, block);
             ensure_local_declared(local, &member_ir, ctx);
             ctx.mark_slot_borrowed(local);
             let bind = PayloadBind {
@@ -442,7 +450,11 @@ pub(super) fn field_type_for(
         ResolvedType::Named { type_args, .. } => type_args,
         _ => &[],
     };
-    let substituted = substitute_resolved_type(declared_ty, subject_args, owner);
+    let substituted = substitute(
+        declared_ty,
+        &Substitution::from_args(owner, subject_args),
+        ctx.registry,
+    );
     let ir_type = resolved_type_to_ir_type(&substituted, ctx.registry, ctx.output);
     (substituted, ir_type)
 }
@@ -489,13 +501,40 @@ fn single_test(cond: ValueId, block: IRBlockId) -> (PatternCheck, IRBlockId) {
 /// The local that `pattern` binds to its whole subject with no test.
 /// A plain binding always does. A typed binding does when the subject
 /// is not a union, because the typecheck accepts it only when its
-/// type equals the subject type.
-pub(super) fn whole_subject_local(pattern: &Pattern, subject_ir: &IRType) -> Option<IRLocalId> {
+/// type equals the subject type. On a union subject, a typed binding
+/// does when it names that same union.
+pub(super) fn whole_subject_local(
+    pattern: &Pattern,
+    subject_ir: &IRType,
+    ctx: &mut FnLowerCtx<'_>,
+) -> Option<IRLocalId> {
     match pattern {
         Pattern::Binding { local_id, name, .. } => Some(require_local(*local_id, name)),
-        Pattern::TypedBinding { local_id, name, .. } if !matches!(subject_ir, IRType::Union(_)) => {
-            Some(require_local(*local_id, name))
+        Pattern::TypedBinding {
+            local_id,
+            name,
+            resolved_type,
+            ..
+        } => {
+            let whole = !matches!(subject_ir, IRType::Union(_))
+                || typed_binding_ir_type(name, resolved_type, ctx) == *subject_ir;
+            whole.then(|| require_local(*local_id, name))
         }
         _ => None,
     }
+}
+
+/// The IR type that a typed binding names.
+fn typed_binding_ir_type(
+    name: &Name,
+    resolved_type: &Option<ResolvedType>,
+    ctx: &mut FnLowerCtx<'_>,
+) -> IRType {
+    let resolved = resolved_type.as_ref().unwrap_or_else(|| {
+        panic!(
+            "IR lower: typed-binding pattern `{name}` reaches lower without a \
+             resolved_type (typecheck-resolve invariant violation)",
+        );
+    });
+    resolved_type_to_ir_type(resolved, ctx.registry, ctx.output)
 }

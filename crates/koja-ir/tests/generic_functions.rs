@@ -14,6 +14,10 @@
 //! - Calls inside a substituted body (a generic function calling
 //!   another generic function) cascade through the worklist.
 //! - A widening inside a substituted body targets the concrete union.
+//!   When that union collapses to one member, the widening emits
+//!   nothing.
+//! - A typed binding of a type parameter narrows the subject when the
+//!   argument is a union.
 //!
 //! Mangled-name shape for top-level generic functions mirrors generic
 //! types: `<root>_$<arg>.<arg>$`. Methods on a generic type read as
@@ -24,7 +28,10 @@ use koja_ir::{IRFunction, IRInstruction, IRType};
 
 mod common;
 
-use common::{all_instructions, lower_script_source, mangled_function, script_function_names};
+use common::{
+    all_instructions, count_blocks_with_prefix, lower_script_source, mangled_function,
+    script_function_names,
+};
 
 #[test]
 fn identity_function_monomorphizes_at_each_concrete_arg() {
@@ -363,6 +370,78 @@ fn widening_in_a_method_of_a_generic_struct_lowers_to_union_wrap() {
         union_wrap_count(either),
         2,
         "expected one UnionWrap for `self.value` and one for `0`",
+    );
+}
+
+#[test]
+fn widening_into_a_union_that_collapses_lowers_to_no_union_wrap() {
+    // `Int | T` at `T = Int` is `Int`. The two widenings that the
+    // typecheck records in the body then have nothing to wrap.
+    let source = "
+        fn pick<T>(item: T, flag: Bool) -> Int | T
+          if flag
+            return item
+          end
+
+          0
+        end
+
+        pick(7, true)
+        ";
+
+    let script = lower_script_source(source);
+
+    let pick = mangled_function(&script, "TestApp.pick/2_$Int64$");
+    assert_eq!(
+        pick.return_type,
+        IRType::Int64,
+        "expected `pick<Int>` to return the one member that is left",
+    );
+    assert_eq!(
+        union_wrap_count(pick),
+        0,
+        "expected no UnionWrap when the union collapses to `Int`",
+    );
+}
+
+#[test]
+fn typed_binding_of_a_type_parameter_narrows_at_a_union_argument() {
+    // `Int | T` at `T = Bool | String` is `Bool | Int | String`. The
+    // arm `rest: T` then binds two of the three members, so it
+    // re-tags the value into `Bool | String`.
+    let source = "
+        struct Holder<T>
+          value: Int | T
+
+          fn kind(self) -> String
+            match self.value
+              n: Int -> n.format()
+              rest: T -> rest.format()
+            end
+          end
+        end
+
+        inner: Bool | String = \"e\"
+        holder: Holder<Bool | String> = Holder{value: inner}
+        holder.kind()
+        ";
+
+    let script = lower_script_source(source);
+
+    let kind_name = script_function_names(&script)
+        .into_iter()
+        .find(|name| name.ends_with(".kind/1"))
+        .expect("expected one monomorphized `Holder.kind`");
+    let kind = mangled_function(&script, &kind_name);
+    assert_eq!(
+        count_blocks_with_prefix(&kind.blocks, "union_narrow_merge"),
+        1,
+        "expected the arm `rest: T` to narrow the subject one time",
+    );
+    assert_eq!(
+        union_wrap_count(kind),
+        2,
+        "expected one UnionWrap for each member of `Bool | String`",
     );
 }
 

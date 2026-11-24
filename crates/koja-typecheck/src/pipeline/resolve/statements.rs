@@ -624,7 +624,7 @@ fn walk_field_segments(
             return None;
         };
         let subst = Substitution::from_args(struct_id, type_args);
-        current_ty = substitute(&declared.ty, &subst);
+        current_ty = substitute(&declared.ty, &subst, resolver.registry);
     }
     Some(current_ty)
 }

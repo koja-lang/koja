@@ -1148,7 +1148,7 @@ fn check_impl_method_signature(
         .zip(actual_non_self.iter())
         .enumerate()
     {
-        let expected_ty = substitute(&want.ty, protocol_subst);
+        let expected_ty = substitute(&want.ty, protocol_subst, registry);
         if !types_equivalent(&expected_ty, &got.ty, registry) {
             diagnostics.push(Diagnostic::error(
                 format!(
@@ -1164,7 +1164,7 @@ fn check_impl_method_signature(
             ));
         }
     }
-    let expected_return = substitute(&expected.return_type, protocol_subst);
+    let expected_return = substitute(&expected.return_type, protocol_subst, registry);
     if !types_equivalent(&expected_return, &actual.return_type, registry) {
         diagnostics.push(Diagnostic::error(
             format!(

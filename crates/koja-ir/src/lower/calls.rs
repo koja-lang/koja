@@ -8,7 +8,7 @@ use koja_ast::ast::{Arg, Expr, ExprKind, Name};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
-use koja_typecheck::{Dispatch, GlobalKind, GlobalRegistry, peel_alias};
+use koja_typecheck::{Dispatch, GlobalKind, GlobalRegistry, Substitution, peel_alias, substitute};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::equality::lower_equality_call;
@@ -18,7 +18,7 @@ use super::package::resolved_type_to_ir_type;
 use super::tuples::lower_tuple_conformance_call;
 use super::unions::lower_union_conformance_call;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
-use crate::generics::{Instantiation, substitute_resolved_type};
+use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::mangling::{mangled_function_name, mangled_method_name, source_function_symbol};
 use crate::types::{ConstValue, IRType, ValueId};
@@ -98,8 +98,11 @@ pub(super) fn lower_call(
             method_args: Vec::new(),
             owner: callee_id,
         });
-        let substituted_return =
-            substitute_resolved_type(&signature.return_type, type_args, callee_id);
+        let substituted_return = substitute(
+            &signature.return_type,
+            &Substitution::from_args(callee_id, type_args),
+            registry,
+        );
         let return_ty = resolved_type_to_ir_type(&substituted_return, registry, ctx.output);
         (mangled, return_ty)
     };
@@ -433,9 +436,16 @@ pub(super) fn lower_method_call(
                 owner: struct_id,
             });
         }
-        let with_receiver =
-            substitute_resolved_type(&signature.return_type, &receiver_type_args, struct_id);
-        let with_method = substitute_resolved_type(&with_receiver, method_type_args, method_id);
+        let with_receiver = substitute(
+            &signature.return_type,
+            &Substitution::from_args(struct_id, &receiver_type_args),
+            registry,
+        );
+        let with_method = substitute(
+            &with_receiver,
+            &Substitution::from_args(method_id, method_type_args),
+            registry,
+        );
         let return_ty = resolved_type_to_ir_type(&with_method, registry, ctx.output);
         (callee, return_ty)
     };
@@ -566,7 +576,11 @@ pub(super) fn conformance_method_symbol(
         method_args: Vec::new(),
         owner: struct_id,
     });
-    let substituted = substitute_resolved_type(&signature.return_type, type_args, struct_id);
+    let substituted = substitute(
+        &signature.return_type,
+        &Substitution::from_args(struct_id, type_args),
+        registry,
+    );
     let return_ty = resolved_type_to_ir_type(&substituted, registry, output);
     (callee, return_ty)
 }

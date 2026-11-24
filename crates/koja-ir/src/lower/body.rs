@@ -478,7 +478,7 @@ fn build_field_chain(
                     )
                 });
         let subst = Substitution::from_args(struct_id, type_args);
-        let substituted = substitute(&declared.ty, &subst);
+        let substituted = substitute(&declared.ty, &subst, registry);
         let field_ir_type = resolved_type_to_ir_type(&substituted, registry, output);
         let struct_symbol = resolved_struct_symbol(&current_ty, registry, output);
         steps.push(FieldStep {

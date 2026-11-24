@@ -179,14 +179,11 @@ pub(super) fn resolve_pattern(
             let peeled_subject = peel_alias(subject_ty, resolver.registry);
             match &peeled_subject {
                 ResolvedType::Union(members) => {
-                    if !members
-                        .iter()
-                        .any(|m| types_equivalent(m, &resolved, resolver.registry))
-                    {
+                    if let Some(missing) = missing_member(&resolved, members, resolver.registry) {
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "type `{}` is not a member of union `{}`",
-                                display_resolution(&resolved, resolver.registry),
+                                display_resolution(&missing, resolver.registry),
                                 display_resolution(subject_ty, resolver.registry),
                             ),
                             *span,
@@ -213,6 +210,30 @@ pub(super) fn resolve_pattern(
             *local_id = Some(id);
             *resolved_type = Some(resolved);
         }
+    }
+}
+
+/// The first type that a typed binding names and the subject union
+/// does not hold. `None` when the binding names one member of
+/// `members`, or a union of members.
+fn missing_member(
+    bound: &ResolvedType,
+    members: &[ResolvedType],
+    registry: &GlobalRegistry,
+) -> Option<ResolvedType> {
+    let is_member = |ty: &ResolvedType| {
+        members
+            .iter()
+            .any(|member| types_equivalent(member, ty, registry))
+    };
+    if is_member(bound) {
+        return None;
+    }
+    match peel_alias(bound, registry) {
+        ResolvedType::Union(bound_members) => {
+            bound_members.into_iter().find(|member| !is_member(member))
+        }
+        _ => Some(bound.clone()),
     }
 }
 

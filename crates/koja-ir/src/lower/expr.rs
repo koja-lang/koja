@@ -57,6 +57,8 @@ pub(super) fn lower_expr(
 /// emission per the northstar coercion contract:
 /// [`Coercion::NumericWiden`] maps to [`IRInstruction::NumericWiden`]
 /// and [`Coercion::UnionWiden`] maps to [`IRInstruction::UnionWrap`].
+/// A [`Coercion::UnionWiden`] whose target equals the type of the
+/// value emits nothing.
 fn apply_value_coercion(
     expr: &Expr,
     value: ValueId,
@@ -84,7 +86,14 @@ fn apply_value_coercion(
         }
         Coercion::UnionWiden(target) => {
             let target_ir = resolved_type_to_ir_type(target, ctx.registry, ctx.output);
-            if matches!(ctx.type_of(value), IRType::Union(_)) {
+            let value_ir = ctx.type_of(value);
+            // A type argument can make the target equal to the type
+            // of the value, as in `Int` into `Int | T` at `T = Int`.
+            // The value is then already in the target shape.
+            if value_ir == target_ir {
+                return (value, block);
+            }
+            if matches!(value_ir, IRType::Union(_)) {
                 return emit_union_widen(expr, value, target_ir, ctx, block);
             }
             let dest = emit_union_wrap(value, &target_ir, ctx, block);

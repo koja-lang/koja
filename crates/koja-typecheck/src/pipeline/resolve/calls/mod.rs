@@ -693,7 +693,7 @@ fn try_field_callable(
         _ => return None,
     };
     let subst = Substitution::from_args(struct_id, &receiver_args);
-    let callee_ty = substitute(&field.ty, &subst);
+    let callee_ty = substitute(&field.ty, &subst, resolver.registry);
     let ResolvedType::Anonymous(AnonymousKind::Function {
         params: fn_params,
         ret,
@@ -769,10 +769,10 @@ fn infer_call_type_args(
         .iter()
         .map(|p| ResolvedParam {
             name: p.name.clone(),
-            ty: substitute(&p.ty, &subst),
+            ty: substitute(&p.ty, &subst, ctx.registry),
         })
         .collect();
-    let substituted_return = substitute(&sig.return_type, &subst);
+    let substituted_return = substitute(&sig.return_type, &subst, ctx.registry);
     *out_type_args = subst.args(callee.id);
     (substituted_params, substituted_return)
 }
@@ -1163,7 +1163,7 @@ fn resolve_args_in_two_passes(
     if let Some(hint) = target.expected {
         fill_from_expected(target.return_type, hint, &mut hint_subst, resolver.registry);
     }
-    let hinted_params = substitute_params(target.params, &hint_subst);
+    let hinted_params = substitute_params(target.params, &hint_subst, resolver.registry);
     resolve_non_closure_args(args, Some(&hinted_params), resolver, diagnostics);
     let mut partial_subst = target.subst.clone();
     let partial_pairs = target
@@ -1177,18 +1177,23 @@ fn resolve_args_in_two_passes(
         resolver.registry,
         |_, _| {},
     );
-    let partially_substituted_params = substitute_params(target.params, &partial_subst);
+    let partially_substituted_params =
+        substitute_params(target.params, &partial_subst, resolver.registry);
     resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
 }
 
 /// Substitute `subst` into every param's declared type. Used to
 /// produce closure-arg expected types from a partial inference state.
-fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<ResolvedParam> {
+fn substitute_params(
+    params: &[ResolvedParam],
+    subst: &Substitution,
+    registry: &GlobalRegistry,
+) -> Vec<ResolvedParam> {
     params
         .iter()
         .map(|p| ResolvedParam {
             name: p.name.clone(),
-            ty: substitute(&p.ty, subst),
+            ty: substitute(&p.ty, subst, registry),
         })
         .collect()
 }

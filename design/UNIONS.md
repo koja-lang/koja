@@ -33,6 +33,12 @@ The compiler keeps one canonical form for each set, with the members flat,
 sorted, and distinct. Two unions are the same type exactly when their
 canonical forms are equal.
 
+A union that names a type parameter follows the same rule when the
+parameter gets its type. `String | T` is `String` at `T = String`, and it is
+`Bool | Int | String` at `T = Bool | Int`. In a generic body, a `match` on
+`Int | T` can have the arms `n: Int ->` and `t: T ->`. At `T = Int` the two
+arms name the same type, and the first one runs.
+
 ### 2. A `type` alias is a name and not a type
 
 `type Pet = Cat | Dog` gives the union a name. It does not make a new type.
@@ -113,13 +119,26 @@ end
 
 ### 6. A union owns no functions
 
-A union has no fields and no functions. Code reads it with `match` and a
-typed binding for each member, and the `match` must cover every member.
+A union has no fields and no functions. Code reads it with `match` and
+typed bindings, and the `match` must cover every member.
 
 ```koja
 match pet
   cat: Cat -> cat.name
   dog: Dog -> dog.name
+end
+```
+
+A typed binding names one member, or a union of some of the members. An arm
+that names a union matches each of its members, and the binding has that
+smaller union as its type.
+
+```koja
+wide: Cat | Dog | String = Cat{name: "Tom"}
+
+match wide
+  text: String -> text
+  pet: Pet -> pet.format()
 end
 ```
 
@@ -174,7 +193,9 @@ the alias.
 The typecheck owns every decision about unions. The IR and the backends
 carry the result.
 
-- `canonical_union` builds the canonical form of rule 1.
+- `canonical_union` builds the canonical form of rule 1. `substitute` calls
+  it for each union, so the form holds after a type parameter gets its type.
+  The IR uses the same `substitute` and has no copy of its own.
 - `check_compatible_stamping` applies rules 3 and 4. It records
   `Coercion::UnionWiden` on the expression that widens.
 - `narrow_union_hint` picks the member for a literal.
@@ -208,9 +229,6 @@ This list holds the open issues against the rules.
 - [#193](https://github.com/koja-lang/koja/issues/193): a generic struct
   literal or variant constructor does not take its type arguments from a
   member of the expected union. This is a missing position under rule 4.
-- [#195](https://github.com/koja-lang/koja/issues/195): a union with a type
-  parameter is not canonical after the parameter gets its type. This breaks
-  rule 1.
 
 One limit is a decision and not a bug. A direct call on a union value is an
 error under rule 6, and [GAPS.md](GAPS.md) records the open question.

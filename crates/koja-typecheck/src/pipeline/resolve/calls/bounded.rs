@@ -142,7 +142,11 @@ pub(super) fn resolve_bounded_method_call(
     // Substitute Self in the return type with the receiver's
     // type-param (e.g. `Equality.equals? -> Bool` is a no-op, but
     // `Container.first -> Self` would substitute to `T`).
-    substitute(&protocol_method.return_type, &protocol_subst)
+    substitute(
+        &protocol_method.return_type,
+        &protocol_subst,
+        resolver.registry,
+    )
 }
 
 /// Build the `ResolvedType` for the bare type-parameter `T` at
@@ -282,7 +286,7 @@ fn validate_bounded_args(
         if !actual.is_resolved() {
             continue;
         }
-        let expected_ty = substitute(&expected.ty, self_subst);
+        let expected_ty = substitute(&expected.ty, self_subst, resolver.registry);
         match check_compatible_stamping(&mut arg.value, &actual, &expected_ty, resolver.registry) {
             None => {}
             Some(Mismatch::OutOfRange {

@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A `match` arm on a union can name more than one member, as in `rest: Bool | String ->` for a `Bool | Int | String` value. The arm runs for each of those members, and `rest` is a `Bool | String`.
+
 ### Fixed
 
+- A union that uses a type parameter is the same type as the union written by hand when the parameter gets its type. For `struct Holder<T>` with a field `value: String | T`, the field of a `Holder<Int | Bool>` is a `Bool | Int | String`, and the field of a `Holder<String>` is a `String`. A function that returns `Int | T` returns an `Int` when `T` is `Int`. In a generic body, a `match` on an `Int | T` value with the arms `n: Int ->` and `t: T ->` runs the first arm when `T` is `Int`.
 - A generic function can return a union that uses its type parameter. `fn wrap<T>(item: T) -> Int | List<T>` with the body `[item]` compiles. A local variable of such a type works too, and so does a method of a generic struct.
 - A `match` arm can give a binding the type of the value it matches, as in `n: Int ->` for an `Int` value. The arm matches every value, the same as `n ->`. The annotation also works inside enum, tuple, and struct patterns, as in `Option.Some(n: Int) ->`.
 

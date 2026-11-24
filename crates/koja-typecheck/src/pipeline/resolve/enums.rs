@@ -145,7 +145,7 @@ pub(super) fn resolve_enum_construction(
         resolver.bound_context(),
         diagnostics,
     );
-    let substituted = substitute_variant(variant_def, &subst);
+    let substituted = substitute_variant(variant_def, &subst, resolver.registry);
     validate_variant_payload(
         &enum_label,
         enum_id,
@@ -292,19 +292,26 @@ fn emit_conflict(
 /// of `variant`. Used to produce a concrete view of the variant for
 /// [`validate_variant_payload`] so user-facing diagnostics show the
 /// inferred concrete types rather than `T`.
-fn substitute_variant(variant: &ResolvedEnumVariant, subst: &Substitution) -> ResolvedEnumVariant {
+fn substitute_variant(
+    variant: &ResolvedEnumVariant,
+    subst: &Substitution,
+    registry: &GlobalRegistry,
+) -> ResolvedEnumVariant {
     let data = match &variant.data {
         ResolvedVariantData::Unit => ResolvedVariantData::Unit,
-        ResolvedVariantData::Tuple(types) => {
-            ResolvedVariantData::Tuple(types.iter().map(|ty| substitute(ty, subst)).collect())
-        }
+        ResolvedVariantData::Tuple(types) => ResolvedVariantData::Tuple(
+            types
+                .iter()
+                .map(|ty| substitute(ty, subst, registry))
+                .collect(),
+        ),
         ResolvedVariantData::Struct(fields) => ResolvedVariantData::Struct(
             fields
                 .iter()
                 .map(|field| ResolvedStructField {
                     default: field.default.clone(),
                     name: field.name.clone(),
-                    ty: substitute(&field.ty, subst),
+                    ty: substitute(&field.ty, subst, registry),
                 })
                 .collect(),
         ),

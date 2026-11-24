@@ -199,8 +199,9 @@ fn named_global(ty: &ResolvedType) -> Option<(GlobalRegistryId, &[ResolvedType])
 fn substituted(
     types: impl Iterator<Item = ResolvedType>,
     subst: &Substitution,
+    registry: &GlobalRegistry,
 ) -> Vec<ResolvedType> {
-    types.map(|ty| substitute(&ty, subst)).collect()
+    types.map(|ty| substitute(&ty, subst, registry)).collect()
 }
 
 /// Types of `ctor`'s payload columns when it builds a value of `ty`.
@@ -217,7 +218,11 @@ fn field_types(
             _ => struct_of(&peeled, registry)
                 .map(|(id, definition, type_args)| {
                     let subst = Substitution::from_args(id, type_args);
-                    substituted(definition.fields.iter().map(|f| f.ty.clone()), &subst)
+                    substituted(
+                        definition.fields.iter().map(|f| f.ty.clone()),
+                        &subst,
+                        registry,
+                    )
                 })
                 .unwrap_or_default(),
         },
@@ -227,10 +232,10 @@ fn field_types(
                 let subst = Substitution::from_args(id, type_args);
                 Some(match &variant.data {
                     ResolvedVariantData::Struct(fields) => {
-                        substituted(fields.iter().map(|f| f.ty.clone()), &subst)
+                        substituted(fields.iter().map(|f| f.ty.clone()), &subst, registry)
                     }
                     ResolvedVariantData::Tuple(elements) => {
-                        substituted(elements.iter().cloned(), &subst)
+                        substituted(elements.iter().cloned(), &subst, registry)
                     }
                     ResolvedVariantData::Unit => Vec::new(),
                 })
@@ -272,7 +277,7 @@ fn deconstruct(
             if declared_elements.len() != elements.len() {
                 return None;
             }
-            let element_types = substituted(declared_elements.iter().cloned(), &subst);
+            let element_types = substituted(declared_elements.iter().cloned(), &subst, registry);
             let fields = deconstruct_elements(elements, &element_types, registry)?;
             Some(constructor(Constructor::Variant(tag), fields))
         }
@@ -316,10 +321,25 @@ fn deconstruct(
             let ResolvedType::Union(members) = &peeled else {
                 return Some(WILDCARD);
             };
-            let index = members
+            let member_pattern = |ty: &ResolvedType| {
+                let index = members
+                    .iter()
+                    .position(|member| types_equivalent(member, ty, registry))?;
+                Some(constructor(Constructor::UnionMember(index), Vec::new()))
+            };
+            if let Some(pattern) = member_pattern(bound) {
+                return Some(pattern);
+            }
+            // A binding that names a union of members matches each
+            // one of them.
+            let ResolvedType::Union(bound_members) = peel_alias(bound, registry) else {
+                return None;
+            };
+            bound_members
                 .iter()
-                .position(|member| types_equivalent(member, bound, registry))?;
-            Some(constructor(Constructor::UnionMember(index), Vec::new()))
+                .map(member_pattern)
+                .collect::<Option<Vec<_>>>()
+                .map(DeconstructedPattern::Or)
         }
     }
 }
@@ -363,7 +383,7 @@ fn deconstruct_fields(
     let mut fields = vec![WILDCARD; declared.len()];
     for field in listed {
         let index = declared.iter().position(|d| d.name == field.name.text)?;
-        let field_ty = substitute(&declared[index].ty, subst);
+        let field_ty = substitute(&declared[index].ty, subst, registry);
         fields[index] = deconstruct(&field.pattern, &field_ty, registry)?;
     }
     Some(fields)
