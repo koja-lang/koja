@@ -33,8 +33,12 @@
 //!   canonical again after the parameter gets its type. `String | T`
 //!   is `String` at `T = String`, and a flat, sorted union at
 //!   `T = Int | Bool`.
+//! - **Inference**: the expected type sets a type parameter before
+//!   the value does, so a member widens in the payload of a generic
+//!   variant constructor and in a tuple literal passed to a generic
+//!   call.
 
-use koja_ast::ast::{ExprKind, Statement};
+use koja_ast::ast::{EnumConstructionData, ExprKind, Statement};
 use koja_ast::coercion::Coercion;
 use koja_ast::identifier::ResolvedType;
 use koja_ast::util::dedent;
@@ -1222,5 +1226,166 @@ fn substituted_union_takes_a_recursive_alias_argument() {
     assert_eq!(
         trailing_resolution(&checked),
         peel_alias(&package_leaf(&checked, "Value"), &checked.registry),
+    );
+}
+
+#[test]
+fn variant_payload_widens_a_member_under_the_expected_type() {
+    // The annotation sets `T` to `Pet` before the payload has a say,
+    // so the payload is a member that widens into its slot.
+    let source = pet_script("some: Option<Pet> = Option.Some(tom)\n");
+    let checked = typecheck(&source);
+    let Some(Statement::Assignment { value, .. }) = script_body(&checked).last() else {
+        panic!("expected the script to end with an assignment");
+    };
+    let ExprKind::EnumConstruction {
+        data: EnumConstructionData::Tuple(payload),
+        ..
+    } = &value.kind
+    else {
+        panic!(
+            "expected a tuple variant construction, got {:?}",
+            value.kind
+        );
+    };
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(payload[0].coercion, Some(Coercion::UnionWiden(pet.clone())));
+    assert_eq!(
+        value.resolution,
+        global_named(&checked, "Option", vec![pet])
+    );
+}
+
+#[test]
+fn variant_payload_widens_in_each_position_that_names_the_union() {
+    let source = pet_script(
+        "
+        struct Home
+          pet: Option<Pet>
+        end
+
+        enum Box<T>
+          Full(T)
+          Named{item: T}
+        end
+
+        fn wrap(cat: Cat) -> Option<Pet>
+          Option.Some(cat)
+        end
+
+        fn adopt(cat: Cat) -> Result<Pet, String>
+          Result.Ok(cat)
+        end
+
+        fn refuse(cat: Cat) -> Result<Int, Pet>
+          Result.Err(cat)
+        end
+
+        fn count(found: Option<Pet>) -> Int
+          1
+        end
+
+        count(Option.Some(tom))
+        home = Home{pet: Option.Some(tom)}
+        all: List<Option<Pet>> = [Option.Some(tom), Option.None]
+        full: Box<Pet> = Box.Full(tom)
+        named: Box<Pet> = Box.Named{item: tom}
+        text: Option<Int | String> = Option.Some(\"a\")
+        number: Option<Int | String> = Option.Some(7)
+        found: Option<Pet> = Option.Some(tom)
+        found == Option.Some(tom)
+        ",
+    );
+    let checked = typecheck(&source);
+    assert_eq!(trailing_resolution(&checked), bool_type(&checked));
+}
+
+#[test]
+fn variant_payload_that_conflicts_with_the_expected_type_decides() {
+    // `Int` does not widen into `String`, so the payload sets `T` and
+    // the annotation reports the two types.
+    let source = pet_script("text: Option<String> = Option.Some(1)\n");
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![
+            "type annotation on `text` says `Option<String>`, but the right-hand side has \
+             type `Option<Int>`"
+        ],
+    );
+}
+
+#[test]
+fn built_variant_does_not_widen_its_type_argument() {
+    // Only the constructor widens its payload. A value that already
+    // has the type `Option<Cat>` is not an `Option<Pet>`.
+    let source = pet_script(
+        "
+        narrow: Option<Cat> = Option.Some(tom)
+        some: Option<Pet> = narrow
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![
+            "type annotation on `some` says `Option<TestApp.Pet>`, but the right-hand side \
+             has type `Option<TestApp.Cat>`"
+        ],
+    );
+}
+
+#[test]
+fn tuple_literal_argument_widens_a_member_in_a_generic_call() {
+    // The receiver sets `T` to `(String, Pet)`. The tuple literal
+    // arrives as `(String, Cat)`, and its second element widens.
+    let source = pet_script(
+        "
+        fn add<T>(items: List<T>, item: T) -> List<T>
+          items.append(item)
+        end
+
+        homes: Map<String, (Int, Pet)> = Map.new()
+        homes = homes.put(\"a\", (1, tom))
+        deep: List<(Int, (String, Pet))> = []
+        deep = deep.append((1, (\"tom\", tom)))
+        pets: List<(String, Pet)> = []
+        pets = add(pets, (\"tom\", tom))
+        pets = pets.append((\"tom\", tom))
+        ",
+    );
+    let checked = typecheck(&source);
+    let Some(Statement::Assignment { value, .. }) = script_body(&checked).last() else {
+        panic!("expected the script to end with an assignment");
+    };
+    let ExprKind::MethodCall { args, .. } = &value.kind else {
+        panic!("expected a method call, got {:?}", value.kind);
+    };
+    let ExprKind::Tuple { elements } = &args[0].value.kind else {
+        panic!("expected a tuple literal, got {:?}", args[0].value.kind);
+    };
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(elements[0].coercion, None);
+    assert_eq!(elements[1].coercion, Some(Coercion::UnionWiden(pet)));
+}
+
+#[test]
+fn tuple_value_argument_does_not_widen_in_a_generic_call() {
+    // Only a tuple literal widens its elements. A tuple value of type
+    // `(String, Cat)` is not a `(String, Pet)`.
+    let source = pet_script(
+        "
+        entry = (\"tom\", tom)
+        pets: List<(String, Pet)> = []
+        pets = pets.append(entry)
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![
+            "argument `item` to `List.append` expects `(String, TestApp.Pet)`, got \
+             `(String, TestApp.Cat)`"
+        ],
     );
 }

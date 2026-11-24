@@ -119,10 +119,10 @@ impl Substitution {
     }
 
     /// Set a slot. Returns `Err(Conflict)` if the slot was already
-    /// filled with a value that is not [`types_equivalent`] to `value`
-    /// AND is not a union containing `value` as a member. `Ok(())` on a
-    /// fresh fill or a compatible re-fill. Out-of-scope owners and
-    /// out-of-range indices are silent no-ops.
+    /// filled with a value that does not accept `value`, as
+    /// [`slot_accepts`] decides. `Ok(())` on a fresh fill or a
+    /// compatible re-fill, and a filled slot keeps its value.
+    /// Out-of-scope owners and out-of-range indices are silent no-ops.
     ///
     /// The compatibility check (rather than strict `prev == value`)
     /// matters most for the `fill_from_expected` path. A payload-
@@ -140,6 +140,10 @@ impl Substitution {
     /// be widened by a later union arrival, that is a
     /// `fill_from_expected` story, not this one. Leave it for the
     /// (rarer) flow-inference case.
+    ///
+    /// The tuple arm applies the same rules to each element. A slot
+    /// that holds `(String, Cat | Dog)` accepts the tuple literal
+    /// `("tom", tom)`, which arrives as `(String, Cat)`.
     pub(crate) fn set(
         &mut self,
         owner: GlobalRegistryId,
@@ -154,18 +158,12 @@ impl Substitution {
             return Ok(());
         };
         match slot {
-            Some(prev)
-                if !types_equivalent(prev, &value, registry)
-                    && !union_contains(prev, &value, registry)
-                    && !literal_widens_into(prev, &value, registry) =>
-            {
-                Err(Conflict {
-                    actual: value,
-                    owner,
-                    param_index: index.as_u32() as usize,
-                    prev: prev.clone(),
-                })
-            }
+            Some(prev) if !slot_accepts(prev, &value, registry) => Err(Conflict {
+                actual: value,
+                owner,
+                param_index: index.as_u32() as usize,
+                prev: prev.clone(),
+            }),
             Some(_) => Ok(()),
             None => {
                 *slot = Some(value);
@@ -210,17 +208,46 @@ impl Substitution {
     }
 }
 
-/// True when `prev` is a `ResolvedType::Union` whose members include
-/// a type equivalent to `value`. Asymmetric: `Union ⊇ {value}` only.
-/// The symmetric "value is a union containing prev" case would widen
-/// an already-filled narrower slot and belongs to the
-/// `fill_from_expected` flow, not the per-arg unification path.
-///
-/// Used by [`Substitution::set`] to accept a method-arg unification
-/// like `Ref<MsgA | MsgB, _>.call(MsgA.Ping(...))`: the receiver
-/// scope pre-binds `M -> MsgA | MsgB`, and the arg drives a unify of
-/// `M -> MsgA`. Without this rule the per-slot compatibility check
-/// would surface a spurious "cannot be both" diagnostic.
+/// True when a slot that holds `prev` accepts `value` with no
+/// conflict. The slot keeps `prev`. The argument check after
+/// substitution then decides how the value gets that type, or
+/// rejects it with a mismatch diagnostic.
+fn slot_accepts(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    types_equivalent(prev, value, registry)
+        || union_contains(prev, value, registry)
+        || literal_widens_into(prev, value, registry)
+        || tuple_elements_accept(prev, value, registry)
+}
+
+/// True when `prev` and `value` are tuples of the same length and
+/// each element of `prev` accepts the element of `value` at the same
+/// position, as [`slot_accepts`] decides. A type argument of a named
+/// type gets no such walk, because a type argument does not widen.
+fn tuple_elements_accept(
+    prev: &ResolvedType,
+    value: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> bool {
+    let (
+        ResolvedType::Anonymous(AnonymousKind::Tuple {
+            elements: prev_elements,
+        }),
+        ResolvedType::Anonymous(AnonymousKind::Tuple {
+            elements: value_elements,
+        }),
+    ) = (peel_alias(prev, registry), peel_alias(value, registry))
+    else {
+        return false;
+    };
+    prev_elements.len() == value_elements.len()
+        && prev_elements
+            .iter()
+            .zip(&value_elements)
+            .all(|(prev_element, value_element)| {
+                slot_accepts(prev_element, value_element, registry)
+            })
+}
+
 /// True when `prev` is a sized numeric primitive (`Int8`/`Int32`/...,
 /// `UInt8`/..., `Float32`) and `value` is the default literal type for
 /// that family (`Int` or `Float`). Lets the per-arg unifier accept a
@@ -263,6 +290,17 @@ fn is_sized_float(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
         .any(|name| is_primitive(ty, registry, name))
 }
 
+/// True when `prev` is a `ResolvedType::Union` whose members include
+/// a type equivalent to `value`. Asymmetric: `Union ⊇ {value}` only.
+/// The symmetric "value is a union containing prev" case would widen
+/// an already-filled narrower slot and belongs to the
+/// `fill_from_expected` flow, not the per-arg unification path.
+///
+/// Used by [`Substitution::set`] to accept a method-arg unification
+/// like `Ref<MsgA | MsgB, _>.call(MsgA.Ping(...))`: the receiver
+/// scope pre-binds `M -> MsgA | MsgB`, and the arg drives a unify of
+/// `M -> MsgA`. Without this rule the per-slot compatibility check
+/// would surface a spurious "cannot be both" diagnostic.
 fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRegistry) -> bool {
     let ResolvedType::Union(members) = peel_alias(prev, registry) else {
         return false;
@@ -441,6 +479,10 @@ mod tests {
         })
     }
 
+    fn tuple(elements: Vec<ResolvedType>) -> ResolvedType {
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements })
+    }
+
     #[test]
     fn conflicting_rebinding_reports_both_types() {
         let registry = GlobalRegistry::with_stdlib_stubs();
@@ -570,6 +612,66 @@ mod tests {
             .expect("structural mismatch is deferred");
 
         assert_eq!(substitution.args(owner), vec![ResolvedType::Unresolved]);
+    }
+
+    #[test]
+    fn tuple_rebinding_accepts_a_member_in_an_element() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let boolean = registry.primitive("Bool");
+        let int = registry.primitive("Int");
+        let owner = GlobalRegistryId::new(100);
+        let string = registry.primitive("String");
+        let template = parameter(owner, 0);
+        let int_or_string = ResolvedType::Union(vec![int.clone(), string]);
+        let wide = tuple(vec![boolean.clone(), int_or_string]);
+        let narrow = tuple(vec![boolean, int.clone()]);
+        let cases = [
+            (wide.clone(), narrow.clone()),
+            // The same pair one tuple down.
+            (tuple(vec![int.clone(), wide]), tuple(vec![int, narrow])),
+        ];
+
+        for (slot, arriving) in cases {
+            let mut substitution = Substitution::single(owner, 1);
+            unify_into(&template, &slot, &mut substitution, &registry)
+                .expect("first binding succeeds");
+            unify_into(&template, &arriving, &mut substitution, &registry)
+                .expect("a tuple with a member in an element is accepted");
+
+            assert_eq!(substitute(&template, &substitution, &registry), slot);
+        }
+    }
+
+    #[test]
+    fn tuple_rebinding_that_no_element_rule_accepts_conflicts() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let boolean = registry.primitive("Bool");
+        let int = registry.primitive("Int");
+        let owner = GlobalRegistryId::new(100);
+        let string = registry.primitive("String");
+        let template = parameter(owner, 0);
+        let int_or_string = ResolvedType::Union(vec![int.clone(), string]);
+        let wide = tuple(vec![boolean.clone(), int_or_string]);
+        let narrow = tuple(vec![boolean.clone(), int.clone()]);
+        let cases = [
+            // Another length.
+            (wide.clone(), tuple(vec![boolean.clone(), int.clone(), int])),
+            // An element that is not a member.
+            (wide.clone(), tuple(vec![boolean.clone(), boolean])),
+            // A union that arrives at an element that holds a member.
+            (narrow, wide),
+        ];
+
+        for (slot, arriving) in cases {
+            let mut substitution = Substitution::single(owner, 1);
+            unify_into(&template, &slot, &mut substitution, &registry)
+                .expect("first binding succeeds");
+            let conflict = unify_into(&template, &arriving, &mut substitution, &registry)
+                .expect_err("the tuple should conflict with the slot");
+
+            assert_eq!(conflict.prev, slot);
+            assert_eq!(conflict.actual, arriving);
+        }
     }
 
     #[test]

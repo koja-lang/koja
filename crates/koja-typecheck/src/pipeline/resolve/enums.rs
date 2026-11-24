@@ -30,7 +30,9 @@ use crate::registry::{
 use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::{BoundContext, Callee, Resolver};
 use super::expr::resolve_expr;
-use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
+use super::inference::{
+    PhantomContext, fill_from_expected, finalize_inference, try_pre_seeded_subst, unify_pairs,
+};
 use super::structs::{validate_named_fields, walk_field_inits};
 use super::types::{display_resolution, lookup_type, peel_alias};
 
@@ -169,11 +171,20 @@ pub(super) fn resolve_enum_construction(
 /// Shape-mismatched constructions skip inference and let
 /// [`validate_variant_payload`] surface the shape diagnostic.
 ///
-/// `expected` is the bidirectional fallback. Slots that payload-
-/// driven inference cannot pin (a `Result.Err(e)` whose `T` only
-/// the surrounding context knows, or a unit `Maybe.None`) get
-/// filled from the surrounding expected type before the "cannot
-/// infer" diagnostic fires.
+/// `expected` has the first say, through [`try_pre_seeded_subst`].
+/// It fills the slots, and each payload value must then agree with
+/// its slot. A value that widens into the slot agrees, so
+/// `Option.Some(cat)` under an expected `Option<Cat | Dog>` keeps
+/// `T = Cat | Dog`, and [`validate_variant_payload`] widens the
+/// payload.
+///
+/// When a payload value conflicts with the expected type, or there
+/// is no expected type, the payload decides and `expected` is the
+/// bidirectional fallback. Slots that payload-driven inference
+/// cannot pin (a `Result.Err(e)` whose `T` only the surrounding
+/// context knows, or a unit `Maybe.None`) get filled from the
+/// surrounding expected type before the "cannot infer" diagnostic
+/// fires.
 fn infer_enum_type_args(
     callee: Callee<'_>,
     variant: &ResolvedEnumVariant,
@@ -184,39 +195,34 @@ fn infer_enum_type_args(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Substitution {
     let registry = ctx.registry;
+    let pairs = payload_pairs(variant, data);
+    let template = canonical_enum_template(callee.id, callee.type_params.len());
+    // Unify does not peel user aliases, so `Maybe = Option<Int>`
+    // must become `Option<Int>` before it can fill `T`.
+    let hint = expected.map(|hint| peel_alias(hint, registry));
     let mut subst = Substitution::single(callee.id, callee.type_params.len());
-    let on_conflict = &mut |conflict: Conflict, payload_span: Span| {
-        emit_conflict(
-            &callee,
-            &variant.name,
-            conflict,
-            payload_span,
-            registry,
-            diagnostics,
-        );
-    };
-    match (&variant.data, data) {
-        (ResolvedVariantData::Tuple(declared), EnumConstructionData::Tuple(exprs)) => {
-            let pairs = declared
-                .iter()
-                .zip(exprs.iter())
-                .map(|(declared_ty, expr)| (declared_ty, &expr.resolution, expr.span));
-            unify_pairs(pairs, &mut subst, registry, on_conflict);
+    if let Some(pre_seeded) = try_pre_seeded_subst(
+        &subst,
+        &template,
+        hint.as_ref(),
+        pairs.iter().copied(),
+        registry,
+    ) {
+        subst = pre_seeded;
+    } else {
+        unify_pairs(pairs, &mut subst, registry, |conflict, payload_span| {
+            emit_conflict(
+                &callee,
+                &variant.name,
+                conflict,
+                payload_span,
+                registry,
+                diagnostics,
+            );
+        });
+        if let Some(hint) = &hint {
+            fill_from_expected(&template, hint, &mut subst, registry);
         }
-        (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(inits)) => {
-            let pairs = inits.iter().filter_map(|init| {
-                let declared_field = declared.iter().find(|f| init.name == f.name.as_str())?;
-                Some((&declared_field.ty, &init.value.resolution, init.span))
-            });
-            unify_pairs(pairs, &mut subst, registry, on_conflict);
-        }
-        _ => {}
-    }
-    if let Some(hint) = expected {
-        let template = canonical_enum_template(callee.id, callee.type_params.len());
-        // Unify does not peel user aliases, so `Maybe = Option<Int>`
-        // must become `Option<Int>` before it can fill `T`.
-        fill_from_expected(&template, &peel_alias(hint, registry), &mut subst, registry);
     }
     let context = match variant.data {
         ResolvedVariantData::Unit => PhantomContext::UnitVariant(&variant.name),
@@ -224,6 +230,31 @@ fn infer_enum_type_args(
     };
     finalize_inference(&[callee], &mut subst, &context, span, ctx, diagnostics);
     subst
+}
+
+/// The `(declared type, value type, value span)` triple for each
+/// payload value of a construction, in the shape that [`unify_pairs`]
+/// takes. A construction whose shape does not match the variant gives
+/// no pairs, and [`validate_variant_payload`] reports the shape.
+fn payload_pairs<'a>(
+    variant: &'a ResolvedEnumVariant,
+    data: &'a EnumConstructionData,
+) -> Vec<(&'a ResolvedType, &'a ResolvedType, Span)> {
+    match (&variant.data, data) {
+        (ResolvedVariantData::Tuple(declared), EnumConstructionData::Tuple(exprs)) => declared
+            .iter()
+            .zip(exprs)
+            .map(|(declared_ty, expr)| (declared_ty, &expr.resolution, expr.span))
+            .collect(),
+        (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(inits)) => inits
+            .iter()
+            .filter_map(|init| {
+                let declared_field = declared.iter().find(|f| init.name == f.name.as_str())?;
+                Some((&declared_field.ty, &init.value.resolution, init.span))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// A unit variant of a generic enum takes its type arguments from the

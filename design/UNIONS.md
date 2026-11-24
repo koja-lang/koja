@@ -76,6 +76,7 @@ positions name it.
 - An argument, for a parameter of the union type.
 - A returned value, for a function that returns the union.
 - A field in a struct literal.
+- A payload of an enum variant.
 - A constant.
 - An element of a tuple, list, or map literal.
 - An arm of an `if`, a `cond`, a `match`, a `receive`, or a `?:`.
@@ -217,9 +218,6 @@ describes the box.
 A case that the rules do not predict is a bug, and a bug is a GitHub issue.
 This list holds the open issues against the rules.
 
-- [#185](https://github.com/koja-lang/koja/issues/185): a member does not
-  widen inside a variant payload or a tuple argument. This is a missing
-  position under rule 4.
 - [#186](https://github.com/koja-lang/koja/issues/186): a reassignment and
   a field write do not widen a member. This is a missing position under
   rule 4.

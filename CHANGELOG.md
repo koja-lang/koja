@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A union that uses a type parameter is the same type as the union written by hand when the parameter gets its type. For `struct Holder<T>` with a field `value: String | T`, the field of a `Holder<Int | Bool>` is a `Bool | Int | String`, and the field of a `Holder<String>` is a `String`. A function that returns `Int | T` returns an `Int` when `T` is `Int`. In a generic body, a `match` on an `Int | T` value with the arms `n: Int ->` and `t: T ->` runs the first arm when `T` is `Int`.
 - A generic function can return a union that uses its type parameter. `fn wrap<T>(item: T) -> Int | List<T>` with the body `[item]` compiles. A local variable of such a type works too, and so does a method of a generic struct.
 - A `match` arm can give a binding the type of the value it matches, as in `n: Int ->` for an `Int` value. The arm matches every value, the same as `n ->`. The annotation also works inside enum, tuple, and struct patterns, as in `Option.Some(n: Int) ->`.
+- A member of a union widens in the payload of a generic enum variant. For `type Pet = Cat | Dog`, a function that returns `Option<Pet>` can end with `Option.Some(cat)`. This works in every position that names the type, and for `Result.Ok`, `Result.Err`, and the variants of each generic enum. A literal works the same way, so `x: Option<Int32> = Option.Some(42)` compiles.
+- A member of a union widens in a tuple literal that is an argument of a generic function. For a `List<(String, Pet)>`, `pets.append(("tom", tom))` compiles when `tom` is a `Cat`.
 
 ## [0.21.0] - 2026-11-22
 
