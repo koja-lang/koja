@@ -334,6 +334,11 @@ fn generic_return_hint_widens_int_literal_arg_to_int8() {
 }
 
 #[test]
+fn variant_payload_hint_widens_int_literal_to_int32() {
+    typecheck("x: Option<Int32> = Option.Some(42)\n");
+}
+
+#[test]
 fn generic_return_hint_unrelated_to_arg_type_still_errors() {
     use common::typecheck_script_fail as typecheck_fail;
 

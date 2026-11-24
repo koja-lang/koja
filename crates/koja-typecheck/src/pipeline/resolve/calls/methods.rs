@@ -15,12 +15,12 @@ use koja_ast::span::Span;
 use super::super::ctx::{BoundContext, Callee, Resolver};
 use super::super::expr::resolve_expr;
 use super::super::inference::{
-    PhantomContext, fill_from_expected, finalize_inference, unify_pairs,
+    PhantomContext, fill_from_expected, finalize_inference, try_pre_seeded_subst, unify_pairs,
 };
 use super::super::paths::static_dotted_path;
 use super::super::types::{display_resolution, lookup_type, peel_alias};
-use super::emit_conflict;
 use super::structural::StructuralShape;
+use super::{arg_pairs, emit_conflict};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
@@ -322,23 +322,20 @@ pub(super) fn infer_method_call_type_args(
     } = target;
 
     let mut subst = seed_method_subst(receiver, method, receiver_type, &sig.impl_args, registry);
-    // Mirror `infer_call_type_args`'s speculative pre-seed, which lets
-    // binding annotations pin sized-numeric type params before
-    // arg-driven default-literal types lock in.
-    if let Some(pre_seeded) = try_pre_seeded_method_subst(
+    // The same speculative pre-seed as `infer_call_type_args`, on top
+    // of the receiver-seeded substitution. It lets binding annotations
+    // pin sized-numeric type params before arg-driven default-literal
+    // types lock in.
+    if let Some(pre_seeded) = try_pre_seeded_subst(
         &subst,
         &sig.return_type,
-        explicit_params,
-        args,
         expected,
+        arg_pairs(explicit_params, args),
         registry,
     ) {
         subst = pre_seeded;
     } else {
-        let pairs = explicit_params
-            .iter()
-            .zip(args.iter())
-            .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
+        let pairs = arg_pairs(explicit_params, args);
         unify_pairs(pairs, &mut subst, registry, |conflict, arg_span| {
             let scope_callee = if conflict.owner == method.id {
                 &method
@@ -371,31 +368,6 @@ pub(super) fn infer_method_call_type_args(
     *outputs.method_type_args = subst.args(method.id);
     *outputs.receiver_type_args = subst.args(receiver.id);
     (substituted_params, substituted_return)
-}
-
-/// Speculative pre-seed for [`infer_method_call_type_args`]. Mirrors
-/// `try_pre_seeded_subst` in the bare-call path with the
-/// receiver-seeded `baseline` as the starting substitution.
-fn try_pre_seeded_method_subst(
-    baseline: &Substitution,
-    return_type: &ResolvedType,
-    explicit_params: &[ResolvedParam],
-    args: &[Arg],
-    expected: Option<&ResolvedType>,
-    registry: &GlobalRegistry,
-) -> Option<Substitution> {
-    let hint = expected?;
-    let mut scratch = baseline.clone();
-    fill_from_expected(return_type, hint, &mut scratch, registry);
-    let mut had_conflict = false;
-    let pairs = explicit_params
-        .iter()
-        .zip(args.iter())
-        .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
-    unify_pairs(pairs, &mut scratch, registry, |_, _| {
-        had_conflict = true;
-    });
-    (!had_conflict).then_some(scratch)
 }
 
 /// The dual-scope substitution every method call starts from. The

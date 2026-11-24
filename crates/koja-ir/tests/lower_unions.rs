@@ -88,6 +88,51 @@ fn union_widening_arg_lowers_to_union_wrap() {
 }
 
 #[test]
+fn generic_variant_payload_lowers_to_union_wrap() {
+    // The return type sets `T` to `Post | Comment`, so the payload is
+    // a member. It lowers to one `UnionWrap`, and the `Option.Some`
+    // is an `Option` over that union.
+    let source = "
+        struct Post
+          title: String
+        end
+
+        struct Comment
+          body: String
+        end
+
+        fn wrap(post: Post) -> Option<Post | Comment>
+          Option.Some(post)
+        end
+
+        wrap(Post{title: \"hi\"})
+        ";
+    let script = lower(source);
+    let wrap_fn = script_function(&script, "wrap");
+
+    let wrap_types: Vec<&IRType> = all_instructions(&wrap_fn.blocks)
+        .filter_map(|i| match i {
+            IRInstruction::UnionWrap { ty, .. } => Some(ty),
+            _ => None,
+        })
+        .collect();
+    let [IRType::Union(union)] = wrap_types.as_slice() else {
+        panic!("expected exactly one UnionWrap for the `Option.Some` payload, got {wrap_types:?}");
+    };
+
+    let constructed: Vec<String> = all_instructions(&wrap_fn.blocks)
+        .filter_map(|i| match i {
+            IRInstruction::EnumConstruct { ty, .. } => Some(ty.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(constructed.as_slice(), [option] if option.contains(&union.to_string())),
+        "expected one `Option.Some` over `{union}`, got {constructed:?}",
+    );
+}
+
+#[test]
 fn typed_binding_lowers_to_tag_test_and_payload_get() {
     let source = "
         struct Post

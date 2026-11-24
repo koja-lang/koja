@@ -1,5 +1,5 @@
 //! Shared core for type-parameter inference at struct, enum, bare-call,
-//! and method-call sites. Three helpers cover the work every site does:
+//! and method-call sites. Four helpers cover the work every site does:
 //!
 //! - [`unify_pairs`] walks `(template, actual)` pairs into a [`Substitution`],
 //!   routing conflicts through a caller-supplied closure so each site can
@@ -7,6 +7,9 @@
 //! - [`fill_from_expected`] tries to unify a template against a hint
 //!   without ever overriding existing bindings. The expected type is
 //!   advisory, never authoritative.
+//! - [`try_pre_seeded_subst`] runs the expected type first and the
+//!   values second on a copy, and gives the copy back when the values
+//!   agree with it.
 //! - [`finalize_inference`] surfaces phantom-param diagnostics and
 //!   bound-check diagnostics for every callee scope in one pass.
 //!
@@ -92,6 +95,33 @@ pub(super) fn fill_from_expected(
     if unify_into(template, actual, &mut scratch, registry).is_ok() {
         *subst = scratch;
     }
+}
+
+/// Inference with the expected type first. Copies `baseline`, fills
+/// the copy from `expected` through `template`, and then unifies
+/// `pairs` into it. Returns the copy when no pair conflicts. With no
+/// expected type or on a conflict it returns `None`, and the caller
+/// runs the value-first order, which reports each conflict.
+///
+/// A slot that the expected type fills accepts a value that widens
+/// into it. `x: Int32 = identity(42)` keeps `T = Int32`, and
+/// `Option.Some(cat)` in a position that expects `Option<Cat | Dog>`
+/// keeps `T = Cat | Dog`.
+pub(super) fn try_pre_seeded_subst<'a, T>(
+    baseline: &Substitution,
+    template: &ResolvedType,
+    expected: Option<&ResolvedType>,
+    pairs: impl IntoIterator<Item = (&'a ResolvedType, &'a ResolvedType, T)>,
+    registry: &GlobalRegistry,
+) -> Option<Substitution> {
+    let hint = expected?;
+    let mut scratch = baseline.clone();
+    fill_from_expected(template, hint, &mut scratch, registry);
+    let mut had_conflict = false;
+    unify_pairs(pairs, &mut scratch, registry, |_, _| {
+        had_conflict = true;
+    });
+    (!had_conflict).then_some(scratch)
 }
 
 /// Complete `subst` from protocol bounds, then surface phantom-param

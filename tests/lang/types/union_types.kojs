@@ -27,9 +27,18 @@ fn accept_union(x: Post | Comment) -> String
   end
 end
 
+fn wrap_post(p: Post) -> Option<Post | Comment>
+  Option.Some(p)
+end
+
 p = Post{title: "Hello"}
 item: Post | Comment | Ad = p
 display_item(item).print()
 
 result = widen_post(Post{title: "Test"})
 accept_union(result).print()
+
+# A member widens in a variant payload and in a tuple argument
+pairs: List<(String, Post | Comment)> = []
+pairs = pairs.append(("first", p))
+IO.puts("#{pairs.length()} #{wrap_post(p).some?()}")
