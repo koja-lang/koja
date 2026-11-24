@@ -264,23 +264,15 @@ fn monomorphize_function(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRFunction> {
+    let owner_subst = Substitution::from_args(inst.owner, &inst.args);
     let mut substituted_ast = ast_entry.function.clone();
-    substitute_in_function(&mut substituted_ast, &inst.args, inst.owner, registry);
-    let mut substituted_signature =
-        substitute_signature(signature, &inst.args, inst.owner, registry);
+    substitute_in_function(&mut substituted_ast, &owner_subst, registry);
+    let mut substituted_signature = substitute_signature(signature, &owner_subst, registry);
     if !inst.method_args.is_empty() {
-        substitute_in_function(
-            &mut substituted_ast,
-            &inst.method_args,
-            inst.template,
-            registry,
-        );
-        substituted_signature = substitute_signature(
-            &substituted_signature,
-            &inst.method_args,
-            inst.template,
-            registry,
-        );
+        let method_subst = Substitution::from_args(inst.template, &inst.method_args);
+        substitute_in_function(&mut substituted_ast, &method_subst, registry);
+        substituted_signature =
+            substitute_signature(&substituted_signature, &method_subst, registry);
     }
     lower_function_inner(
         &substituted_ast,

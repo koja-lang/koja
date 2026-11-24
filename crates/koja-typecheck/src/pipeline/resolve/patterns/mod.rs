@@ -179,7 +179,7 @@ pub(super) fn resolve_pattern(
             let peeled_subject = peel_alias(subject_ty, resolver.registry);
             match &peeled_subject {
                 ResolvedType::Union(members) => {
-                    if let Some(missing) = missing_member(&resolved, members, resolver.registry) {
+                    if let Err(missing) = named_members(&resolved, members, resolver.registry) {
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "type `{}` is not a member of union `{}`",
@@ -213,27 +213,30 @@ pub(super) fn resolve_pattern(
     }
 }
 
-/// The first type that a typed binding names and the subject union
-/// does not hold. `None` when the binding names one member of
-/// `members`, or a union of members.
-fn missing_member(
+/// The members of the subject union that a typed binding names, as
+/// indexes into `members`. One index when the binding names one
+/// member, and one index for each member when it names a union of
+/// members. The error is the first type that the binding names and
+/// the subject union does not hold.
+fn named_members(
     bound: &ResolvedType,
     members: &[ResolvedType],
     registry: &GlobalRegistry,
-) -> Option<ResolvedType> {
-    let is_member = |ty: &ResolvedType| {
+) -> Result<Vec<usize>, ResolvedType> {
+    let member_index = |ty: &ResolvedType| {
         members
             .iter()
-            .any(|member| types_equivalent(member, ty, registry))
+            .position(|member| types_equivalent(member, ty, registry))
     };
-    if is_member(bound) {
-        return None;
+    if let Some(index) = member_index(bound) {
+        return Ok(vec![index]);
     }
     match peel_alias(bound, registry) {
-        ResolvedType::Union(bound_members) => {
-            bound_members.into_iter().find(|member| !is_member(member))
-        }
-        _ => Some(bound.clone()),
+        ResolvedType::Union(bound_members) => bound_members
+            .into_iter()
+            .map(|member| member_index(&member).ok_or(member))
+            .collect(),
+        _ => Err(bound.clone()),
     }
 }
 

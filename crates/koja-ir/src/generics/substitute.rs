@@ -12,7 +12,7 @@
 
 use koja_ast::ast::{Expr, ExprKind, Function, LValue, Pattern};
 use koja_ast::coercion::Coercion;
-use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
+use koja_ast::identifier::ResolvedType;
 use koja_ast::visit_mut::{self, VisitorMut};
 use koja_typecheck::{FunctionSignature, GlobalRegistry, ResolvedParam, Substitution, substitute};
 
@@ -21,17 +21,13 @@ use koja_typecheck::{FunctionSignature, GlobalRegistry, ResolvedParam, Substitut
 /// the original needs to stay intact (mono always clones).
 pub(super) fn substitute_in_function(
     function: &mut Function,
-    args: &[ResolvedType],
-    owner: GlobalRegistryId,
+    subst: &Substitution,
     registry: &GlobalRegistry,
 ) {
     let Some(body) = function.body.as_mut() else {
         return;
     };
-    let mut substituter = Substituter {
-        registry,
-        subst: Substitution::from_args(owner, args),
-    };
+    let mut substituter = Substituter { registry, subst };
     visit_mut::walk_body_mut(&mut substituter, body);
 }
 
@@ -41,11 +37,9 @@ pub(super) fn substitute_in_function(
 /// without mutating the registry-owned template.
 pub(super) fn substitute_signature(
     signature: &FunctionSignature,
-    args: &[ResolvedType],
-    owner: GlobalRegistryId,
+    subst: &Substitution,
     registry: &GlobalRegistry,
 ) -> FunctionSignature {
-    let subst = Substitution::from_args(owner, args);
     FunctionSignature {
         declared_fallible: signature.declared_fallible,
         dispatch: signature.dispatch,
@@ -54,14 +48,14 @@ pub(super) fn substitute_signature(
             .iter()
             .map(|param| ResolvedParam {
                 name: param.name.clone(),
-                ty: substitute(&param.ty, &subst, registry),
+                ty: substitute(&param.ty, subst, registry),
             })
             .collect(),
-        return_type: substitute(&signature.return_type, &subst, registry),
+        return_type: substitute(&signature.return_type, subst, registry),
         impl_args: signature
             .impl_args
             .iter()
-            .map(|ty| substitute(ty, &subst, registry))
+            .map(|ty| substitute(ty, subst, registry))
             .collect(),
     }
 }
@@ -73,12 +67,12 @@ pub(super) fn substitute_signature(
 /// typed-binding pattern.
 struct Substituter<'a> {
     registry: &'a GlobalRegistry,
-    subst: Substitution,
+    subst: &'a Substitution,
 }
 
 impl Substituter<'_> {
     fn rewrite(&self, slot: &mut ResolvedType) {
-        *slot = substitute(slot, &self.subst, self.registry);
+        *slot = substitute(slot, self.subst, self.registry);
     }
 }
 

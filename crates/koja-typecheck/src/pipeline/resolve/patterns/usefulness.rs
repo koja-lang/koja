@@ -17,8 +17,9 @@ use std::collections::BTreeSet;
 use koja_ast::ast::{FieldPattern, Literal, Name, Pattern};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, ResolvedType};
 
-use super::super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
+use super::super::types::{display_resolution, is_primitive, peel_alias};
 use super::literals::literal_repr;
+use super::named_members;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     EnumDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
@@ -321,25 +322,15 @@ fn deconstruct(
             let ResolvedType::Union(members) = &peeled else {
                 return Some(WILDCARD);
             };
-            let member_pattern = |ty: &ResolvedType| {
-                let index = members
-                    .iter()
-                    .position(|member| types_equivalent(member, ty, registry))?;
-                Some(constructor(Constructor::UnionMember(index), Vec::new()))
-            };
-            if let Some(pattern) = member_pattern(bound) {
-                return Some(pattern);
-            }
-            // A binding that names a union of members matches each
-            // one of them.
-            let ResolvedType::Union(bound_members) = peel_alias(bound, registry) else {
-                return None;
-            };
-            bound_members
-                .iter()
-                .map(member_pattern)
-                .collect::<Option<Vec<_>>>()
-                .map(DeconstructedPattern::Or)
+            let indexes = named_members(bound, members, registry).ok()?;
+            let union_member =
+                |index: &usize| constructor(Constructor::UnionMember(*index), Vec::new());
+            Some(match indexes.as_slice() {
+                [index] => union_member(index),
+                // A binding that names a union of members matches
+                // each one of them.
+                indexes => DeconstructedPattern::Or(indexes.iter().map(union_member).collect()),
+            })
         }
     }
 }

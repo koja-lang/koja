@@ -46,10 +46,9 @@ use super::ctx::FnLowerCtx;
 use super::expr::lower_expr;
 use super::ownership::drop_discarded_temp;
 use super::patterns::{
-    BindOp, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
-    whole_subject_local,
+    ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, emit_bind_step,
+    lower_pattern_check, whole_subject_local,
 };
-use super::unions::emit_union_narrow;
 
 /// AST-side inputs to [`lower_match`].
 pub(super) struct MatchLowering<'a> {
@@ -263,8 +262,8 @@ fn wire_test_chain(
 
 /// Emit every bind of an arm, starting in `block`. Returns the block
 /// that control continues in. That is `block` itself unless a bind
-/// ends in a [`BindOp::UnionNarrow`], which is a tag switch and
-/// leaves control in its merge block.
+/// narrows a union, which is a tag switch and leaves control in its
+/// merge block. See [`emit_bind_step`].
 fn emit_payload_binds(
     binds: &[PayloadBind],
     block: IRBlockId,
@@ -275,77 +274,7 @@ fn emit_payload_binds(
     for bind in binds {
         let mut current = subject;
         for step in &bind.chain {
-            if let BindOp::UnionNarrow { source_type } = &step.op {
-                (current, body_block) =
-                    emit_union_narrow(current, source_type, &step.output_type, ctx, body_block);
-                continue;
-            }
-            let dest = ctx.fresh_value(step.output_type.clone());
-            match &step.op {
-                BindOp::EnumPayloadField {
-                    enum_symbol,
-                    payload_index,
-                    tag,
-                } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::EnumPayloadFieldGet {
-                            dest,
-                            field_type: step.output_type.clone(),
-                            payload_index: *payload_index,
-                            tag: *tag,
-                            ty: enum_symbol.clone(),
-                            value: current,
-                        },
-                    );
-                }
-                BindOp::StructField {
-                    field_index,
-                    struct_symbol,
-                } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::FieldGet {
-                            base: current,
-                            dest,
-                            field_index: *field_index,
-                            field_type: step.output_type.clone(),
-                            struct_symbol: struct_symbol.clone(),
-                        },
-                    );
-                }
-                BindOp::TupleElement { index } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::TupleGet {
-                            base: current,
-                            dest,
-                            element_type: step.output_type.clone(),
-                            index: *index,
-                        },
-                    );
-                }
-                BindOp::UnionNarrow { .. } => {
-                    unreachable!("IR lower: a union narrow step is emitted before this match")
-                }
-                BindOp::UnionPayload {
-                    member_index,
-                    member_type,
-                    union_type,
-                } => {
-                    ctx.cfg.append(
-                        body_block,
-                        IRInstruction::UnionPayloadGet {
-                            dest,
-                            member_index: *member_index,
-                            member_type: member_type.clone(),
-                            ty: union_type.clone(),
-                            value: current,
-                        },
-                    );
-                }
-            }
-            current = dest;
+            (current, body_block) = emit_bind_step(step, current, ctx, body_block);
         }
         ctx.cfg.append(
             body_block,
