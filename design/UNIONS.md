@@ -73,6 +73,10 @@ A value widens only where the surrounding code names the union. These
 positions name it.
 
 - A declaration with a type annotation.
+- A reassignment of a local that has the union type.
+- A write to a field of the union type.
+- An element of a tuple literal on the right of a destructuring assignment,
+  for a name that has the union type.
 - An argument, for a parameter of the union type.
 - A returned value, for a function that returns the union.
 - A field in a struct literal.
@@ -218,15 +222,16 @@ describes the box.
 A case that the rules do not predict is a bug, and a bug is a GitHub issue.
 This list holds the open issues against the rules.
 
-- [#186](https://github.com/koja-lang/koja/issues/186): a reassignment and
-  a field write do not widen a member. This is a missing position under
-  rule 4.
 - [#192](https://github.com/koja-lang/koja/issues/192): a union alias does
   not flatten a union alias that the file declares later. This breaks
   rule 1.
 - [#193](https://github.com/koja-lang/koja/issues/193): a generic struct
   literal or variant constructor does not take its type arguments from a
   member of the expected union. This is a missing position under rule 4.
+- [#204](https://github.com/koja-lang/koja/issues/204): a destructuring
+  assignment from a call does not widen an element into its local. Only a
+  tuple literal on the right pairs each name with an expression. This is a
+  missing position under rule 4.
 
 One limit is a decision and not a bug. A direct call on a union value is an
 error under rule 6, and [GAPS.md](GAPS.md) records the open question.

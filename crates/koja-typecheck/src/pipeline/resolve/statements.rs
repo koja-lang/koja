@@ -20,8 +20,10 @@
 //!     is rejected. Constants are immutable and cannot share an
 //!     assignment LHS with locals.
 //!   - Subsequent write of an existing name. Type annotation is a
-//!     feature gap (only legal on first decl). Rhs type must equal
-//!     the existing local's type, and the existing [`LocalId`] stays put.
+//!     feature gap (only legal on first decl). The rhs must flow
+//!     into the existing local's type. A union member widens and a
+//!     number literal takes the width. The existing [`LocalId`]
+//!     stays put.
 //!   - `_` as the target is a discard. The rhs resolves (against the
 //!     annotation when one is written), no local is declared, and the
 //!     target keeps no [`LocalId`].
@@ -38,7 +40,8 @@
 //!
 //! [`resolve_compound_assignment`] is the same shape minus the
 //! declaration path. The head local must already exist, the leaf
-//! field type must be `Int` or `Float`, and the rhs type must match.
+//! field type must be `Int` or `Float`, and the rhs must be a value
+//! that the binary operator accepts next to that type.
 //!
 //! [`LocalId`]: koja_ast::identifier::LocalId
 //! [`LValue`]: koja_ast::ast::LValue
@@ -47,7 +50,7 @@
 use koja_ast::ast::{
     CompoundOp, Diagnostic, Expr, LValue, Pattern, Statement, TypeExpr, path_text,
 };
-use koja_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{
     compound_op_label, pattern_kind_label, pattern_span, type_expr_span as annotation_span,
 };
@@ -57,12 +60,15 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{DisplayStyle, GlobalKind, display_type};
 
-use super::coercion::{Compatible, check_compatible, check_compatible_stamping};
+use super::coercion::{
+    Compatible, Mismatch, check_compatible, check_compatible_stamping, mismatch_message,
+    tuple_literal_elements, tuple_literal_elements_mut,
+};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
-use super::ops::resolve_operands_with_sibling_hint;
+use super::ops::{coerce_literal_to, resolve_operands_with_sibling_hint};
 use super::patterns::tuple_element_types;
-use super::types::is_arithmetic_type;
+use super::types::{is_arithmetic_type, types_equivalent};
 
 /// Resolve a `target = value` statement. Validates target shape,
 /// resolves the rhs, applies declaration-vs-reassignment rules, and
@@ -105,7 +111,12 @@ pub(super) fn resolve_assignment(
         );
         resolved.is_resolved().then_some(resolved)
     });
-    resolve_expr_with_expected(value, expected_ty.as_ref(), resolver, diagnostics);
+    // A reassignment has no annotation. The type of the existing
+    // local is then the expected type, so `found = Option.None` reads
+    // its type argument from `found`.
+    let existing_ty = existing_local_type(&lvalue.segments[0].text, resolver);
+    let hint = expected_ty.as_ref().or(existing_ty.as_ref());
+    resolve_expr_with_expected(value, hint, resolver, diagnostics);
     declare_assignment_target(
         lvalue,
         annotation_span,
@@ -227,19 +238,23 @@ fn declare_assignment_target(
     }
     let declared_ty = match annotated {
         Some(annotated) => {
-            if value_ty.is_resolved()
-                && check_compatible_stamping(value, &value_ty, &annotated, resolver.registry)
-                    .is_some()
-            {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "type annotation on `{name}` says `{}`, but the \
-                         right-hand side has type `{}`",
-                        display_type(&annotated, resolver.registry, DisplayStyle::Source),
-                        display_type(&value_ty, resolver.registry, DisplayStyle::Source),
-                    ),
+            if value_ty.is_resolved() {
+                check_write(
+                    value,
+                    &annotated,
+                    &format!("local `{name}`"),
+                    || {
+                        format!(
+                            "type annotation on `{name}` says `{}`, but the \
+                             right-hand side has type `{}`",
+                            display_type(&annotated, resolver.registry, DisplayStyle::Source),
+                            display_type(&value_ty, resolver.registry, DisplayStyle::Source),
+                        )
+                    },
                     span,
-                ));
+                    resolver,
+                    diagnostics,
+                );
             }
             annotated
         }
@@ -251,7 +266,7 @@ fn declare_assignment_target(
                 // a typed hole.
                 return;
             }
-            value_ty
+            check_reassignment(&name, value, span, resolver, diagnostics).unwrap_or(value_ty)
         }
     };
 
@@ -269,6 +284,84 @@ fn declare_assignment_target(
     lvalue.local_id = rebind_or_declare_local(&name, declared_ty, span, resolver, diagnostics);
 }
 
+/// Check `value` against the type of the target it is written to and
+/// record the coercion on it. Returns `false` after it reports. A
+/// literal that does not fit reports its range under `subject`. Any
+/// other mismatch reports the text of `incompatible`.
+fn check_write(
+    value: &mut Expr,
+    target_ty: &ResolvedType,
+    subject: &str,
+    incompatible: impl FnOnce() -> String,
+    span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let value_ty = value.resolution.clone();
+    let Some(mismatch) = check_compatible_stamping(value, &value_ty, target_ty, resolver.registry)
+    else {
+        return true;
+    };
+    let message = match mismatch {
+        Mismatch::OutOfRange { .. } => {
+            mismatch_message(subject, &mismatch, target_ty, &value_ty, resolver.registry)
+        }
+        Mismatch::Incompatible => incompatible(),
+    };
+    diagnostics.push(Diagnostic::error(message, span));
+    false
+}
+
+/// The type of the local `name`, when the local exists and its type
+/// resolved.
+fn existing_local_type(name: &str, resolver: &Resolver<'_>) -> Option<ResolvedType> {
+    resolver
+        .scope
+        .lookup(name)
+        .map(|(_, ty)| ty.clone())
+        .filter(ResolvedType::is_resolved)
+}
+
+/// Check `value` as a write to the existing local `name` and return
+/// the type of the local. A local type is fixed at declaration, so
+/// the value must flow into it. A union member widens, and a number
+/// literal takes the width. `None` when `name` is not such a local.
+fn check_reassignment(
+    name: &str,
+    value: &mut Expr,
+    span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ResolvedType> {
+    let existing_ty = existing_local_type(name, resolver)?;
+    let value_ty = value.resolution.clone();
+    check_write(
+        value,
+        &existing_ty,
+        &format!("local `{name}`"),
+        || reassign_message(name, &existing_ty, &value_ty, resolver),
+        span,
+        resolver,
+        diagnostics,
+    );
+    Some(existing_ty)
+}
+
+/// The diagnostic text for a write that does not fit the type of
+/// the existing local `name`.
+fn reassign_message(
+    name: &str,
+    existing_ty: &ResolvedType,
+    ty: &ResolvedType,
+    resolver: &Resolver<'_>,
+) -> String {
+    format!(
+        "cannot reassign `{name}` from `{}` to `{}` because local types are fixed at declaration",
+        display_type(existing_ty, resolver.registry, DisplayStyle::Source),
+        display_type(ty, resolver.registry, DisplayStyle::Source),
+    )
+}
+
 /// Bind `name` to a value of type `ty` the way `name = value` does.
 /// An existing local is rebound and keeps its `LocalId` (local types
 /// are fixed at declaration, so `ty` must match), a new name is
@@ -283,12 +376,7 @@ fn rebind_or_declare_local(
     if let Some((existing_id, existing_ty)) = resolver.scope.lookup(name) {
         if ty != *existing_ty {
             diagnostics.push(Diagnostic::error(
-                format!(
-                    "cannot reassign `{name}` from `{}` to `{}` because local types are fixed at \
-                     declaration",
-                    display_type(existing_ty, resolver.registry, DisplayStyle::Source),
-                    display_type(&ty, resolver.registry, DisplayStyle::Source),
-                ),
+                reassign_message(name, existing_ty, &ty, resolver),
                 span,
             ));
         }
@@ -308,30 +396,117 @@ fn rebind_or_declare_local(
 }
 
 /// Resolve a `(a, b) = value` statement. The value resolves first,
-/// then the pattern binds element-wise against its tuple type. Only
-/// bindings, wildcards, and nested tuples are allowed, so the
-/// pattern can never fail at runtime. Each name follows assignment
-/// rules, so `(n, ok) = step(n)` inside a loop body writes the
-/// enclosing `n` instead of declaring a shadow.
+/// then the pattern binds element-wise. Only bindings, wildcards,
+/// and nested tuples are allowed, so the pattern can never fail at
+/// runtime. Each name follows assignment rules, so
+/// `(n, ok) = step(n)` inside a loop body writes the enclosing `n`
+/// instead of declaring a shadow.
+///
+/// A tuple literal on the right pairs each name with one element
+/// expression, and that pair follows the rules of `name = element`.
+/// Any other value binds against its tuple type, and each element
+/// type must equal the type of its existing local.
 pub(super) fn resolve_destructure(
     pattern: &mut Pattern,
     value: &mut Expr,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    resolve_expr(value, resolver, diagnostics);
+    let expected_ty = Some(destructure_expected_type(pattern, value, resolver))
+        .filter(|ty| !matches!(ty, ResolvedType::Unresolved));
+    resolve_expr_with_expected(value, expected_ty.as_ref(), resolver, diagnostics);
     if !destructure_pattern_is_irrefutable(pattern, diagnostics) {
         return;
     }
     if !value.resolution.is_resolved() {
         return;
     }
-    let subject_ty = value.resolution.clone();
-    bind_destructure_pattern(pattern, &subject_ty, resolver, diagnostics);
+    bind_destructure_value(pattern, value, resolver, diagnostics);
+}
+
+/// The expected type of `value` on the right of a destructuring
+/// assignment to `pattern`. A name that is an existing local gives
+/// its type. A tuple pattern over a tuple literal of the same arity
+/// gives a tuple of the same. Every other pair gives a gap
+/// ([`ResolvedType::Unresolved`]), because the value has no target
+/// type to read.
+fn destructure_expected_type(
+    pattern: &Pattern,
+    value: &Expr,
+    resolver: &Resolver<'_>,
+) -> ResolvedType {
+    match pattern {
+        Pattern::Binding { name, .. } => {
+            existing_local_type(name.as_str(), resolver).unwrap_or(ResolvedType::Unresolved)
+        }
+        Pattern::Tuple {
+            elements: patterns, ..
+        } => match tuple_literal_elements(value) {
+            Some(elements) if elements.len() == patterns.len() => {
+                ResolvedType::Anonymous(AnonymousKind::Tuple {
+                    elements: patterns
+                        .iter()
+                        .zip(elements)
+                        .map(|(pattern, element)| {
+                            destructure_expected_type(pattern, element, resolver)
+                        })
+                        .collect(),
+                })
+            }
+            _ => ResolvedType::Unresolved,
+        },
+        _ => ResolvedType::Unresolved,
+    }
+}
+
+/// Bind an irrefutable destructure pattern to `value`, which has
+/// already resolved. A name is one assignment `name = value`. A
+/// tuple pattern over a tuple literal of the same arity pairs each
+/// element pattern with its element expression. A tuple pattern
+/// over any other value binds against the type of the value through
+/// [`bind_destructure_pattern`].
+fn bind_destructure_value(
+    pattern: &mut Pattern,
+    value: &mut Expr,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match pattern {
+        Pattern::Binding {
+            local_id,
+            name,
+            span,
+        } => {
+            let ty = check_reassignment(name.as_str(), value, *span, resolver, diagnostics)
+                .unwrap_or_else(|| value.resolution.clone());
+            *local_id = rebind_or_declare_local(name.as_str(), ty, *span, resolver, diagnostics);
+        }
+        Pattern::Tuple {
+            elements: patterns, ..
+        } => {
+            let arity = patterns.len();
+            match tuple_literal_elements_mut(value).filter(|elements| elements.len() == arity) {
+                Some(elements) => {
+                    for (pattern, element) in patterns.iter_mut().zip(elements) {
+                        bind_destructure_value(pattern, element, resolver, diagnostics);
+                    }
+                }
+                None => {
+                    let subject_ty = value.resolution.clone();
+                    bind_destructure_pattern(pattern, &subject_ty, resolver, diagnostics);
+                }
+            }
+        }
+        Pattern::Wildcard { .. } => {}
+        other => unreachable!(
+            "destructure_pattern_is_irrefutable admitted a refutable {other:?} pattern"
+        ),
+    }
 }
 
 /// Stamp every binding in an irrefutable destructure pattern via
-/// [`rebind_or_declare_local`], recursing into nested tuples.
+/// [`rebind_or_declare_local`], recursing into nested tuples. Each
+/// element type must equal the type of its existing local.
 fn bind_destructure_pattern(
     pattern: &mut Pattern,
     subject_ty: &ResolvedType,
@@ -467,7 +642,12 @@ pub(super) fn resolve_compound_assignment(
         // to avoid piling on with a type-mismatch.
         return;
     }
-    if value_ty != leaf_ty {
+    // `x += value` accepts what `x + value` accepts. That is a value
+    // of the same type, or a number literal that takes the width of
+    // `x`.
+    if !types_equivalent(&value_ty, &leaf_ty, resolver.registry)
+        && !coerce_literal_to(value, &leaf_ty, resolver.registry)
+    {
         diagnostics.push(Diagnostic::error(
             format!(
                 "type mismatch on `{op_label}=` for `{}`. lhs is `{}`, rhs is `{}`",
@@ -519,17 +699,24 @@ fn resolve_field_assignment(
     if !value_ty.is_resolved() {
         return;
     }
-    if value_ty != leaf_ty {
-        diagnostics.push(Diagnostic::error(
+    let written = check_write(
+        value,
+        &leaf_ty,
+        &format!("field `{}`", format_lvalue(lvalue)),
+        || {
             format!(
                 "type mismatch assigning to `{}`. Field has type `{}`, but the right-hand \
                  side has type `{}`",
                 format_lvalue(lvalue),
                 display_type(&leaf_ty, resolver.registry, DisplayStyle::Source),
                 display_type(&value_ty, resolver.registry, DisplayStyle::Source),
-            ),
-            span,
-        ));
+            )
+        },
+        span,
+        resolver,
+        diagnostics,
+    );
+    if !written {
         return;
     }
 

@@ -42,3 +42,21 @@ accept_union(result).print()
 pairs: List<(String, Post | Comment)> = []
 pairs = pairs.append(("first", p))
 IO.puts("#{pairs.length()} #{wrap_post(p).some?()}")
+
+# A member widens on a reassignment and on a write to a field
+struct Thread
+  top: Post | Comment
+end
+
+fn describe(x: Post | Comment) -> String
+  match x
+    post: Post -> "post #{post.title}"
+    comment: Comment -> "comment #{comment.body}"
+  end
+end
+
+slot: Post | Comment = p
+slot = Comment{body: "Hi"}
+thread = Thread{top: p}
+thread.top = Comment{body: "Yo"}
+IO.puts("#{describe(slot)}, #{describe(thread.top)}")

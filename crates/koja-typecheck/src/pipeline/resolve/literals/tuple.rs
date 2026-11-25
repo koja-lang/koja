@@ -12,6 +12,11 @@ use super::super::types::peel_alias;
 /// Resolve a `(a, b)` literal. An expected tuple type of matching
 /// arity propagates into the elements so contextual shapes like
 /// generic enum unit variants infer inside tuple literals.
+///
+/// A destructuring assignment expects a type for each element that
+/// it writes to an existing local, and leaves a gap
+/// ([`ResolvedType::Unresolved`]) for each element that it binds to
+/// a new name or discards. A gap gives the element no hint.
 pub(in super::super) fn resolve_tuple_literal(
     elements: &mut [Expr],
     expected: Option<&ResolvedType>,
@@ -26,7 +31,10 @@ pub(in super::super) fn resolve_tuple_literal(
     };
     let mut element_types = Vec::with_capacity(elements.len());
     for (index, element) in elements.iter_mut().enumerate() {
-        let hint = expected_elements.as_ref().map(|types| &types[index]);
+        let hint = expected_elements
+            .as_ref()
+            .map(|types| &types[index])
+            .filter(|hint| !matches!(hint, ResolvedType::Unresolved));
         resolve_expr_with_expected(element, hint, resolver, diagnostics);
         element_types.push(element.resolution.clone());
     }

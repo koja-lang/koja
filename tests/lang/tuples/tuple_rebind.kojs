@@ -100,3 +100,31 @@ end
 
 rewrite(Holder.Text("hi")).print()
 rewrite(Holder.Empty).print()
+
+# A tuple literal on the right pairs each name with one element, so
+# an element takes the type of its local. A union member widens, a
+# number literal takes the width, and `Option.None` reads its type.
+struct Cat
+  name: String
+end
+
+struct Dog
+  name: String
+end
+
+fn name_of(pet: Cat | Dog) -> String
+  match pet
+    cat: Cat -> "cat #{cat.name}"
+    dog: Dog -> "dog #{dog.name}"
+  end
+end
+
+pet: Cat | Dog = Cat{name: "Tom"}
+small: Int32 = 1
+found: Option<Int> = Option.Some(1)
+
+for i in [1, 2]
+  (pet, (small, found)) = (Dog{name: "Rex #{i}"}, (7, Option.None))
+end
+
+IO.puts("#{name_of(pet)} #{small} #{found.none?()}")

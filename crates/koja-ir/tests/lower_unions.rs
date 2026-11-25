@@ -24,10 +24,13 @@
 //!   `IRType::Union` with the alias name, and the package of the
 //!   alias holds its decl.
 //! - A struct that holds its own union inline gets a boxed field.
+//! - A member written to a local, to a field, or through a
+//!   destructuring assignment lowers to a
+//!   [`IRInstruction::UnionWrap`] that feeds the write.
 
 use std::collections::BTreeMap;
 
-use koja_ir::{ConstValue, IRInstruction, IRScript, IRSymbol, IRType, IRUnionDecl};
+use koja_ir::{ConstValue, IRInstruction, IRScript, IRSymbol, IRType, IRUnionDecl, ValueId};
 
 mod common;
 
@@ -503,5 +506,112 @@ fn struct_that_holds_its_own_union_gets_a_boxed_field() {
         symbol.mangled(),
         format!("Union_Int64_or_{PACKAGE}.Node"),
         "expected the anonymous union, since `Link` is not recursive",
+    );
+}
+
+/// Declarations for the write tests. They are two structs and the
+/// alias `Pet = Cat | Dog`.
+const PET_PRELUDE: &str = "
+        struct Cat
+          name: String
+        end
+
+        struct Dog
+          name: String
+        end
+
+        type Pet = Cat | Dog
+";
+
+/// The value that each `UnionWrap` in the script body produces.
+fn union_wrap_dests(script: &IRScript) -> Vec<ValueId> {
+    all_instructions(&script.blocks)
+        .filter_map(|instruction| match instruction {
+            IRInstruction::UnionWrap { dest, .. } => Some(*dest),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn reassignment_of_a_member_wraps_before_the_local_write() {
+    let source = format!(
+        "{PET_PRELUDE}
+        pet: Pet = Cat{{name: \"Tom\"}}
+        pet = Dog{{name: \"Rex\"}}
+        "
+    );
+    let script = lower(&source);
+
+    let wraps = union_wrap_dests(&script);
+    assert_eq!(wraps.len(), 2, "expected one wrap for each write to `pet`");
+    for wrap in wraps {
+        assert!(
+            all_instructions(&script.blocks)
+                .any(|i| matches!(i, IRInstruction::LocalWrite { value, .. } if *value == wrap)),
+            "expected the wrapped value {wrap:?} to feed a LocalWrite",
+        );
+    }
+}
+
+#[test]
+fn field_write_of_a_member_wraps_before_the_field_set() {
+    let source = format!(
+        "{PET_PRELUDE}
+        struct Home
+          pet: Pet
+        end
+
+        home = Home{{pet: Cat{{name: \"Tom\"}}}}
+        home.pet = Dog{{name: \"Rex\"}}
+        "
+    );
+    let script = lower(&source);
+
+    let wraps = union_wrap_dests(&script);
+    assert_eq!(
+        wraps.len(),
+        2,
+        "expected one wrap for the literal and one for the write"
+    );
+    assert!(
+        all_instructions(&script.blocks)
+            .any(|i| matches!(i, IRInstruction::FieldSet { value, .. } if *value == wraps[1])),
+        "expected the wrapped value {:?} to feed the FieldSet",
+        wraps[1],
+    );
+}
+
+#[test]
+fn destructure_of_a_member_wraps_before_the_tuple_init() {
+    let source = format!(
+        "{PET_PRELUDE}
+        pet: Pet = Cat{{name: \"Tom\"}}
+        count = 0
+        (pet, count) = (Dog{{name: \"Rex\"}}, 1)
+        "
+    );
+    let script = lower(&source);
+
+    let wraps = union_wrap_dests(&script);
+    assert_eq!(
+        wraps.len(),
+        2,
+        "expected one wrap for the declaration and one for the tuple element"
+    );
+    let (elements, element_types) = all_instructions(&script.blocks)
+        .find_map(|i| match i {
+            IRInstruction::TupleInit { elements, ty, .. } => Some((elements, ty)),
+            _ => None,
+        })
+        .expect("expected a TupleInit for the tuple literal");
+    assert_eq!(
+        elements[0], wraps[1],
+        "the first element is the wrapped dog"
+    );
+    assert!(
+        matches!(element_types[0], IRType::Union(_)),
+        "expected the tuple to hold the union, got {:?}",
+        element_types[0],
     );
 }

@@ -21,7 +21,8 @@
 //! [`LValue::local_id`]: koja_ast::ast::LValue::local_id
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{CompoundOp, ExprKind, Pattern, Statement};
+use koja_ast::ast::{CompoundOp, Expr, ExprKind, Pattern, Statement};
+use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
 use koja_ast::identifier::{LocalId, Resolution};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
@@ -208,6 +209,121 @@ fn decl_with_mismatched_annotation_diagnoses() {
     assert_file_fails_with(source, &["type annotation", "x"]);
 }
 
+/// The coercion that gives a number literal the width `Int32`.
+const INT32_LITERAL: Option<LiteralCoercion> = Some(LiteralCoercion::NumericLiteralWidth(
+    NumericLiteralWidth::Int32,
+));
+
+/// The error for the literal `300` in a position that expects the
+/// `Int8` local `tiny`.
+const TINY_RANGE_ERROR: &str =
+    "local `tiny` expects `Int8`, but value `300` does not fit in `Int8` (range -128..=127)";
+
+/// The value of the `Assignment` at `index` in the body of `main`.
+fn assignment_value(checked: &CheckedProgram, index: usize) -> &Expr {
+    let body = function_body(checked, "main");
+    let Statement::Assignment { value, .. } = &body[index] else {
+        panic!("expected Assignment, got {:?}", body[index]);
+    };
+    value
+}
+
+#[test]
+fn reassignment_gives_a_literal_the_width_of_the_local() {
+    let source = "
+        fn main
+          small: Int32 = 1
+          small = 2
+          small
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_eq!(
+        assignment_value(&checked, 1).literal_coercion,
+        INT32_LITERAL
+    );
+}
+
+#[test]
+fn reassignment_widens_a_sized_value_into_int() {
+    let source = "
+        fn main
+          part: Int32 = 1
+          total = 0
+          total = part
+          total
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_eq!(
+        assignment_value(&checked, 2).coercion,
+        Some(Coercion::NumericWiden(global_leaf(&checked, "Int"))),
+    );
+}
+
+#[test]
+fn reassignment_does_not_narrow_an_int() {
+    let source = "
+        fn main
+          small: Int32 = 1
+          big = 2
+          small = big
+          small
+        end
+        ";
+
+    assert_file_fails_with(source, &["reassign", "`small`", "`Int32`", "`Int`"]);
+}
+
+#[test]
+fn reassignment_of_a_literal_that_does_not_fit_reports_the_range() {
+    let source = "
+        fn main
+          tiny: Int8 = 1
+          tiny = 300
+          tiny
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    assert_eq!(diagnostic_messages(&failure), vec![TINY_RANGE_ERROR]);
+}
+
+#[test]
+fn decl_with_a_literal_that_does_not_fit_reports_the_range() {
+    let source = "
+        fn main
+          tiny: Int8 = 300
+          tiny
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    assert_eq!(diagnostic_messages(&failure), vec![TINY_RANGE_ERROR]);
+}
+
+#[test]
+fn reassignment_reads_the_expected_type_from_the_local() {
+    let source = "
+        fn main
+          found: Option<Int> = Option.Some(1)
+          found = Option.None
+          items = [1, 2]
+          items = []
+          found
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let body = function_body(&checked, "main");
+    let found_id = assignment_local_id(&body[0]);
+    let items_id = assignment_local_id(&body[2]);
+    assert_eq!(assignment_local_id(&body[1]), found_id);
+    assert_eq!(assignment_local_id(&body[3]), items_id);
+}
+
 /// Helper: ensure a function body's i-th statement is a
 /// `CompoundAssign` with the given op, the target stamps a `local_id`
 /// matching the prior `Assignment`'s decl, and the rhs has the
@@ -348,6 +464,39 @@ fn compound_assign_type_mismatch_diagnoses() {
         ";
 
     assert_file_fails_with(source, &["type mismatch", "`x`"]);
+}
+
+#[test]
+fn compound_assign_gives_a_literal_the_width_of_the_local() {
+    let source = "
+        fn main
+          small: Int32 = 1
+          small += 2
+          small
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let body = function_body(&checked, "main");
+    let Statement::CompoundAssign { value, .. } = &body[1] else {
+        panic!("expected CompoundAssign, got {:?}", body[1]);
+    };
+    assert_eq!(value.literal_coercion, INT32_LITERAL);
+}
+
+#[test]
+fn compound_assign_does_not_widen_a_sized_value() {
+    // `total + part` is an error, so `total += part` is an error too.
+    let source = "
+        fn main
+          total = 0
+          part: Int32 = 1
+          total += part
+          total
+        end
+        ";
+
+    assert_file_fails_with(source, &["type mismatch", "`total`", "`Int`", "`Int32`"]);
 }
 
 #[test]
@@ -526,6 +675,104 @@ fn destructure_rebinding_with_different_type_diagnoses() {
         ";
 
     assert_file_fails_with(source, &["reassign", "n"]);
+}
+
+/// The elements of the tuple literal on the right of the
+/// `Destructure` at `index` in the body of `main`.
+fn destructure_elements(checked: &CheckedProgram, index: usize) -> &[Expr] {
+    let body = function_body(checked, "main");
+    let Statement::Destructure { value, .. } = &body[index] else {
+        panic!("expected Destructure, got {:?}", body[index]);
+    };
+    let ExprKind::Tuple { elements } = &value.kind else {
+        panic!("expected a tuple literal, got {:?}", value.kind);
+    };
+    elements
+}
+
+#[test]
+fn destructure_gives_a_literal_the_width_of_the_local() {
+    let source = "
+        fn main
+          small: Int32 = 1
+          count = 0
+          (small, count) = (7, 2)
+          small
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let elements = destructure_elements(&checked, 2);
+    assert_eq!(elements[0].literal_coercion, INT32_LITERAL);
+    assert_eq!(elements[1].literal_coercion, None);
+}
+
+#[test]
+fn destructure_widens_a_sized_value_into_int() {
+    let source = "
+        fn main
+          part: Int32 = 5
+          total = 0
+          count = 0
+          (total, count) = (part, 1)
+          total
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert_eq!(
+        destructure_elements(&checked, 3)[0].coercion,
+        Some(Coercion::NumericWiden(global_leaf(&checked, "Int"))),
+    );
+}
+
+#[test]
+fn destructure_reads_a_variant_type_from_the_local() {
+    let source = "
+        fn main
+          found: Option<Int> = Option.Some(1)
+          count = 0
+          (found, count) = (Option.None, 1)
+          found
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let body = function_body(&checked, "main");
+    let found_id = assignment_local_id(&body[0]);
+    assert_eq!(destructure_local_ids(&body[2])[0], found_id);
+}
+
+#[test]
+fn destructure_reads_a_list_type_from_the_local() {
+    let source = "
+        fn main
+          items = [1, 2]
+          count = 0
+          (items, count) = ([], 1)
+          items
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let body = function_body(&checked, "main");
+    let items_id = assignment_local_id(&body[0]);
+    assert_eq!(destructure_local_ids(&body[2])[0], items_id);
+}
+
+#[test]
+fn destructure_of_a_literal_that_does_not_fit_reports_the_range() {
+    let source = "
+        fn main
+          tiny: Int8 = 1
+          count = 0
+          (tiny, count) = (300, 1)
+          tiny
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    assert_eq!(diagnostic_messages(&failure), vec![TINY_RANGE_ERROR]);
 }
 
 #[test]
