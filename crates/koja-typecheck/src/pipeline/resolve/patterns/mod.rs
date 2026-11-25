@@ -42,9 +42,9 @@ use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
 use super::ctx::Resolver;
-use super::types::{display_resolution, is_primitive, names_struct, peel_alias, types_equivalent};
+use super::types::{is_primitive, names_struct, peel_alias, types_equivalent};
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
-use crate::registry::{GlobalKind, GlobalRegistry};
+use crate::registry::{DisplayStyle, GlobalKind, GlobalRegistry, display_type};
 
 pub(super) use usefulness::{DeconstructedPattern, SubjectCoverage};
 
@@ -183,8 +183,8 @@ pub(super) fn resolve_pattern(
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "type `{}` is not a member of union `{}`",
-                                display_resolution(&missing, resolver.registry),
-                                display_resolution(subject_ty, resolver.registry),
+                                display_type(&missing, resolver.registry, DisplayStyle::Source),
+                                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                             ),
                             *span,
                         ));
@@ -198,7 +198,7 @@ pub(super) fn resolve_pattern(
                         format!(
                             "typed-binding pattern requires a union subject, \
                              got `{}`",
-                            display_resolution(subject_ty, resolver.registry),
+                            display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                         ),
                         *span,
                     ));
@@ -279,7 +279,7 @@ pub(super) fn tuple_element_types(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "tuple pattern requires a tuple subject, got `{}`",
-                    display_resolution(subject_ty, resolver.registry),
+                    display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                 ),
                 span,
             ));
@@ -290,7 +290,7 @@ pub(super) fn tuple_element_types(
         diagnostics.push(Diagnostic::error(
             format!(
                 "tuple pattern has {arity} elements but subject `{}` has {}",
-                display_resolution(subject_ty, resolver.registry),
+                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                 element_types.len(),
             ),
             span,

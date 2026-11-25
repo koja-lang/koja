@@ -18,14 +18,14 @@ use super::super::inference::{
     PhantomContext, fill_from_expected, finalize_inference, try_pre_seeded_subst, unify_pairs,
 };
 use super::super::paths::static_dotted_path;
-use super::super::types::{display_resolution, lookup_type, peel_alias};
+use super::super::types::{lookup_type, peel_alias};
 use super::structural::StructuralShape;
 use super::{arg_pairs, emit_conflict};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
-    ConformanceScope, Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry,
-    ResolvedParam,
+    ConformanceScope, Dispatch, DisplayStyle, FunctionSignature, GlobalKind, GlobalRegistry,
+    RegistryEntry, ResolvedParam, display_type,
 };
 
 /// Inputs to [`infer_method_call_type_args`]. Bundles the two
@@ -261,7 +261,7 @@ pub(super) fn diagnose_unmet_conformance(
     diagnostics.push(Diagnostic::error(
         format!(
             "`{}` does not implement `{protocol_label}`, so `{method}` is unavailable",
-            display_resolution(&receiver.resolution, registry),
+            display_type(&receiver.resolution, registry, DisplayStyle::Source),
         ),
         call_span,
     ));

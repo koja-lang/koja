@@ -55,14 +55,14 @@ use koja_ast::span::Span;
 
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::pipeline::unify::{Substitution, substitute};
-use crate::registry::GlobalKind;
+use crate::registry::{DisplayStyle, GlobalKind, display_type};
 
 use super::coercion::{Compatible, check_compatible, check_compatible_stamping};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::ops::resolve_operands_with_sibling_hint;
 use super::patterns::tuple_element_types;
-use super::types::{display_resolution, is_arithmetic_type};
+use super::types::is_arithmetic_type;
 
 /// Resolve a `target = value` statement. Validates target shape,
 /// resolves the rhs, applies declaration-vs-reassignment rules, and
@@ -235,8 +235,8 @@ fn declare_assignment_target(
                     format!(
                         "type annotation on `{name}` says `{}`, but the \
                          right-hand side has type `{}`",
-                        display_resolution(&annotated, resolver.registry),
-                        display_resolution(&value_ty, resolver.registry),
+                        display_type(&annotated, resolver.registry, DisplayStyle::Source),
+                        display_type(&value_ty, resolver.registry, DisplayStyle::Source),
                     ),
                     span,
                 ));
@@ -286,8 +286,8 @@ fn rebind_or_declare_local(
                 format!(
                     "cannot reassign `{name}` from `{}` to `{}` because local types are fixed at \
                      declaration",
-                    display_resolution(existing_ty, resolver.registry),
-                    display_resolution(&ty, resolver.registry),
+                    display_type(existing_ty, resolver.registry, DisplayStyle::Source),
+                    display_type(&ty, resolver.registry, DisplayStyle::Source),
                 ),
                 span,
             ));
@@ -453,7 +453,7 @@ pub(super) fn resolve_compound_assignment(
         diagnostics.push(Diagnostic::error(
             format!(
                 "`{op_label}=` requires an `Int` or `Float` lhs (got `{}` for `{}`)",
-                display_resolution(&leaf_ty, resolver.registry),
+                display_type(&leaf_ty, resolver.registry, DisplayStyle::Source),
                 format_lvalue(target),
             ),
             span,
@@ -472,8 +472,8 @@ pub(super) fn resolve_compound_assignment(
             format!(
                 "type mismatch on `{op_label}=` for `{}`. lhs is `{}`, rhs is `{}`",
                 format_lvalue(target),
-                display_resolution(&leaf_ty, resolver.registry),
-                display_resolution(&value_ty, resolver.registry),
+                display_type(&leaf_ty, resolver.registry, DisplayStyle::Source),
+                display_type(&value_ty, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));
@@ -525,8 +525,8 @@ fn resolve_field_assignment(
                 "type mismatch assigning to `{}`. Field has type `{}`, but the right-hand \
                  side has type `{}`",
                 format_lvalue(lvalue),
-                display_resolution(&leaf_ty, resolver.registry),
-                display_resolution(&value_ty, resolver.registry),
+                display_type(&leaf_ty, resolver.registry, DisplayStyle::Source),
+                display_type(&value_ty, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));
@@ -596,7 +596,7 @@ fn walk_field_segments(
                 format!(
                     "cannot project field `{segment}` on `{}` because field assignment requires \
                      a struct receiver",
-                    display_resolution(&current_ty, resolver.registry),
+                    display_type(&current_ty, resolver.registry, DisplayStyle::Source),
                 ),
                 lvalue.span,
             ));

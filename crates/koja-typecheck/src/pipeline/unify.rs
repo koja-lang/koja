@@ -302,8 +302,8 @@ fn is_sized_float(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
 /// `M -> MsgA`. Without this rule the per-slot compatibility check
 /// would surface a spurious "cannot be both" diagnostic.
 fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    let ResolvedType::Anonymous(AnonymousKind::Union { members }) = peel_alias(prev, registry)
-    else {
+    let peeled = peel_alias(prev, registry);
+    let Some(members) = peeled.as_union() else {
         return false;
     };
     members

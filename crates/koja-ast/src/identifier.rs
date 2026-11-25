@@ -251,8 +251,8 @@ impl Resolution {
     }
 }
 
-/// Northstar-aligned type annotation attached to every `Expr` by the typecheck pass
-/// typecheck.
+/// Northstar-aligned type annotation attached to every `Expr` by the
+/// typecheck pass.
 ///
 /// Split along the named/anonymous axis:
 ///
@@ -309,6 +309,15 @@ impl ResolvedType {
         Self::Named {
             resolution,
             type_args: Vec::new(),
+        }
+    }
+
+    /// The members when this type is a union. Does not peel an alias,
+    /// so peel first when the type can be a named union.
+    pub fn as_union(&self) -> Option<&[ResolvedType]> {
+        match self {
+            Self::Anonymous(AnonymousKind::Union { members }) => Some(members),
+            _ => None,
         }
     }
 

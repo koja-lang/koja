@@ -21,7 +21,7 @@ use koja_ast::span::Span;
 
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::pipeline::unify::{Substitution, substitute};
-use crate::registry::{Conformance, GlobalRegistry};
+use crate::registry::{Conformance, DisplayStyle, GlobalRegistry, display_type};
 
 use super::control_flow::{
     body_tail_expr, body_tail_type, join_arm_tails, require_bool_condition, widen_arm_tails,
@@ -29,7 +29,7 @@ use super::control_flow::{
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::speculation::ArmTail;
-use super::types::{display_resolution, is_primitive, peel_alias};
+use super::types::{is_primitive, peel_alias};
 use super::walker::resolve_body_with_expected;
 
 /// Resolve `spawn Type.start(config)`. The inner expression must be
@@ -177,7 +177,7 @@ pub(super) fn check_monitor_call_site(
         format!(
             "`Process.monitor` requires the calling process's message type to include \
              `Process.ExitSignal` (`M` is `{}`)",
-            display_resolution(message_type, registry),
+            display_type(message_type, registry, DisplayStyle::Source),
         ),
         "add `Process.ExitSignal` to the `M` of your `impl Process<C, M, R>` and handle it",
         call_span,
@@ -318,7 +318,7 @@ fn bind_receive_pattern(
             format!(
                 "receive only supports business (`(M, Option<ReplyTo<R>>)`) and \
                  lifecycle (`Lifecycle`) arms (got `{}`)",
-                display_resolution(&resolved, resolver.registry),
+                display_type(&resolved, resolver.registry, DisplayStyle::Source),
             ),
             *span,
         ));
@@ -408,7 +408,7 @@ fn require_int_timeout(
         diagnostics.push(Diagnostic::error(
             format!(
                 "`receive after` timeout must be `Int`, got `{}`",
-                display_resolution(&timeout.resolution, registry),
+                display_type(&timeout.resolution, registry, DisplayStyle::Source),
             ),
             timeout.span,
         ));

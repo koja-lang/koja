@@ -618,9 +618,8 @@ pub(crate) fn lower_named_unions(registry: &GlobalRegistry, output: &mut LowerOu
         .collect();
     aliases.sort();
     for id in aliases {
-        let Some(ResolvedType::Anonymous(AnonymousKind::Union { members })) =
-            registry.alias_expansion(id)
-        else {
+        let expansion = registry.alias_expansion(id);
+        let Some(members) = expansion.as_ref().and_then(ResolvedType::as_union) else {
             panic!("IR lower: recursive alias {id} is not a union (lift invariant violation)");
         };
         let symbol = match global_to_ir_type(id, &[], registry, output) {
@@ -663,12 +662,11 @@ fn declare_recursive_alias(
         panic!("IR lower: recursive alias `{identifier}` has no declaration");
     };
     unions.insert(symbol, decl.clone());
-    let Some(ResolvedType::Anonymous(AnonymousKind::Union { members })) =
-        registry.alias_expansion(id)
-    else {
+    let expansion = registry.alias_expansion(id);
+    let Some(members) = expansion.as_ref().and_then(ResolvedType::as_union) else {
         panic!("IR lower: recursive alias `{identifier}` is not a union");
     };
-    for member in &members {
+    for member in members {
         resolved_type_to_ir_type(member, registry, output);
     }
 }

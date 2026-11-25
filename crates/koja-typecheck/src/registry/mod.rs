@@ -36,6 +36,7 @@ use koja_ast::span::Span;
 mod candidates;
 mod conformance;
 mod definitions;
+mod display;
 mod format;
 
 pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
@@ -46,6 +47,7 @@ pub use definitions::{
     ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
     TypeAliasDefinition,
 };
+pub use display::{DisplayStyle, display_type};
 pub use format::format_registry;
 pub use koja_ast::ast::FunctionOrigin;
 

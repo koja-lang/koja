@@ -44,8 +44,8 @@ use structural::{StructuralCall, resolve_structural_method_call};
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
-    FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
-    VisibilityScope,
+    DisplayStyle, FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry,
+    ResolvedParam, VisibilityScope, display_type,
 };
 
 use super::coercion::{check_compatible_stamping, mismatch_message};
@@ -56,7 +56,6 @@ use super::inference::{
 };
 use super::paths::{PackageMember, lookup_package_member};
 use super::process::check_monitor_call_site;
-use super::types::display_resolution;
 
 /// Co-traveling call-site context shared by [`resolve_call`] /
 /// [`resolve_method_call`] and the inner generic-inference helpers.
@@ -652,8 +651,12 @@ pub(super) fn resolve_method_call(
         diagnostics.push(Diagnostic::error(
             format!(
                 "no method `{method}` on `{}` (method `{method_label}` is defined for `{}`)",
-                display_resolution(&receiver.resolution, resolver.registry),
-                display_resolution(&self_param.ty, resolver.registry),
+                display_type(
+                    &receiver.resolution,
+                    resolver.registry,
+                    DisplayStyle::Source
+                ),
+                display_type(&self_param.ty, resolver.registry, DisplayStyle::Source),
             ),
             call_span,
         ));
@@ -808,8 +811,8 @@ pub(super) fn emit_conflict(
             "type parameter `{}` of `{}` cannot be both `{}` and `{}`",
             callee.type_params[conflict.param_index],
             callee.label,
-            display_resolution(&conflict.prev, registry),
-            display_resolution(&conflict.actual, registry),
+            display_type(&conflict.prev, registry, DisplayStyle::Source),
+            display_type(&conflict.actual, registry, DisplayStyle::Source),
         ),
         span,
     ));
@@ -1279,7 +1282,7 @@ fn resolve_local_call(
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot call `{name}` because it is `{}`, not a function",
-                display_resolution(&ty, resolver.registry),
+                display_type(&ty, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));

@@ -9,10 +9,9 @@
 use koja_ast::ast::*;
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::span::{FileId, Position, Span};
-use koja_typecheck::{FunctionSignature, GlobalRegistry};
+use koja_typecheck::{DisplayStyle, FunctionSignature, GlobalRegistry, display_type};
 
 use crate::Analysis;
-use crate::display::format_resolved_type;
 use crate::expr_at::signature_for_target;
 use crate::index::{ReferenceIndex, Role};
 use koja_ast::visit::{self, Visitor};
@@ -88,7 +87,7 @@ impl Collector<'_> {
         if name.span.synthetic || !ty.is_resolved() {
             return;
         }
-        let label = format!(": {}", format_resolved_type(ty, self.registry));
+        let label = format!(": {}", display_type(ty, self.registry, DisplayStyle::Short));
         self.push(name.span.end, label, HintKind::Type);
     }
 

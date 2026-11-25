@@ -9,9 +9,12 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::ExprKind;
-use koja_query::display::{format_function_signature, format_resolved_type};
+use koja_query::display::format_function_signature;
 use koja_query::expr_at::{find_expr_at, receiver_type_id};
-use koja_typecheck::{Candidate, CandidateDetail, CandidateKind, GlobalKind, GlobalRegistry};
+use koja_typecheck::{
+    Candidate, CandidateDetail, CandidateKind, DisplayStyle, GlobalKind, GlobalRegistry,
+    display_type,
+};
 
 use crate::backend::Backend;
 use crate::convert::Positions;
@@ -116,7 +119,7 @@ fn to_completion_item(candidate: &Candidate<'_>, registry: &GlobalRegistry) -> C
             registry,
         )),
         CandidateDetail::None => None,
-        CandidateDetail::Type(ty) => Some(format_resolved_type(ty, registry)),
+        CandidateDetail::Type(ty) => Some(display_type(ty, registry, DisplayStyle::Short)),
         CandidateDetail::TypeParams(params) => {
             (!params.is_empty()).then(|| format!("<{}>", params.join(", ")))
         }

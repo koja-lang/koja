@@ -13,12 +13,12 @@
 
 use std::fmt::Write as _;
 
-use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
+use koja_ast::identifier::ResolvedType;
 
 use super::{
-    Conformance, ConformanceScope, ConstantDefinition, EnumDefinition, FunctionSignature,
-    GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedEnumVariant, ResolvedProtocolMethod,
-    ResolvedVariantData, StructDefinition,
+    Conformance, ConformanceScope, ConstantDefinition, DisplayStyle, EnumDefinition,
+    FunctionSignature, GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedEnumVariant,
+    ResolvedProtocolMethod, ResolvedVariantData, StructDefinition, display_type,
 };
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
@@ -62,7 +62,7 @@ fn format_kind(kind: &GlobalKind, type_params: &[String], registry: &GlobalRegis
         GlobalKind::TypeAlias(Some(definition)) => {
             format!(
                 "type = {}",
-                format_resolved(&definition.expansion, registry)
+                display_type(&definition.expansion, registry, DisplayStyle::Qualified)
             )
         }
     }
@@ -84,7 +84,13 @@ fn format_variant(variant: &ResolvedEnumVariant, registry: &GlobalRegistry) -> S
         ResolvedVariantData::Struct(fields) => {
             let payload = fields
                 .iter()
-                .map(|f| format!("{}: {}", f.name, format_resolved(&f.ty, registry)))
+                .map(|f| {
+                    format!(
+                        "{}: {}",
+                        f.name,
+                        display_type(&f.ty, registry, DisplayStyle::Qualified)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{}{{{payload}}}", variant.name)
@@ -92,7 +98,7 @@ fn format_variant(variant: &ResolvedEnumVariant, registry: &GlobalRegistry) -> S
         ResolvedVariantData::Tuple(types) => {
             let payload = types
                 .iter()
-                .map(|ty| format_resolved(ty, registry))
+                .map(|ty| display_type(ty, registry, DisplayStyle::Qualified))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{}({payload})", variant.name)
@@ -120,7 +126,13 @@ fn format_protocol_method(method: &ResolvedProtocolMethod, registry: &GlobalRegi
     let non_self = method
         .non_self_params
         .iter()
-        .map(|p| format!("{}: {}", p.name, format_resolved(&p.ty, registry)))
+        .map(|p| {
+            format!(
+                "{}: {}",
+                p.name,
+                display_type(&p.ty, registry, DisplayStyle::Qualified)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let params = match (receiver, non_self.as_str()) {
@@ -131,7 +143,7 @@ fn format_protocol_method(method: &ResolvedProtocolMethod, registry: &GlobalRegi
     format!(
         "fn {}({params}) -> {}{suffix}",
         method.name,
-        format_resolved(&method.return_type, registry),
+        display_type(&method.return_type, registry, DisplayStyle::Qualified),
     )
 }
 
@@ -143,7 +155,13 @@ fn format_struct(
     let fields = def
         .fields
         .iter()
-        .map(|f| format!("{}: {}", f.name, format_resolved(&f.ty, registry)))
+        .map(|f| {
+            format!(
+                "{}: {}",
+                f.name,
+                display_type(&f.ty, registry, DisplayStyle::Qualified)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let conformances = format_conformances(&def.conformances, type_params, registry);
@@ -156,7 +174,7 @@ fn format_struct(
 /// a conditional record names its bounds as `Proto for Self<T: P>`.
 /// Empty maps render to nothing so unconformant types stay visually
 /// identical to pre-conformance renders. Args are rendered via
-/// [`format_resolved`] for stability.
+/// [`display_type`] for stability.
 fn format_conformances(
     conformances: &std::collections::BTreeMap<
         koja_ast::identifier::GlobalRegistryId,
@@ -254,81 +272,33 @@ fn format_bounded_params(
 
 fn format_type_args(args: &[ResolvedType], registry: &GlobalRegistry) -> String {
     args.iter()
-        .map(|a| format_resolved(a, registry))
+        .map(|a| display_type(a, registry, DisplayStyle::Qualified))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
 fn format_constant(def: &ConstantDefinition, registry: &GlobalRegistry) -> String {
-    format!("const: {}", format_resolved(&def.ty, registry))
+    format!(
+        "const: {}",
+        display_type(&def.ty, registry, DisplayStyle::Qualified)
+    )
 }
 
 fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> String {
     let params = sig
         .params
         .iter()
-        .map(|p| format!("{}: {}", p.name, format_resolved(&p.ty, registry)))
+        .map(|p| {
+            format!(
+                "{}: {}",
+                p.name,
+                display_type(&p.ty, registry, DisplayStyle::Qualified)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     format!(
         "fn ({params}) -> {}",
-        format_resolved(&sig.return_type, registry),
+        display_type(&sig.return_type, registry, DisplayStyle::Qualified),
     )
-}
-
-fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    match ty {
-        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            let rendered_params = params
-                .iter()
-                .map(|p| format_resolved(p, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "fn ({rendered_params}) -> {}",
-                format_resolved(ret, registry),
-            )
-        }
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            let rendered = elements
-                .iter()
-                .map(|e| format_resolved(e, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({rendered})")
-        }
-        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
-            .iter()
-            .map(|m| format_resolved(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
-        ResolvedType::Named {
-            resolution,
-            type_args,
-        } => {
-            let head = match resolution {
-                Resolution::Global(id) => match registry.get(*id) {
-                    Some(entry) => entry.identifier.qualified_name(),
-                    None => format!("<id {id}>"),
-                },
-                Resolution::Local(local_id) => format!("<local {local_id}>"),
-                Resolution::TypeParam { owner, index } => registry
-                    .type_param_name(*owner, *index)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-                Resolution::Unresolved => "<unresolved>".to_string(),
-            };
-            if type_args.is_empty() {
-                head
-            } else {
-                let args = type_args
-                    .iter()
-                    .map(|arg| format_resolved(arg, registry))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{head}<{args}>")
-            }
-        }
-        ResolvedType::Failed | ResolvedType::Unresolved => "<unresolved>".to_string(),
-    }
 }

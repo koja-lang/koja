@@ -36,9 +36,10 @@ pub use program::{
 };
 pub use registry::{
     BoundOverlay, BuiltinDefinition, BuiltinShape, Candidate, CandidateDetail, CandidateKind,
-    Conformance, ConformanceScope, ConstantDefinition, Dispatch, EnumDefinition, ExperimentalTag,
-    FunctionDefinition, FunctionOrigin, FunctionSignature, GlobalKind, GlobalRegistry, KEYWORDS,
-    ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
-    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
-    TypeAliasDefinition, VisibilityScope, format_registry,
+    Conformance, ConformanceScope, ConstantDefinition, Dispatch, DisplayStyle, EnumDefinition,
+    ExperimentalTag, FunctionDefinition, FunctionOrigin, FunctionSignature, GlobalKind,
+    GlobalRegistry, KEYWORDS, ProtocolDefinition, RegistryEntry, ResolvedEnumVariant,
+    ResolvedParam, ResolvedProtocolBound, ResolvedProtocolMethod, ResolvedStructField,
+    ResolvedVariantData, StructDefinition, TypeAliasDefinition, VisibilityScope, display_type,
+    format_registry,
 };

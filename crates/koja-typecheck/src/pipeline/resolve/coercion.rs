@@ -34,8 +34,8 @@ use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::span::Span;
 
-use super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
-use crate::registry::GlobalRegistry;
+use super::types::{is_primitive, peel_alias, types_equivalent};
+use crate::registry::{DisplayStyle, GlobalRegistry, display_type};
 
 /// Reject a float literal whose decimal text rounds to infinity
 /// under `f64`, upholding the finite-only `Float` invariant at the
@@ -140,14 +140,14 @@ pub(crate) fn mismatch_message(
             width,
         } => format!(
             "{subject} expects `{}`, but value `{rendered_value}` does not fit in `{}` (range {})",
-            display_resolution(expected, registry),
+            display_type(expected, registry, DisplayStyle::Source),
             width.label(),
             width.range_label(),
         ),
         Mismatch::Incompatible => format!(
             "{subject} expects `{}`, got `{}`",
-            display_resolution(expected, registry),
-            display_resolution(actual, registry),
+            display_type(expected, registry, DisplayStyle::Source),
+            display_type(actual, registry, DisplayStyle::Source),
         ),
     }
 }
@@ -420,9 +420,9 @@ pub(crate) fn check_compatible(
             target: expected_ty.clone(),
         };
     }
-    if let ResolvedType::Anonymous(AnonymousKind::Union { members }) =
-        peel_alias(expected_ty, registry)
-        && widens_into_union(actual_ty, &members, registry)
+    if peel_alias(expected_ty, registry)
+        .as_union()
+        .is_some_and(|members| widens_into_union(actual_ty, members, registry))
     {
         return Compatible::UnionWiden {
             target: expected_ty.clone(),

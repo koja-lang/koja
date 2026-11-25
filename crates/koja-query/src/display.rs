@@ -1,12 +1,11 @@
 //! Human-readable rendering of registry types for hover and
-//! completion. Mirrors `display_resolution` in `koja-typecheck`,
-//! which stays private to that crate.
+//! completion. A type goes through `display_type` in
+//! `koja-typecheck` with the short name style.
 
 use koja_ast::ast::{TypeExpr, path_text};
-use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_typecheck::{
-    FunctionSignature, GlobalRegistry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod,
-    ResolvedStructField, ResolvedVariantData,
+    DisplayStyle, FunctionSignature, GlobalRegistry, ResolvedEnumVariant, ResolvedParam,
+    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, display_type,
 };
 
 /// Render a [`TypeExpr`] as the user wrote it, for outline details
@@ -43,72 +42,6 @@ pub fn type_expr_label(type_expr: &TypeExpr) -> String {
     }
 }
 
-/// Render a [`ResolvedType`] as a short, user-facing string.
-pub fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    match ty {
-        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            let rendered_params = params
-                .iter()
-                .map(|p| format_resolved_type(p, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "fn ({rendered_params}) -> {}",
-                format_resolved_type(ret, registry)
-            )
-        }
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            let rendered = elements
-                .iter()
-                .map(|e| format_resolved_type(e, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({rendered})")
-        }
-        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
-            .iter()
-            .map(|m| format_resolved_type(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            type_args,
-        } => {
-            let head = registry
-                .get(*id)
-                .map(|entry| entry.identifier.last().to_string())
-                .unwrap_or_else(|| format!("<id {id}>"));
-            if type_args.is_empty() {
-                head
-            } else {
-                let args = type_args
-                    .iter()
-                    .map(|a| format_resolved_type(a, registry))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{head}<{args}>")
-            }
-        }
-        ResolvedType::Named {
-            resolution: Resolution::Local(local_id),
-            ..
-        } => format!("<local {local_id}>"),
-        ResolvedType::Named {
-            resolution: Resolution::TypeParam { owner, index },
-            ..
-        } => registry
-            .type_param_name(*owner, *index)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-        ResolvedType::Named {
-            resolution: Resolution::Unresolved,
-            ..
-        }
-        | ResolvedType::Failed
-        | ResolvedType::Unresolved => "<unresolved>".to_string(),
-    }
-}
-
 /// Render a [`FunctionSignature`] under `display_name`, including
 /// type-parameter names from the owning [`koja_typecheck::RegistryEntry`].
 pub fn format_function_signature(
@@ -130,12 +63,12 @@ pub fn format_function_signature(
         .join(", ");
     format!(
         "fn {display_name}{tp}({params_str}) -> {}",
-        format_resolved_type(&sig.return_type, registry)
+        display_type(&sig.return_type, registry, DisplayStyle::Short)
     )
 }
 
 fn format_param(p: &ResolvedParam, registry: &GlobalRegistry) -> String {
-    let ty = format_resolved_type(&p.ty, registry);
+    let ty = display_type(&p.ty, registry, DisplayStyle::Short);
     format!("{}: {}", p.name, ty)
 }
 
@@ -154,7 +87,13 @@ pub fn format_struct_def(
     };
     let fields_str = fields
         .iter()
-        .map(|f| format!("  {}: {}", f.name, format_resolved_type(&f.ty, registry)))
+        .map(|f| {
+            format!(
+                "  {}: {}",
+                f.name,
+                display_type(&f.ty, registry, DisplayStyle::Short)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     if fields_str.is_empty() {
@@ -184,7 +123,7 @@ pub fn format_enum_def(
             ResolvedVariantData::Tuple(types) => {
                 let ts = types
                     .iter()
-                    .map(|t| format_resolved_type(t, registry))
+                    .map(|t| display_type(t, registry, DisplayStyle::Short))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("  {}({ts})", v.name)
@@ -192,7 +131,13 @@ pub fn format_enum_def(
             ResolvedVariantData::Struct(fields) => {
                 let fs = fields
                     .iter()
-                    .map(|f| format!("{}: {}", f.name, format_resolved_type(&f.ty, registry)))
+                    .map(|f| {
+                        format!(
+                            "{}: {}",
+                            f.name,
+                            display_type(&f.ty, registry, DisplayStyle::Short)
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("  {}{{{fs}}}", v.name)
@@ -232,7 +177,7 @@ pub fn format_protocol_def(
             format!(
                 "  fn {}({ps}) -> {}",
                 m.name,
-                format_resolved_type(&m.return_type, registry)
+                display_type(&m.return_type, registry, DisplayStyle::Short)
             )
         })
         .collect::<Vec<_>>()

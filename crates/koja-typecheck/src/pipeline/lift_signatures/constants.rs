@@ -16,11 +16,11 @@ use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 use crate::pipeline::resolve::coercion::{Mismatch, check_compatible_stamping};
 use crate::pipeline::resolve::resolve_in_declaring_scope;
-use crate::registry::ConstantDefinition;
+use crate::registry::{ConstantDefinition, DisplayStyle, display_type};
 
 use super::LiftScope;
 use super::field_defaults::check_constant_shape;
-use super::types::{TypeParamScope, render_resolved, resolve_type_expr};
+use super::types::{TypeParamScope, resolve_type_expr};
 
 /// Lift `constant`, whose registry entry is `id`. The caller has
 /// already checked that the entry is an unlifted constant.
@@ -77,8 +77,8 @@ pub(super) fn lift_constant(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "constant value type `{}` does not match annotation `{}`",
-                        render_resolved(&inferred, scope.registry),
-                        render_resolved(expected, scope.registry),
+                        display_type(&inferred, scope.registry, DisplayStyle::Source),
+                        display_type(expected, scope.registry, DisplayStyle::Source),
                     ),
                     constant.value.span,
                 ));

@@ -12,7 +12,10 @@ pub(super) use koja_ast::labels::type_expr_span;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::resolve::types::canonical_union;
 use crate::pipeline::visibility::check_reference_visibility;
-use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound};
+use crate::registry::{
+    Dispatch, DisplayStyle, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound,
+    display_type,
+};
 
 /// Read-only name-resolution inputs threaded through type-expression
 /// resolution. `Copy` so callers pass it by value without ceremony.
@@ -446,12 +449,13 @@ pub(crate) fn resolve_protocol_bound(
         diagnostics.push(Diagnostic::error(
             format!(
                 "type-parameter bound `{}` must name a protocol (`{}` is a {})",
-                render_resolved(
+                display_type(
                     &ResolvedType::Named {
                         resolution: Resolution::Global(id),
                         type_args: args.clone(),
                     },
                     scope.registry,
+                    DisplayStyle::Source,
                 ),
                 entry.identifier,
                 entry.kind.label(),
@@ -483,70 +487,5 @@ pub(super) fn dispatch_label(dispatch: Dispatch) -> &'static str {
     match dispatch {
         Dispatch::Instance => "instance method (with `self`)",
         Dispatch::Static => "static method (no `self`)",
-    }
-}
-
-pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    match ty {
-        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            let rendered_params = params
-                .iter()
-                .map(|p| render_resolved(p, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "fn ({rendered_params}) -> {}",
-                render_resolved(ret, registry),
-            )
-        }
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            let rendered = elements
-                .iter()
-                .map(|e| render_resolved(e, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({rendered})")
-        }
-        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
-            .iter()
-            .map(|m| render_resolved(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            type_args,
-        } => {
-            let head = match registry.get(*id) {
-                Some(entry) => entry.identifier.source_name(),
-                None => "<unknown>".to_string(),
-            };
-            if type_args.is_empty() {
-                head
-            } else {
-                let rendered = type_args
-                    .iter()
-                    .map(|arg| render_resolved(arg, registry))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{head}<{rendered}>")
-            }
-        }
-        ResolvedType::Named {
-            resolution: Resolution::Local(_),
-            ..
-        } => "<local>".to_string(),
-        ResolvedType::Named {
-            resolution: Resolution::TypeParam { owner, index },
-            ..
-        } => registry
-            .type_param_name(*owner, *index)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-        ResolvedType::Named {
-            resolution: Resolution::Unresolved,
-            ..
-        }
-        | ResolvedType::Failed
-        | ResolvedType::Unresolved => "<unresolved>".to_string(),
     }
 }

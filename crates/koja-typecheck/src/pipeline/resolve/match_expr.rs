@@ -37,9 +37,8 @@ use super::patterns::{
     resolve_pattern,
 };
 use super::speculation::{ArmSet, ArmTail, Restorable};
-use super::types::display_resolution;
 use super::walker::resolve_body_with_expected;
-use crate::registry::GlobalRegistry;
+use crate::registry::{DisplayStyle, GlobalRegistry, display_type};
 
 /// Missing patterns listed before the diagnostic collapses the rest
 /// into a count.
@@ -217,7 +216,7 @@ fn check_coverage(
         return;
     }
     if missing.iter().any(|witness| witness == "_") {
-        let subject_label = display_resolution(subject_ty, registry);
+        let subject_label = display_type(subject_ty, registry, DisplayStyle::Source);
         diagnostics.push(Diagnostic::error_with_hint(
             "match must include a wildcard `_` or binding catch-all arm",
             format!("the subject has type `{subject_label}`, so add a catch-all `_ -> ...` arm"),

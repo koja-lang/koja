@@ -17,13 +17,13 @@ use std::collections::BTreeSet;
 use koja_ast::ast::{FieldPattern, Literal, Name, Pattern};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, ResolvedType};
 
-use super::super::types::{display_resolution, is_primitive, peel_alias};
+use super::super::types::{is_primitive, peel_alias};
 use super::literals::literal_repr;
 use super::named_members;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    EnumDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
-    StructDefinition,
+    DisplayStyle, EnumDefinition, GlobalKind, GlobalRegistry, ResolvedStructField,
+    ResolvedVariantData, StructDefinition, display_type,
 };
 
 /// One way to build a value of a finite column type.
@@ -321,7 +321,7 @@ fn deconstruct(
         }
         Pattern::TypedBinding { resolved_type, .. } => {
             let bound = resolved_type.as_ref()?;
-            let ResolvedType::Anonymous(AnonymousKind::Union { members }) = &peeled else {
+            let Some(members) = peeled.as_union() else {
                 return Some(WILDCARD);
             };
             let indexes = named_members(bound, members, registry).ok()?;
@@ -629,7 +629,7 @@ fn render_witness(
         Constructor::UnionMember(index) => match &peeled {
             ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
                 .get(*index)
-                .map(|member| display_resolution(member, registry))
+                .map(|member| display_type(member, registry, DisplayStyle::Source))
                 .unwrap_or_else(|| "_".to_string()),
             _ => "_".to_string(),
         },

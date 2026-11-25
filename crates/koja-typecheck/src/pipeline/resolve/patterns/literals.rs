@@ -12,7 +12,8 @@ use super::super::coercion::{
     parse_int_literal_text,
 };
 use super::super::ctx::Resolver;
-use super::super::types::{display_resolution, is_primitive};
+use super::super::types::is_primitive;
+use crate::registry::{DisplayStyle, display_type};
 
 /// Check that a `Pattern::Literal`'s value agrees with the subject
 /// type. Strict equality on the literal's default head, with one
@@ -80,8 +81,8 @@ pub(super) fn check_literal_matches_subject(
     diagnostics.push(Diagnostic::error(
         format!(
             "match literal pattern of type `{}` does not match subject type `{}`",
-            display_resolution(&lit_ty, resolver.registry),
-            display_resolution(subject_ty, resolver.registry),
+            display_type(&lit_ty, resolver.registry, DisplayStyle::Source),
+            display_type(subject_ty, resolver.registry, DisplayStyle::Source),
         ),
         span,
     ));
