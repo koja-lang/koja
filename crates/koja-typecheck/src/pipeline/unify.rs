@@ -290,7 +290,7 @@ fn is_sized_float(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
         .any(|name| is_primitive(ty, registry, name))
 }
 
-/// True when `prev` is a `ResolvedType::Union` whose members include
+/// True when `prev` is an `AnonymousKind::Union` whose members include
 /// a type equivalent to `value`. Asymmetric: `Union ⊇ {value}` only.
 /// The symmetric "value is a union containing prev" case would widen
 /// an already-filled narrower slot and belongs to the
@@ -302,7 +302,8 @@ fn is_sized_float(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
 /// `M -> MsgA`. Without this rule the per-slot compatibility check
 /// would surface a spurious "cannot be both" diagnostic.
 fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    let ResolvedType::Union(members) = peel_alias(prev, registry) else {
+    let ResolvedType::Anonymous(AnonymousKind::Union { members }) = peel_alias(prev, registry)
+    else {
         return false;
     };
     members
@@ -431,6 +432,13 @@ pub fn substitute(
                     .collect(),
             })
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => canonical_union(
+            members
+                .iter()
+                .map(|m| substitute(m, subst, registry))
+                .collect(),
+            registry,
+        ),
         ResolvedType::Named {
             resolution: Resolution::TypeParam { owner, index },
             ..
@@ -448,13 +456,6 @@ pub fn substitute(
                 .map(|arg| substitute(arg, subst, registry))
                 .collect(),
         },
-        ResolvedType::Union(members) => canonical_union(
-            members
-                .iter()
-                .map(|m| substitute(m, subst, registry))
-                .collect(),
-            registry,
-        ),
         ResolvedType::Failed => ResolvedType::Failed,
         ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
@@ -481,6 +482,11 @@ mod tests {
 
     fn tuple(elements: Vec<ResolvedType>) -> ResolvedType {
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements })
+    }
+
+    /// A raw union. The members must already be in canonical order.
+    fn union(members: Vec<ResolvedType>) -> ResolvedType {
+        ResolvedType::Anonymous(AnonymousKind::Union { members })
     }
 
     #[test]
@@ -546,20 +552,17 @@ mod tests {
         let boolean = registry.primitive("Bool");
         let int = registry.primitive("Int");
         let string = registry.primitive("String");
-        let template = ResolvedType::Union(vec![string.clone(), parameter(owner, 0)]);
+        let template = union(vec![string.clone(), parameter(owner, 0)]);
         let cases = [
-            (
-                int.clone(),
-                ResolvedType::Union(vec![int.clone(), string.clone()]),
-            ),
+            (int.clone(), union(vec![int.clone(), string.clone()])),
             (string.clone(), string.clone()),
             (
-                ResolvedType::Union(vec![boolean.clone(), int.clone()]),
-                ResolvedType::Union(vec![boolean.clone(), int.clone(), string.clone()]),
+                union(vec![boolean.clone(), int.clone()]),
+                union(vec![boolean.clone(), int.clone(), string.clone()]),
             ),
             (
-                ResolvedType::Union(vec![int.clone(), string.clone()]),
-                ResolvedType::Union(vec![int.clone(), string.clone()]),
+                union(vec![int.clone(), string.clone()]),
+                union(vec![int.clone(), string.clone()]),
             ),
         ];
 
@@ -575,11 +578,11 @@ mod tests {
         let owner = GlobalRegistryId::new(100);
         let int = registry.primitive("Int");
         let string = registry.primitive("String");
-        let template = ResolvedType::Union(vec![parameter(owner, 0), parameter(owner, 1)]);
+        let template = union(vec![parameter(owner, 0), parameter(owner, 1)]);
         let cases = [
             (
                 vec![string.clone(), int.clone()],
-                ResolvedType::Union(vec![int.clone(), string.clone()]),
+                union(vec![int.clone(), string.clone()]),
             ),
             (vec![int.clone(), int.clone()], int.clone()),
         ];
@@ -622,7 +625,7 @@ mod tests {
         let owner = GlobalRegistryId::new(100);
         let string = registry.primitive("String");
         let template = parameter(owner, 0);
-        let int_or_string = ResolvedType::Union(vec![int.clone(), string]);
+        let int_or_string = union(vec![int.clone(), string]);
         let wide = tuple(vec![boolean.clone(), int_or_string]);
         let narrow = tuple(vec![boolean, int.clone()]);
         let cases = [
@@ -650,7 +653,7 @@ mod tests {
         let owner = GlobalRegistryId::new(100);
         let string = registry.primitive("String");
         let template = parameter(owner, 0);
-        let int_or_string = ResolvedType::Union(vec![int.clone(), string]);
+        let int_or_string = union(vec![int.clone(), string]);
         let wide = tuple(vec![boolean.clone(), int_or_string]);
         let narrow = tuple(vec![boolean.clone(), int.clone()]);
         let cases = [
@@ -678,7 +681,7 @@ mod tests {
     fn union_of_two_unfilled_slots_collapses_to_unresolved() {
         let registry = GlobalRegistry::with_stdlib_stubs();
         let owner = GlobalRegistryId::new(100);
-        let template = ResolvedType::Union(vec![parameter(owner, 0), parameter(owner, 1)]);
+        let template = union(vec![parameter(owner, 0), parameter(owner, 1)]);
         let substitution = Substitution::single(owner, 2);
 
         assert_eq!(

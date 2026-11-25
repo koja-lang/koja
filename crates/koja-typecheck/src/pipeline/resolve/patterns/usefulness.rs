@@ -148,7 +148,9 @@ fn constructor_set(ty: &ResolvedType, registry: &GlobalRegistry) -> ConstructorS
         return ConstructorSet::Bool;
     }
     match &peeled {
-        ResolvedType::Union(members) => ConstructorSet::Union(members.len()),
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
+            ConstructorSet::Union(members.len())
+        }
         ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => ConstructorSet::Single,
         _ => {
             if let Some((_, definition, _)) = enum_of(&peeled, registry) {
@@ -319,7 +321,7 @@ fn deconstruct(
         }
         Pattern::TypedBinding { resolved_type, .. } => {
             let bound = resolved_type.as_ref()?;
-            let ResolvedType::Union(members) = &peeled else {
+            let ResolvedType::Anonymous(AnonymousKind::Union { members }) = &peeled else {
                 return Some(WILDCARD);
             };
             let indexes = named_members(bound, members, registry).ok()?;
@@ -625,7 +627,7 @@ fn render_witness(
             }
         },
         Constructor::UnionMember(index) => match &peeled {
-            ResolvedType::Union(members) => members
+            ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
                 .get(*index)
                 .map(|member| display_resolution(member, registry))
                 .unwrap_or_else(|| "_".to_string()),

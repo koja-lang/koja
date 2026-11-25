@@ -250,7 +250,7 @@ impl GlobalRegistry {
                 resolution: Resolution::TypeParam { owner, index },
                 ..
             } => self.type_param_bound_granted(*owner, *index, bound, overlay),
-            ResolvedType::Anonymous(_) | ResolvedType::Union(_) => {
+            ResolvedType::Anonymous(_) => {
                 self.structural_bound_satisfied(ty, bound, overlay, goals)
             }
             _ => false,
@@ -361,8 +361,11 @@ impl GlobalRegistry {
             (Some("Equality"), ResolvedType::Anonymous(AnonymousKind::Tuple { elements })) => {
                 all_satisfy(elements)
             }
-            (Some("Equality" | "Hash"), ResolvedType::Union(members)) => all_satisfy(members),
-            (_, ResolvedType::Union(members)) => {
+            (
+                Some("Equality" | "Hash"),
+                ResolvedType::Anonymous(AnonymousKind::Union { members }),
+            ) => all_satisfy(members),
+            (_, ResolvedType::Anonymous(AnonymousKind::Union { members })) => {
                 self.protocol_dispatches_on_receiver(bound.protocol_id) && all_satisfy(members)
             }
             _ => false,
@@ -508,7 +511,7 @@ fn names_protocol_self(ty: &ResolvedType, protocol_id: GlobalRegistryId) -> bool
             any(params) || names_protocol_self(ret, protocol_id)
         }
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => any(elements),
-        ResolvedType::Union(members) => any(members),
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => any(members),
         ResolvedType::Failed | ResolvedType::Unresolved => false,
     }
 }

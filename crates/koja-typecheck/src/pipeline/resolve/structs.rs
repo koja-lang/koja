@@ -431,7 +431,7 @@ pub(super) fn resolve_field_access(
 ) -> ResolvedType {
     resolve_expr(receiver, resolver, diagnostics);
     match peel_alias(&receiver.resolution, resolver.registry) {
-        ResolvedType::Union(_) => {
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "cannot access field `{field}` on union type `{}`. \

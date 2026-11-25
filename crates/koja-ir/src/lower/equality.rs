@@ -72,7 +72,7 @@ pub(super) fn lower_value_equality(
                 .append(block, IRInstruction::ClosureEquals { dest, lhs, rhs, ty });
             (dest, block)
         }
-        ResolvedType::Union(members) => {
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
             let union_ty = resolved_type_to_ir_type(&structural, ctx.registry, ctx.output);
             emit_union_eq((lhs, rhs), (members, &union_ty), ctx, block)
         }

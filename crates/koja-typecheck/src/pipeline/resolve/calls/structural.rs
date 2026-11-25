@@ -239,7 +239,10 @@ fn equality_mismatch_message(
     let argument_label = display_resolution(argument_ty, registry);
     let reason = match shape {
         StructuralShape::Union
-            if matches!(peel_alias(argument_ty, registry), ResolvedType::Union(_)) =>
+            if matches!(
+                peel_alias(argument_ty, registry),
+                ResolvedType::Anonymous(AnonymousKind::Union { .. })
+            ) =>
         {
             format!("`{argument_label}` has a member that is not a member of `{receiver_label}`")
         }
@@ -272,7 +275,9 @@ fn resolve_union_hash(
         diagnostics,
     );
     let hash_bound = protocol_bound("Hash", resolver.registry);
-    let ResolvedType::Union(members) = peel_alias(&receiver.resolution, resolver.registry) else {
+    let ResolvedType::Anonymous(AnonymousKind::Union { members }) =
+        peel_alias(&receiver.resolution, resolver.registry)
+    else {
         return int_ty;
     };
     let unhashable = members.iter().find(|member| {
@@ -315,7 +320,7 @@ fn first_part_without_equality(ty: &ResolvedType, resolver: &Resolver<'_>) -> Op
     let structural = peel_alias(ty, resolver.registry);
     let parts = match &structural {
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => elements,
-        ResolvedType::Union(members) => members,
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members,
         ResolvedType::Named {
             resolution: Resolution::Global(_),
             ..

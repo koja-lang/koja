@@ -110,11 +110,11 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
     NUMERIC.iter().any(|name| is_primitive(ty, registry, name))
 }
 
-/// Build a canonical `ResolvedType::Union` from `members`. Steps:
-/// peel each member through aliases, flatten any `Union(_)` member
+/// Build a canonical `AnonymousKind::Union` from `members`. Steps:
+/// peel each member through aliases, flatten any `Union { .. }` member
 /// into the outer vec, sort by `display_resolution` with the derived
 /// `Ord` as the tie-break, dedup structurally. Collapse 0 members to
-/// `Unit`, 1 member to itself, ≥2 to `Union(...)`. The sort+dedup
+/// `Unit`, 1 member to itself, ≥2 to `Union { .. }`. The sort+dedup
 /// makes `A | B` and `B | A` and `A | A | B` all equal as
 /// `ResolvedType` values, so the existing derive-`PartialEq` on
 /// `ResolvedType` compares unions correctly.
@@ -132,7 +132,7 @@ pub(crate) fn canonical_union(
     let mut flat = Vec::with_capacity(members.len());
     for member in members {
         match peel_alias(&member, registry) {
-            ResolvedType::Union(inner) => flat.extend(inner),
+            ResolvedType::Anonymous(AnonymousKind::Union { members: inner }) => flat.extend(inner),
             other => flat.push(other),
         }
     }
@@ -145,7 +145,7 @@ pub(crate) fn canonical_union(
     match flat.len() {
         0 => registry.primitive("Unit"),
         1 => flat.into_iter().next().expect("flat.len() == 1"),
-        _ => ResolvedType::Union(flat),
+        _ => ResolvedType::Anonymous(AnonymousKind::Union { members: flat }),
     }
 }
 
@@ -200,7 +200,7 @@ fn recursive_alias_of_union(
     peeled: &ResolvedType,
     registry: &GlobalRegistry,
 ) -> Option<GlobalRegistryId> {
-    if !matches!(peeled, ResolvedType::Union(_)) {
+    if !matches!(peeled, ResolvedType::Anonymous(AnonymousKind::Union { .. })) {
         return None;
     }
     reachable_aliases(peeled, registry)
@@ -242,6 +242,11 @@ pub(crate) fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId
                 collect_type_ids(element, ids);
             }
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
+            for member in members {
+                collect_type_ids(member, ids);
+            }
+        }
         ResolvedType::Named {
             resolution,
             type_args,
@@ -251,11 +256,6 @@ pub(crate) fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId
             }
             for arg in type_args {
                 collect_type_ids(arg, ids);
-            }
-        }
-        ResolvedType::Union(members) => {
-            for member in members {
-                collect_type_ids(member, ids);
             }
         }
         ResolvedType::Failed | ResolvedType::Unresolved => {}
@@ -352,7 +352,10 @@ pub(crate) fn types_equivalent(
                     .zip(b_elements)
                     .all(|(x, y)| types_equivalent(x, y, registry))
         }
-        (ResolvedType::Union(a_members), ResolvedType::Union(b_members)) => {
+        (
+            ResolvedType::Anonymous(AnonymousKind::Union { members: a_members }),
+            ResolvedType::Anonymous(AnonymousKind::Union { members: b_members }),
+        ) => {
             a_members.len() == b_members.len()
                 && a_members
                     .iter()
@@ -410,6 +413,11 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
                 .join(", ");
             format!("({rendered})")
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
+            .iter()
+            .map(|m| display_resolution(m, registry))
+            .collect::<Vec<_>>()
+            .join(" | "),
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             type_args,
@@ -445,11 +453,6 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
         }
         | ResolvedType::Failed
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
-        ResolvedType::Union(members) => members
-            .iter()
-            .map(|m| display_resolution(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
     }
 }
 
@@ -558,7 +561,9 @@ fn union_bound_hint(
     bound_label: &str,
     ctx: BoundContext<'_>,
 ) -> Option<String> {
-    let ResolvedType::Union(members) = peel_alias(inferred, ctx.registry) else {
+    let ResolvedType::Anonymous(AnonymousKind::Union { members }) =
+        peel_alias(inferred, ctx.registry)
+    else {
         return None;
     };
     let missing = members
@@ -599,8 +604,9 @@ fn protocol_bound_satisfied(
             resolution: Resolution::TypeParam { .. },
             ..
         }
-        | ResolvedType::Anonymous(_)
-        | ResolvedType::Union(_) => Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay)),
+        | ResolvedType::Anonymous(_) => {
+            Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay))
+        }
         _ => None,
     }
 }

@@ -71,7 +71,7 @@ pub(super) fn lower_union_conformance_call(
         return lower_union_member_call(receiver, method, args, ctx, block);
     }
     let structural = peel_alias(&receiver.resolution, ctx.registry);
-    let ResolvedType::Union(members) = &structural else {
+    let ResolvedType::Anonymous(AnonymousKind::Union { members }) = &structural else {
         panic!(
             "IR lower: union conformance receiver resolved to `{structural:?}` \
              (typecheck resolve invariant violation)",
@@ -113,7 +113,7 @@ fn lower_union_member_call(
     block: IRBlockId,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let structural = peel_alias(&receiver.resolution, ctx.registry);
-    let ResolvedType::Union(members) = &structural else {
+    let ResolvedType::Anonymous(AnonymousKind::Union { members }) = &structural else {
         panic!(
             "IR lower: union member call receiver resolved to `{structural:?}` \
              (typecheck resolve invariant violation)",
@@ -277,7 +277,7 @@ pub(super) fn emit_union_widen(
     block: IRBlockId,
 ) -> (ValueId, IRBlockId) {
     let source = peel_alias(&expr.resolution, ctx.registry);
-    let ResolvedType::Union(members) = &source else {
+    let ResolvedType::Anonymous(AnonymousKind::Union { members }) = &source else {
         panic!(
             "IR lower: Coercion::UnionWiden on a union value whose expression resolved \
              to `{source:?}` (typecheck resolve invariant violation)",

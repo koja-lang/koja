@@ -4,7 +4,7 @@
 //! kind-then-label order before consumers apply prefix filtering and
 //! presentation.
 
-use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, ResolvedType};
 
 use super::definitions::{Dispatch, FunctionSignature};
 use super::{GlobalKind, GlobalRegistry, VisibilityScope};
@@ -213,7 +213,9 @@ impl GlobalRegistry {
                 }
                 Some(*id)
             }
-            ResolvedType::Union(members) => members.first().and_then(|m| self.head_type_id(m)),
+            ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
+                members.first().and_then(|m| self.head_type_id(m))
+            }
             _ => None,
         }
     }

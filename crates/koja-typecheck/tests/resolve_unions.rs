@@ -2,7 +2,7 @@
 //! and `p: T -> ...` triple. Together they exercise:
 //!
 //! - **Lift**: `TypeExpr::Union` resolves to a canonical
-//!   [`ResolvedType::Union`] (sorted by display key, deduplicated,
+//!   [`AnonymousKind::Union`] (sorted by display key, deduplicated,
 //!   nested unions flattened) inside parameter / return / field / let
 //!   slots.
 //! - **Equivalence**: `types_equivalent` peels alias names and
@@ -40,7 +40,7 @@
 
 use koja_ast::ast::{EnumConstructionData, ExprKind, Statement};
 use koja_ast::coercion::Coercion;
-use koja_ast::identifier::ResolvedType;
+use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{Substitution, peel_alias, substitute};
 
@@ -1124,11 +1124,13 @@ fn substituted_union_flattens_a_union_argument() {
     let checked = typecheck(&source);
     assert_eq!(
         trailing_resolution(&checked),
-        ResolvedType::Union(vec![
-            bool_type(&checked),
-            int_type(&checked),
-            string_type(&checked),
-        ]),
+        ResolvedType::Anonymous(AnonymousKind::Union {
+            members: vec![
+                bool_type(&checked),
+                int_type(&checked),
+                string_type(&checked),
+            ],
+        }),
     );
 }
 
@@ -1147,11 +1149,13 @@ fn substituted_union_peels_an_alias_argument() {
     let subst = Substitution::from_args(holder_id, &[package_leaf(&checked, "Small")]);
     assert_eq!(
         substitute(template, &subst, &checked.registry),
-        ResolvedType::Union(vec![
-            bool_type(&checked),
-            int_type(&checked),
-            string_type(&checked),
-        ]),
+        ResolvedType::Anonymous(AnonymousKind::Union {
+            members: vec![
+                bool_type(&checked),
+                int_type(&checked),
+                string_type(&checked),
+            ],
+        }),
     );
 }
 
@@ -1167,7 +1171,9 @@ fn substituted_union_is_canonical_inside_a_type_argument() {
           bag.items
         ";
     let checked = typecheck(&dedent(source));
-    let member = ResolvedType::Union(vec![int_type(&checked), string_type(&checked)]);
+    let member = ResolvedType::Anonymous(AnonymousKind::Union {
+        members: vec![int_type(&checked), string_type(&checked)],
+    });
     assert_eq!(
         trailing_resolution(&checked),
         global_named(&checked, "List", vec![member]),

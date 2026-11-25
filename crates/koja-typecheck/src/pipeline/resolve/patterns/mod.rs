@@ -178,7 +178,7 @@ pub(super) fn resolve_pattern(
             }
             let peeled_subject = peel_alias(subject_ty, resolver.registry);
             match &peeled_subject {
-                ResolvedType::Union(members) => {
+                ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
                     if let Err(missing) = named_members(&resolved, members, resolver.registry) {
                         diagnostics.push(Diagnostic::error(
                             format!(
@@ -232,7 +232,9 @@ fn named_members(
         return Ok(vec![index]);
     }
     match peel_alias(bound, registry) {
-        ResolvedType::Union(bound_members) => bound_members
+        ResolvedType::Anonymous(AnonymousKind::Union {
+            members: bound_members,
+        }) => bound_members
             .into_iter()
             .map(|member| member_index(&member).ok_or(member))
             .collect(),
@@ -360,7 +362,7 @@ pub(super) fn is_enum_or_union_subject(
     registry: &GlobalRegistry,
 ) -> bool {
     match peel_alias(subject_ty, registry) {
-        ResolvedType::Union(_) => true,
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => true,
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             ..

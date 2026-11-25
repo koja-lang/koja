@@ -393,7 +393,7 @@ pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
                 seal_no_type_param(element, span);
             }
         }
-        ResolvedType::Union(members) => {
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
             for member in members {
                 seal_no_type_param(member, span);
             }

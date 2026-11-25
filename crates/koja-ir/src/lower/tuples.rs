@@ -236,7 +236,7 @@ fn emit_element_format(
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
             emit_tuple_format(extracted, elements, ctx, block)
         }
-        ResolvedType::Union(members) => {
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
             let union_ty = ctx.type_of(extracted);
             let subject = UnionSubject {
                 members,

@@ -25,7 +25,7 @@
 //! A missing default-carrier autoimport is a hard diagnostic.
 
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Name};
-use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::super::calls::resolve_method_call_expr;
@@ -108,7 +108,9 @@ pub(super) fn narrow_union_hint(
     let Some(hint) = expected else {
         return Ok(None);
     };
-    let ResolvedType::Union(members) = peel_alias(hint, resolver.registry) else {
+    let ResolvedType::Anonymous(AnonymousKind::Union { members }) =
+        peel_alias(hint, resolver.registry)
+    else {
         return Ok(Some(hint.clone()));
     };
     let members: Vec<ResolvedType> = members

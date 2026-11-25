@@ -568,19 +568,7 @@ pub(crate) fn resolved_type_to_ir_type(
                 .map(|e| resolved_type_to_ir_type(e, registry, output))
                 .collect(),
         ),
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            type_args,
-        } => global_to_ir_type(*id, type_args, registry, output),
-        ResolvedType::Named {
-            resolution,
-            type_args,
-        } => panic!(
-            "IR lower: resolved_type_to_ir_type received a non-Global resolution \
-             ({resolution:?}), every Param must be substituted before lowering \
-             (type_args: {type_args:?})",
-        ),
-        ResolvedType::Union(members) => {
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
             // The union of a recursive alias written out is that
             // alias, so both spellings lower to one type.
             if let Some(alias_id) = recursive_alias(ty, registry) {
@@ -594,6 +582,18 @@ pub(crate) fn resolved_type_to_ir_type(
             output.declare_anonymous_union(&symbol, ir_members);
             IRType::Union(symbol)
         }
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            type_args,
+        } => global_to_ir_type(*id, type_args, registry, output),
+        ResolvedType::Named {
+            resolution,
+            type_args,
+        } => panic!(
+            "IR lower: resolved_type_to_ir_type received a non-Global resolution \
+             ({resolution:?}), every Param must be substituted before lowering \
+             (type_args: {type_args:?})",
+        ),
         ResolvedType::Failed | ResolvedType::Unresolved => {
             panic!("IR lower: resolved_type_to_ir_type received {ty:?} (seal violation)")
         }
@@ -618,7 +618,9 @@ pub(crate) fn lower_named_unions(registry: &GlobalRegistry, output: &mut LowerOu
         .collect();
     aliases.sort();
     for id in aliases {
-        let Some(ResolvedType::Union(members)) = registry.alias_expansion(id) else {
+        let Some(ResolvedType::Anonymous(AnonymousKind::Union { members })) =
+            registry.alias_expansion(id)
+        else {
             panic!("IR lower: recursive alias {id} is not a union (lift invariant violation)");
         };
         let symbol = match global_to_ir_type(id, &[], registry, output) {
@@ -661,7 +663,9 @@ fn declare_recursive_alias(
         panic!("IR lower: recursive alias `{identifier}` has no declaration");
     };
     unions.insert(symbol, decl.clone());
-    let Some(ResolvedType::Union(members)) = registry.alias_expansion(id) else {
+    let Some(ResolvedType::Anonymous(AnonymousKind::Union { members })) =
+        registry.alias_expansion(id)
+    else {
         panic!("IR lower: recursive alias `{identifier}` is not a union");
     };
     for member in &members {

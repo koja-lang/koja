@@ -18,7 +18,9 @@
 //! stable.
 
 use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr, Name, name_texts, path_text};
-use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
+use koja_ast::identifier::{
+    AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
+};
 use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
@@ -269,6 +271,7 @@ fn unit_variant_mismatch(
 ) -> Option<ResolvedType> {
     let expected = peel_alias(expected?, registry);
     match &expected {
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => None,
         ResolvedType::Anonymous(_) => Some(expected),
         ResolvedType::Named { resolution, .. }
             if resolution.is_resolved() && *resolution != Resolution::Global(enum_id) =>

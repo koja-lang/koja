@@ -1,6 +1,6 @@
 //! Coverage for union lowering across the IR pipeline:
 //!
-//! - A `ResolvedType::Union` lowers to an `IRType::Union` that holds
+//! - An `AnonymousKind::Union` lowers to an `IRType::Union` that holds
 //!   the canonical mangle, which is stable under member reordering
 //!   and aliasing. The lifter already canonicalizes the source side,
 //!   so two surface spellings of the same set yield the same

@@ -507,6 +507,11 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
                 .join(", ");
             format!("({rendered})")
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
+            .iter()
+            .map(|m| render_resolved(m, registry))
+            .collect::<Vec<_>>()
+            .join(" | "),
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             type_args,
@@ -543,10 +548,5 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
         }
         | ResolvedType::Failed
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
-        ResolvedType::Union(members) => members
-            .iter()
-            .map(|m| render_resolved(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
     }
 }

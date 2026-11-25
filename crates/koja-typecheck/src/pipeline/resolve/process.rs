@@ -188,7 +188,7 @@ pub(super) fn check_monitor_call_site(
 /// alias) with an `ExitSignal` member.
 fn message_includes_exit_signal(message_type: &ResolvedType, registry: &GlobalRegistry) -> bool {
     match peel_alias(message_type, registry) {
-        ResolvedType::Union(members) => members
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
             .iter()
             .any(|member| message_includes_exit_signal(member, registry)),
         ResolvedType::Named {

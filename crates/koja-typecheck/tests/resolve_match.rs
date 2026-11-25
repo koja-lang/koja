@@ -1299,10 +1299,9 @@ fn match_typed_binding_of_a_sub_union_binds_and_covers_its_members() {
     };
     assert_eq!(
         resolved_type.as_ref(),
-        Some(&ResolvedType::Union(vec![
-            bool_type(&checked),
-            string_type(&checked),
-        ])),
+        Some(&ResolvedType::Anonymous(AnonymousKind::Union {
+            members: vec![bool_type(&checked), string_type(&checked)],
+        })),
     );
 }
 

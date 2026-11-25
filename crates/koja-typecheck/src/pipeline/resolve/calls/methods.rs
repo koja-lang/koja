@@ -188,7 +188,9 @@ pub(super) fn classify_receiver(
         ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
             Some(MethodReceiver::Structural(StructuralShape::Tuple))
         }
-        ResolvedType::Union(_) => Some(MethodReceiver::Structural(StructuralShape::Union)),
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => {
+            Some(MethodReceiver::Structural(StructuralShape::Union))
+        }
         ResolvedType::Named {
             resolution: Resolution::TypeParam { owner, index },
             ..

@@ -9,7 +9,7 @@
 //! that passed typecheck's `Hash & Equality` bound has both symbols
 //! before seal.
 
-use koja_ast::identifier::{LocalId, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, LocalId, ResolvedType};
 use koja_typecheck::{GlobalRegistry, peel_alias};
 
 use super::calls::conformance_method_symbol;
@@ -41,7 +41,9 @@ pub(crate) fn enqueue_key_conformances(
             conformance_method_symbol(&structural, "hash", 1, registry, output);
             conformance_method_symbol(&structural, "equals?", 2, registry, output);
         }
-        ResolvedType::Union(members) => synthesize_union_hash_eq(members, registry, output),
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
+            synthesize_union_hash_eq(members, registry, output)
+        }
         other => panic!(
             "IR lower: hashtable key `{other:?}` is neither nominal nor a union \
              (typecheck's `Hash & Equality` bound admits nothing else)",
@@ -59,7 +61,9 @@ fn synthesize_union_hash_eq(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) {
-    let union_resolved = ResolvedType::Union(members.to_vec());
+    let union_resolved = ResolvedType::Anonymous(AnonymousKind::Union {
+        members: members.to_vec(),
+    });
     let union_ty = resolved_type_to_ir_type(&union_resolved, registry, output);
     let IRType::Union(mangled) = &union_ty else {
         panic!("IR lower: union key `{members:?}` lowered to `{union_ty:?}`");

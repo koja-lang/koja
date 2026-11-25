@@ -335,10 +335,10 @@ pub(super) fn lower_method_call(
         ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
             return lower_tuple_conformance_call(receiver, method, args, ctx, block);
         }
-        ResolvedType::Union(_) if method == "equals?" => {
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) if method == "equals?" => {
             return lower_equality_call(receiver, args, ctx, block);
         }
-        ResolvedType::Union(_) => {
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => {
             return lower_union_conformance_call(receiver, method, args, ctx, block);
         }
         ResolvedType::Anonymous(AnonymousKind::Function { .. }) if method == "equals?" => {

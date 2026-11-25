@@ -297,6 +297,11 @@ fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
                 .join(", ");
             format!("({rendered})")
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
+            .iter()
+            .map(|m| format_resolved(m, registry))
+            .collect::<Vec<_>>()
+            .join(" | "),
         ResolvedType::Named {
             resolution,
             type_args,
@@ -324,11 +329,6 @@ fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
                 format!("{head}<{args}>")
             }
         }
-        ResolvedType::Union(members) => members
-            .iter()
-            .map(|m| format_resolved(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
         ResolvedType::Failed | ResolvedType::Unresolved => "<unresolved>".to_string(),
     }
 }

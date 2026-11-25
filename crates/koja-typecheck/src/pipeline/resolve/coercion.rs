@@ -393,7 +393,9 @@ fn widens_into_union(
 ) -> bool {
     let is_member = |ty: &ResolvedType| members.iter().any(|m| types_equivalent(ty, m, registry));
     match peel_alias(actual_ty, registry) {
-        ResolvedType::Union(actual_members) => actual_members.iter().all(is_member),
+        ResolvedType::Anonymous(AnonymousKind::Union {
+            members: actual_members,
+        }) => actual_members.iter().all(is_member),
         other => is_member(&other),
     }
 }
@@ -418,7 +420,8 @@ pub(crate) fn check_compatible(
             target: expected_ty.clone(),
         };
     }
-    if let ResolvedType::Union(members) = peel_alias(expected_ty, registry)
+    if let ResolvedType::Anonymous(AnonymousKind::Union { members }) =
+        peel_alias(expected_ty, registry)
         && widens_into_union(actual_ty, &members, registry)
     {
         return Compatible::UnionWiden {

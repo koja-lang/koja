@@ -65,6 +65,11 @@ pub fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> Str
                 .join(", ");
             format!("({rendered})")
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
+            .iter()
+            .map(|m| format_resolved_type(m, registry))
+            .collect::<Vec<_>>()
+            .join(" | "),
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             type_args,
@@ -101,11 +106,6 @@ pub fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> Str
         }
         | ResolvedType::Failed
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
-        ResolvedType::Union(members) => members
-            .iter()
-            .map(|m| format_resolved_type(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
     }
 }
 

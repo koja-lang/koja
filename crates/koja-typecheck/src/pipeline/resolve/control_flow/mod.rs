@@ -24,7 +24,7 @@
 //! `super::process`.
 
 use koja_ast::ast::{CondArm, Diagnostic, Expr, Statement};
-use koja_ast::identifier::ResolvedType;
+use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::span::Span;
 
 use super::coercion::{Compatible, check_compatible, check_compatible_stamping};
@@ -391,7 +391,11 @@ pub(super) fn widen_arm_tails(
 }
 
 fn is_resolved_union(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    ty.is_resolved() && matches!(peel_alias(ty, registry), ResolvedType::Union(_))
+    ty.is_resolved()
+        && matches!(
+            peel_alias(ty, registry),
+            ResolvedType::Anonymous(AnonymousKind::Union { .. })
+        )
 }
 
 /// True when every tail is resolved and two tails that do not

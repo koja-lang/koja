@@ -1051,6 +1051,11 @@ fn format_resolved_type(ty: &ResolvedType) -> String {
             let rendered: Vec<String> = elements.iter().map(format_resolved_type).collect();
             format!("({})", rendered.join(", "))
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
+            .iter()
+            .map(format_resolved_type)
+            .collect::<Vec<_>>()
+            .join(" | "),
         ResolvedType::Named {
             resolution,
             type_args,
@@ -1068,11 +1073,6 @@ fn format_resolved_type(ty: &ResolvedType) -> String {
                 format!("{head}<{}>", args.join(", "))
             }
         }
-        ResolvedType::Union(members) => members
-            .iter()
-            .map(format_resolved_type)
-            .collect::<Vec<_>>()
-            .join(" | "),
         ResolvedType::Failed => String::from("!"),
         ResolvedType::Unresolved => String::from("?"),
     }
