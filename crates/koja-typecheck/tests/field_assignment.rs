@@ -14,13 +14,18 @@
 //!   borrowed/owned distinction to gate the mutation on.
 //! - Compound assignment on a field (`p.x += 1`) requires the leaf
 //!   field's type to be arithmetic.
+//! - A number literal takes the width of a sized field on a write
+//!   and on a compound assignment. A literal that does not fit
+//!   reports the range of the field type.
 
+use koja_ast::ast::Statement;
+use koja_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
 use koja_ast::util::dedent;
 
 mod common;
 
 use common::{
-    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
+    assert_script_fails_with, diagnostic_messages, script_body, typecheck_script as typecheck,
     typecheck_script_fail as typecheck_fail,
 };
 
@@ -77,6 +82,50 @@ fn field_write_type_mismatch_diagnoses_against_leaf_type() {
 }
 
 #[test]
+fn field_write_gives_a_literal_the_width_of_the_field() {
+    let checked = typecheck(&dedent(
+        "
+        struct Pixel
+          x: Int32
+        end
+
+        p = Pixel{x: 1}
+        p.x = 7
+        ",
+    ));
+    let Some(Statement::Assignment { value, .. }) = script_body(&checked).last() else {
+        panic!("expected the script to end with an assignment");
+    };
+    assert_eq!(
+        value.literal_coercion,
+        Some(LiteralCoercion::NumericLiteralWidth(
+            NumericLiteralWidth::Int32
+        ))
+    );
+}
+
+#[test]
+fn field_write_of_a_literal_that_does_not_fit_reports_the_range() {
+    let failure = typecheck_fail(&dedent(
+        "
+        struct Pixel
+          x: Int32
+        end
+
+        p = Pixel{x: 1}
+        p.x = 3000000000
+        ",
+    ));
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![
+            "field `p.x` expects `Int32`, but value `3000000000` does not fit in `Int32` \
+             (range -2_147_483_648..=2_147_483_647)"
+        ],
+    );
+}
+
+#[test]
 fn field_write_on_unknown_field_diagnoses_against_struct_name() {
     assert_script_fails_with(
         "
@@ -128,6 +177,25 @@ fn self_field_write_typechecks() {
         c = Counter{n: 0}
         c.bump()
         c
+        ",
+    ));
+}
+
+#[test]
+fn compound_assign_on_a_sized_self_field_takes_a_literal() {
+    typecheck(&dedent(
+        "
+        struct Counter
+          count: Int32
+
+          fn bump(self) -> Counter
+            self.count += 1
+            self
+          end
+        end
+
+        c = Counter{count: 0}
+        c.bump()
         ",
     ));
 }

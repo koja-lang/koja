@@ -20,3 +20,14 @@ c.add(5).print()
 
 x: Int32 = identity(42)
 x.print()
+
+# A number literal takes the width of the local or the field on a
+# reassignment, a field write, and a compound assignment. A sized
+# value widens into an `Int` local.
+x = 7
+x += 1
+c.value = 20
+c.value += 2
+total = 0
+total = x
+IO.puts("#{x} #{c.value} #{total}")

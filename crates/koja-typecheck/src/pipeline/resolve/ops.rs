@@ -538,7 +538,7 @@ fn numeric_arithmetic_result(
 /// "operand types disagree" with "literal value too wide", and the
 /// existing four coercion sites already surface the latter at slot
 /// boundaries before a comparison site sees it.
-fn coerce_literal_to(
+pub(super) fn coerce_literal_to(
     actual: &mut Expr,
     target_ty: &ResolvedType,
     registry: &GlobalRegistry,

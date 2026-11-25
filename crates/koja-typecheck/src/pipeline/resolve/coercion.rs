@@ -228,7 +228,18 @@ fn check_tuple_literal_compatible(
     TupleCompatibility::Compatible
 }
 
-fn tuple_literal_elements_mut(expr: &mut Expr) -> Option<&mut [Expr]> {
+/// The elements of `expr` when it is a tuple literal. Parentheses
+/// around the literal do not change that.
+pub(super) fn tuple_literal_elements(expr: &Expr) -> Option<&[Expr]> {
+    match &expr.kind {
+        ExprKind::Group { expr: inner } => tuple_literal_elements(inner),
+        ExprKind::Tuple { elements } => Some(elements),
+        _ => None,
+    }
+}
+
+/// The mutable form of [`tuple_literal_elements`].
+pub(super) fn tuple_literal_elements_mut(expr: &mut Expr) -> Option<&mut [Expr]> {
     match &mut expr.kind {
         ExprKind::Group { expr: inner } => tuple_literal_elements_mut(inner),
         ExprKind::Tuple { elements } => Some(elements),

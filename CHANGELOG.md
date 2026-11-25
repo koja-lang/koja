@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A `match` arm on a union can name more than one member, as in `rest: Bool | String ->` for a `Bool | Int | String` value. The arm runs for each of those members, and `rest` is a `Bool | String`.
 
+### Changed
+
+- A number literal that does not fit the type of an annotated declaration reports the value and the range, as in ``local `tiny` expects `Int8`, but value `300` does not fit in `Int8` (range -128..=127)``. A reassignment and a write to a field report the same.
+
 ### Fixed
 
 - A union that uses a type parameter is the same type as the union written by hand when the parameter gets its type. For `struct Holder<T>` with a field `value: String | T`, the field of a `Holder<Int | Bool>` is a `Bool | Int | String`, and the field of a `Holder<String>` is a `String`. A function that returns `Int | T` returns an `Int` when `T` is `Int`. In a generic body, a `match` on an `Int | T` value with the arms `n: Int ->` and `t: T ->` runs the first arm when `T` is `Int`.
@@ -18,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `match` arm can give a binding the type of the value it matches, as in `n: Int ->` for an `Int` value. The arm matches every value, the same as `n ->`. The annotation also works inside enum, tuple, and struct patterns, as in `Option.Some(n: Int) ->`.
 - A member of a union widens in the payload of a generic enum variant. For `type Pet = Cat | Dog`, a function that returns `Option<Pet>` can end with `Option.Some(cat)`. This works in every position that names the type, and for `Result.Ok`, `Result.Err`, and the variants of each generic enum. A literal works the same way, so `x: Option<Int32> = Option.Some(42)` compiles.
 - A member of a union widens in a tuple literal that is an argument of a generic function. For a `List<(String, Pet)>`, `pets.append(("tom", tom))` compiles when `tom` is a `Cat`.
+- A member of a union widens on a reassignment and on a write to a field. For `pet: Pet = cat`, the line `pet = dog` compiles, and so does `home.pet = dog` for a field of type `Pet`. A union with fewer members widens the same way. A local with no annotation keeps the type of its first value.
+- A number literal takes the width of the local or the field on a reassignment, a write to a field, and a compound assignment. For `small: Int32 = 1`, the lines `small = 2` and `small += 1` compile, and so does `self.count += 1` for an `Int32` field. A sized value widens into an `Int` local or field, as in `total = small`.
+- The value of a reassignment reads its type from the local. For `found: Option<Int>`, the line `found = Option.None` compiles, and `items = []` compiles for a list.
+- A destructuring assignment from a tuple literal follows the rules of a plain assignment for each name. For `pet: Pet` and `small: Int32`, the line `(pet, small) = (dog, 7)` compiles.
 
 ## [0.21.0] - 2026-11-22
 

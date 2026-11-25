@@ -37,12 +37,15 @@
 //!   the value does, so a member widens in the payload of a generic
 //!   variant constructor and in a tuple literal passed to a generic
 //!   call.
+//! - **Writes**: a reassignment of a local, a write to a field, and
+//!   an element of a tuple literal on the right of a destructuring
+//!   assignment widen a member into the type of the target.
 
-use koja_ast::ast::{EnumConstructionData, ExprKind, Statement};
-use koja_ast::coercion::Coercion;
+use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Statement};
+use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::{Substitution, peel_alias, substitute};
+use koja_typecheck::{CheckedProgram, Substitution, peel_alias, substitute};
 
 mod common;
 
@@ -1393,5 +1396,290 @@ fn tuple_value_argument_does_not_widen_in_a_generic_call() {
             "argument `item` to `List.append` expects `(String, TestApp.Pet)`, got \
              `(String, TestApp.Cat)`"
         ],
+    );
+}
+
+/// The value of the assignment that ends the script.
+fn last_assignment_value(checked: &CheckedProgram) -> &Expr {
+    let Some(Statement::Assignment { value, .. }) = script_body(checked).last() else {
+        panic!("expected the script to end with an assignment");
+    };
+    value
+}
+
+/// The elements of the tuple literal on the right of the
+/// destructuring assignment that ends the script.
+fn last_destructure_elements(checked: &CheckedProgram) -> &[Expr] {
+    let Some(Statement::Destructure { value, .. }) = script_body(checked).last() else {
+        panic!("expected the script to end with a destructuring assignment");
+    };
+    tuple_elements(value)
+}
+
+fn tuple_elements(expr: &Expr) -> &[Expr] {
+    let ExprKind::Tuple { elements } = &expr.kind else {
+        panic!("expected a tuple literal, got {:?}", expr.kind);
+    };
+    elements
+}
+
+/// The error for a write of `actual` to the local `name` of type
+/// `declared`.
+fn cannot_reassign(name: &str, declared: &str, actual: &str) -> String {
+    format!(
+        "cannot reassign `{name}` from `{declared}` to `{actual}` because local types are fixed \
+         at declaration"
+    )
+}
+
+#[test]
+fn reassignment_widens_a_member_into_the_local() {
+    let source = pet_script("pet = Dog{name: \"Rex\"}\n");
+    let checked = typecheck(&source);
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(
+        last_assignment_value(&checked).coercion,
+        Some(Coercion::UnionWiden(pet))
+    );
+}
+
+#[test]
+fn field_write_widens_a_member_into_the_field() {
+    let source = pet_script(
+        "
+        struct Home
+          pet: Pet
+        end
+
+        home = Home{pet: tom}
+        home.pet = Dog{name: \"Rex\"}
+        ",
+    );
+    let checked = typecheck(&source);
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(
+        last_assignment_value(&checked).coercion,
+        Some(Coercion::UnionWiden(pet))
+    );
+}
+
+#[test]
+fn reassignment_widens_a_narrower_union() {
+    let source = pet_script("wide = pet\n");
+    let checked = typecheck(&source);
+    let coercion = &last_assignment_value(&checked).coercion;
+    assert!(
+        matches!(coercion, Some(Coercion::UnionWiden(_))),
+        "expected `pet` to widen into `Cat | Dog | Bird`, got {coercion:?}",
+    );
+}
+
+#[test]
+fn reassignment_widens_a_member_in_a_tuple_literal() {
+    let source = pet_script(
+        "
+        pair: (Pet, Int) = (tom, 0)
+        pair = (Dog{name: \"Rex\"}, 1)
+        ",
+    );
+    let checked = typecheck(&source);
+    let elements = tuple_elements(last_assignment_value(&checked));
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(elements[0].coercion, Some(Coercion::UnionWiden(pet)));
+    assert_eq!(elements[1].coercion, None);
+}
+
+#[test]
+fn reassignment_does_not_narrow_a_union() {
+    let source = pet_script("tom = pet\n");
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![cannot_reassign("tom", "TestApp.Cat", "TestApp.Pet")],
+    );
+}
+
+#[test]
+fn reassignment_rejects_a_value_that_is_not_a_member() {
+    let source = pet_script("pet = 1\n");
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![cannot_reassign("pet", "TestApp.Pet", "Int")],
+    );
+}
+
+#[test]
+fn local_with_no_annotation_keeps_the_type_of_its_first_value() {
+    // `tom` has the type `Cat`, not a union, so a `Dog` has no union
+    // to widen into.
+    let source = pet_script("tom = Dog{name: \"Rex\"}\n");
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![cannot_reassign("tom", "TestApp.Cat", "TestApp.Dog")],
+    );
+}
+
+#[test]
+fn destructure_widens_a_member_from_a_tuple_literal() {
+    let source = pet_script(
+        "
+        count = 0
+        (pet, count) = (Dog{name: \"Rex\"}, 1)
+        ",
+    );
+    let checked = typecheck(&source);
+    let elements = last_destructure_elements(&checked);
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(elements[0].coercion, Some(Coercion::UnionWiden(pet)));
+    assert_eq!(elements[1].coercion, None);
+}
+
+#[test]
+fn destructure_widens_a_narrower_union_from_a_tuple_literal() {
+    let source = pet_script(
+        "
+        count = 0
+        (wide, count) = (pet, 1)
+        ",
+    );
+    let checked = typecheck(&source);
+    let coercion = &last_destructure_elements(&checked)[0].coercion;
+    assert!(
+        matches!(coercion, Some(Coercion::UnionWiden(_))),
+        "expected `pet` to widen into `Cat | Dog | Bird`, got {coercion:?}",
+    );
+}
+
+#[test]
+fn destructure_widens_next_to_a_new_name() {
+    let source = pet_script(
+        "
+        (pet, fresh) = (Dog{name: \"Rex\"}, 1)
+        fresh
+        ",
+    );
+    let checked = typecheck(&source);
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn destructure_gives_a_new_name_the_type_of_its_element() {
+    let source = pet_script(
+        "
+        count = 0
+        (copy, count) = (pet, 1)
+        copy
+        ",
+    );
+    let checked = typecheck(&source);
+    assert_eq!(trailing_resolution(&checked), package_leaf(&checked, "Pet"));
+}
+
+#[test]
+fn destructure_widens_through_a_nested_tuple_literal() {
+    let source = pet_script(
+        "
+        small: Int32 = 1
+        count = 0
+        ((pet, small), count) = ((Dog{name: \"Rex\"}, 7), 1)
+        ",
+    );
+    let checked = typecheck(&source);
+    let inner = tuple_elements(&last_destructure_elements(&checked)[0]);
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(inner[0].coercion, Some(Coercion::UnionWiden(pet)));
+    assert_eq!(
+        inner[1].literal_coercion,
+        Some(LiteralCoercion::NumericLiteralWidth(
+            NumericLiteralWidth::Int32
+        ))
+    );
+}
+
+#[test]
+fn destructure_widens_a_tuple_literal_into_a_tuple_local() {
+    let source = pet_script(
+        "
+        pair: (Pet, Int) = (tom, 0)
+        count = 0
+        (pair, count) = ((Dog{name: \"Rex\"}, 1), 2)
+        ",
+    );
+    let checked = typecheck(&source);
+    let inner = tuple_elements(&last_destructure_elements(&checked)[0]);
+    let pet = package_leaf(&checked, "Pet");
+    assert_eq!(inner[0].coercion, Some(Coercion::UnionWiden(pet)));
+}
+
+#[test]
+fn destructure_does_not_narrow_a_union() {
+    let source = pet_script(
+        "
+        count = 0
+        (tom, count) = (pet, 1)
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![cannot_reassign("tom", "TestApp.Cat", "TestApp.Pet")],
+    );
+}
+
+#[test]
+fn destructure_from_a_call_does_not_widen() {
+    // Only a tuple literal pairs each name with an expression. A
+    // call gives one value of type `(Dog, Int)`.
+    let source = pet_script(
+        "
+        fn step -> (Dog, Int)
+          (Dog{name: \"Rex\"}, 1)
+        end
+
+        count = 0
+        (pet, count) = step()
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![cannot_reassign("pet", "TestApp.Pet", "TestApp.Dog")],
+    );
+}
+
+#[test]
+fn destructure_from_a_nested_tuple_value_does_not_widen() {
+    let source = pet_script(
+        "
+        small: Int32 = 1
+        count = 0
+        inner = (Dog{name: \"Rex\"}, 7)
+        ((pet, small), count) = (inner, 1)
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![
+            cannot_reassign("pet", "TestApp.Pet", "TestApp.Dog"),
+            cannot_reassign("small", "Int32", "Int"),
+        ],
+    );
+}
+
+#[test]
+fn destructure_from_arms_does_not_widen() {
+    let source = pet_script(
+        "
+        flag = true
+        count = 0
+        (pet, count) = flag ? (Dog{name: \"Rex\"}, 1) : (tom, 2)
+        ",
+    );
+    assert_arms_inconsistent(
+        &source,
+        "then=`(TestApp.Dog, Int)`, else=`(TestApp.Cat, Int)`",
     );
 }
