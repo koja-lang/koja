@@ -9,7 +9,7 @@
 //! that passed typecheck's `Hash & Equality` bound has both symbols
 //! before seal.
 
-use koja_ast::identifier::{LocalId, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, LocalId, ResolvedType};
 use koja_typecheck::{GlobalRegistry, peel_alias};
 
 use super::calls::conformance_method_symbol;
@@ -41,7 +41,9 @@ pub(crate) fn enqueue_key_conformances(
             conformance_method_symbol(&structural, "hash", 1, registry, output);
             conformance_method_symbol(&structural, "equals?", 2, registry, output);
         }
-        ResolvedType::Union(members) => synthesize_union_hash_eq(members, registry, output),
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
+            synthesize_union_hash_eq(&structural, members, registry, output)
+        }
         other => panic!(
             "IR lower: hashtable key `{other:?}` is neither nominal nor a union \
              (typecheck's `Hash & Equality` bound admits nothing else)",
@@ -53,14 +55,15 @@ pub(crate) fn enqueue_key_conformances(
 /// once per distinct union. The bodies are the inline expansions a
 /// `u.hash()` or `u == v` site lowers to, wrapped in a function
 /// shaped like a user `fn hash(self)`, so the hashtable intrinsics
-/// call them the way they call a struct's impl.
+/// call them the way they call a struct's impl. `union` is the peeled
+/// union type and `members` are its members.
 fn synthesize_union_hash_eq(
+    union: &ResolvedType,
     members: &[ResolvedType],
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) {
-    let union_resolved = ResolvedType::Union(members.to_vec());
-    let union_ty = resolved_type_to_ir_type(&union_resolved, registry, output);
+    let union_ty = resolved_type_to_ir_type(union, registry, output);
     let IRType::Union(mangled) = &union_ty else {
         panic!("IR lower: union key `{members:?}` lowered to `{union_ty:?}`");
     };
@@ -93,7 +96,7 @@ fn synthesize_union_hash_eq(
         IRType::Bool,
         registry,
         output,
-        |args, ctx, block| lower_value_equality(args[0], args[1], &union_resolved, ctx, block),
+        |args, ctx, block| lower_value_equality(args[0], args[1], union, ctx, block),
     );
     output.synthesized_functions.push(hash);
     output.synthesized_functions.push(eq);

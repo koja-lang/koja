@@ -18,13 +18,16 @@
 //! stable.
 
 use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr, Name, name_texts, path_text};
-use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
+use koja_ast::identifier::{
+    AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
+};
 use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
-    GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
+    DisplayStyle, GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField,
+    ResolvedVariantData, display_type,
 };
 
 use super::coercion::{check_compatible_stamping, mismatch_message};
@@ -34,7 +37,7 @@ use super::inference::{
     PhantomContext, fill_from_expected, finalize_inference, try_pre_seeded_subst, unify_pairs,
 };
 use super::structs::{validate_named_fields, walk_field_inits};
-use super::types::{display_resolution, lookup_type, peel_alias};
+use super::types::{lookup_type, peel_alias};
 
 pub(super) fn resolve_enum_construction(
     type_path: &[Name],
@@ -126,7 +129,7 @@ pub(super) fn resolve_enum_construction(
                 "`{}.{variant}` is {} `{enum_label}` value, but `{}` is expected",
                 path_text(type_path),
                 indefinite_article(&enum_label),
-                display_resolution(&other, resolver.registry),
+                display_type(&other, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));
@@ -269,6 +272,7 @@ fn unit_variant_mismatch(
 ) -> Option<ResolvedType> {
     let expected = peel_alias(expected?, registry);
     match &expected {
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => None,
         ResolvedType::Anonymous(_) => Some(expected),
         ResolvedType::Named { resolution, .. }
             if resolution.is_resolved() && *resolution != Resolution::Global(enum_id) =>
@@ -311,8 +315,8 @@ fn emit_conflict(
             "type parameter `{}` of `{}` cannot be both `{}` and `{}` in `{}`",
             callee.type_params[conflict.param_index],
             callee.label,
-            display_resolution(&conflict.prev, registry),
-            display_resolution(&conflict.actual, registry),
+            display_type(&conflict.prev, registry, DisplayStyle::Source),
+            display_type(&conflict.actual, registry, DisplayStyle::Source),
             variant_name,
         ),
         span,

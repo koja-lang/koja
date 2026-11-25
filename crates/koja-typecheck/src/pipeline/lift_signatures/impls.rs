@@ -21,8 +21,9 @@ use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    Conformance, ConformanceScope, Dispatch, GlobalKind, GlobalRegistry, InsertOutcome,
-    ProtocolDefinition, ResolvedProtocolBound, ResolvedProtocolMethod, VisibilityScope,
+    Conformance, ConformanceScope, Dispatch, DisplayStyle, GlobalKind, GlobalRegistry,
+    InsertOutcome, ProtocolDefinition, ResolvedProtocolBound, ResolvedProtocolMethod,
+    VisibilityScope, display_type,
 };
 
 use super::LiftScope;
@@ -31,8 +32,8 @@ use super::SelfContext;
 use super::functions::{is_concrete_type, lift_function_with_identifier};
 use super::rename_type_params::RenameTypeParam;
 use super::types::{
-    ResolutionScope, TypeParamScope, concrete_self_type, dispatch_label, render_resolved,
-    resolve_protocol_bound, resolve_type_expr, type_expr_span,
+    ResolutionScope, TypeParamScope, concrete_self_type, dispatch_label, resolve_protocol_bound,
+    resolve_type_expr, type_expr_span,
 };
 
 /// Where a conformance is declared, either an `impl P for T` block
@@ -534,8 +535,8 @@ fn record_target_conformance(
         .record_conformance(target_id, resolved.protocol_id, conformance)
         .is_some()
     {
-        let target_label = render_resolved(&resolved.target, scope.registry);
-        let protocol_label = render_resolved(&resolved.protocol, scope.registry);
+        let target_label = display_type(&resolved.target, scope.registry, DisplayStyle::Source);
+        let protocol_label = display_type(&resolved.protocol, scope.registry, DisplayStyle::Source);
         let message = match site {
             ConformanceSite::Header { decl_label, .. } => {
                 format!("duplicate conformance to `{protocol_label}` declared on `{decl_label}`")
@@ -578,7 +579,7 @@ fn classify_conformance_scope(
         }
         return Some(ConformanceScope::Parameterized { bounds });
     }
-    let target_label = render_resolved(&resolved.target, registry);
+    let target_label = display_type(&resolved.target, registry, DisplayStyle::Source);
     let target_bounds: &[TypeParam] = match site {
         ConformanceSite::Header { .. } => &[],
         ConformanceSite::Impl(block) => &block.target_bounds,
@@ -609,7 +610,7 @@ fn classify_conformance_scope(
         return None;
     }
     if !protocol_args.iter().all(is_concrete_type) {
-        let protocol_label = render_resolved(&resolved.protocol, registry);
+        let protocol_label = display_type(&resolved.protocol, registry, DisplayStyle::Source);
         diagnostics.push(Diagnostic::error(
             format!(
                 "protocol arguments on `impl {protocol_label} for {target_label}` must be \
@@ -1157,8 +1158,8 @@ fn check_impl_method_signature(
                     idx + 1,
                     got.name,
                     impl_function.name,
-                    render_resolved(&expected_ty, registry),
-                    render_resolved(&got.ty, registry),
+                    display_type(&expected_ty, registry, DisplayStyle::Source),
+                    display_type(&got.ty, registry, DisplayStyle::Source),
                 ),
                 impl_function.span,
             ));
@@ -1171,8 +1172,8 @@ fn check_impl_method_signature(
                 "return type of method `{}` does not match protocol `{protocol_identifier}` \
                  (expected `{}`, got `{}`)",
                 impl_function.name,
-                render_resolved(&expected_return, registry),
-                render_resolved(&actual.return_type, registry),
+                display_type(&expected_return, registry, DisplayStyle::Source),
+                display_type(&actual.return_type, registry, DisplayStyle::Source),
             ),
             impl_function.span,
         ));

@@ -14,12 +14,12 @@ use koja_ast::ast::{Diagnostic, Edit, Expr, Statement};
 use koja_ast::identifier::ResolvedType;
 use koja_ast::span::{Position, Span};
 
-use crate::registry::GlobalRegistry;
+use crate::registry::{DisplayStyle, GlobalRegistry, display_type};
 
 use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::Resolver;
 use super::error_channel::{ErrorChannel, ok_unit_construction, ok_wrap_expr};
-use super::types::{display_resolution, is_primitive, types_equivalent};
+use super::types::{is_primitive, types_equivalent};
 
 /// Diagnose any mismatch between the declared return type of a
 /// function or a block closure and the type produced by the trailing
@@ -80,7 +80,7 @@ pub(super) fn check_return_type(
             format!(
                 "return type mismatch{}. Expected `{}`, found empty body",
                 owner_site(owner),
-                display_resolution(expected, registry),
+                display_type(expected, registry, DisplayStyle::Source),
             ),
             span,
         ));
@@ -99,7 +99,7 @@ pub(super) fn check_return_type(
                 "return type mismatch{}. Expected `{}`, found a non-expression \
                  trailing statement",
                 owner_site(owner),
-                display_resolution(expected, registry),
+                display_type(expected, registry, DisplayStyle::Source),
             ),
             last_span,
         ));
@@ -186,7 +186,7 @@ pub(super) fn check_explicit_return(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "return is missing a value. This function returns `{}`",
-                    display_resolution(declared, registry),
+                    display_type(declared, registry, DisplayStyle::Source),
                 ),
                 span,
             ));
@@ -271,8 +271,8 @@ fn mismatch_message(
         Mismatch::Incompatible => format!(
             "return type mismatch{}. Expected `{}`, found `{}`",
             owner_site(owner),
-            display_resolution(declared, registry),
-            display_resolution(actual, registry),
+            display_type(declared, registry, DisplayStyle::Source),
+            display_type(actual, registry, DisplayStyle::Source),
         ),
     }
 }

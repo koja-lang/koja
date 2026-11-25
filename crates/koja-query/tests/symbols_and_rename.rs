@@ -10,7 +10,9 @@ use koja_parser::{ParseMode, SourceFile, SourceTable, parse_program};
 use koja_query::rename::{RenameRefusal, prepare_rename, validate_new_name};
 use koja_query::symbol::{Symbol, SymbolKind, symbol_at};
 use koja_query::{Analysis, ReferenceIndex, SymbolKey, docs};
-use koja_typecheck::{CheckFailure, CheckedProgram, GlobalKind, check_program};
+use koja_typecheck::{
+    CheckFailure, CheckedProgram, DisplayStyle, GlobalKind, check_program, display_type,
+};
 
 const PACKAGE: &str = "TestApp";
 const MAIN: &str = "main.koja";
@@ -284,7 +286,7 @@ fn local_symbol_carries_the_declared_type() {
         panic!("local with a type, got {:?}", total.kind);
     };
     assert_eq!(
-        koja_query::display::format_resolved_type(&ty, analysis.registry),
+        display_type(&ty, analysis.registry, DisplayStyle::Short),
         "Int"
     );
     let a = f.symbol(1, 8).expect("parameter a");

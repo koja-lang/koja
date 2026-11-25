@@ -16,12 +16,12 @@ use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolBound, ResolvedProtocolMethod,
+    Dispatch, DisplayStyle, GlobalKind, GlobalRegistry, ResolvedProtocolBound,
+    ResolvedProtocolMethod, display_type,
 };
 
 use super::super::coercion::{Mismatch, check_compatible_stamping};
 use super::super::ctx::Resolver;
-use super::super::types::display_resolution;
 
 /// Inputs to [`resolve_bounded_method_call`]. Bundles every
 /// `recv.method(args)` shard so the helper stays under
@@ -298,7 +298,7 @@ fn validate_bounded_args(
                         "argument `{}` to `{method}` expects `{}`, but value \
                          `{rendered_value}` does not fit in `{}` (range {})",
                         expected.name,
-                        display_resolution(&expected_ty, resolver.registry),
+                        display_type(&expected_ty, resolver.registry, DisplayStyle::Source),
                         width.label(),
                         width.range_label(),
                     ),
@@ -310,8 +310,8 @@ fn validate_bounded_args(
                     format!(
                         "argument `{}` to `{method}` expects `{}`, got `{}`",
                         expected.name,
-                        display_resolution(&expected_ty, resolver.registry),
-                        display_resolution(&actual, resolver.registry),
+                        display_type(&expected_ty, resolver.registry, DisplayStyle::Source),
+                        display_type(&actual, resolver.registry, DisplayStyle::Source),
                     ),
                     arg.span,
                 ));

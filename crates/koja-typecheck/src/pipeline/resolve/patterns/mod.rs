@@ -42,9 +42,9 @@ use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
 use super::ctx::Resolver;
-use super::types::{display_resolution, is_primitive, names_struct, peel_alias, types_equivalent};
+use super::types::{is_primitive, names_struct, peel_alias, types_equivalent};
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
-use crate::registry::{GlobalKind, GlobalRegistry};
+use crate::registry::{DisplayStyle, GlobalKind, GlobalRegistry, display_type};
 
 pub(super) use usefulness::{DeconstructedPattern, SubjectCoverage};
 
@@ -178,13 +178,13 @@ pub(super) fn resolve_pattern(
             }
             let peeled_subject = peel_alias(subject_ty, resolver.registry);
             match &peeled_subject {
-                ResolvedType::Union(members) => {
+                ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
                     if let Err(missing) = named_members(&resolved, members, resolver.registry) {
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "type `{}` is not a member of union `{}`",
-                                display_resolution(&missing, resolver.registry),
-                                display_resolution(subject_ty, resolver.registry),
+                                display_type(&missing, resolver.registry, DisplayStyle::Source),
+                                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                             ),
                             *span,
                         ));
@@ -198,7 +198,7 @@ pub(super) fn resolve_pattern(
                         format!(
                             "typed-binding pattern requires a union subject, \
                              got `{}`",
-                            display_resolution(subject_ty, resolver.registry),
+                            display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                         ),
                         *span,
                     ));
@@ -232,7 +232,9 @@ fn named_members(
         return Ok(vec![index]);
     }
     match peel_alias(bound, registry) {
-        ResolvedType::Union(bound_members) => bound_members
+        ResolvedType::Anonymous(AnonymousKind::Union {
+            members: bound_members,
+        }) => bound_members
             .into_iter()
             .map(|member| member_index(&member).ok_or(member))
             .collect(),
@@ -277,7 +279,7 @@ pub(super) fn tuple_element_types(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "tuple pattern requires a tuple subject, got `{}`",
-                    display_resolution(subject_ty, resolver.registry),
+                    display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                 ),
                 span,
             ));
@@ -288,7 +290,7 @@ pub(super) fn tuple_element_types(
         diagnostics.push(Diagnostic::error(
             format!(
                 "tuple pattern has {arity} elements but subject `{}` has {}",
-                display_resolution(subject_ty, resolver.registry),
+                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
                 element_types.len(),
             ),
             span,
@@ -360,7 +362,7 @@ pub(super) fn is_enum_or_union_subject(
     registry: &GlobalRegistry,
 ) -> bool {
     match peel_alias(subject_ty, registry) {
-        ResolvedType::Union(_) => true,
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => true,
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             ..

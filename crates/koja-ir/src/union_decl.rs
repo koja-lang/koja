@@ -26,7 +26,7 @@ use crate::types::IRType;
 
 /// A lowered union declaration. `members` is the canonical
 /// (sorted) member type vector inherited from the surface
-/// `ResolvedType::Union`, and `max_payload_size` is the byte width of
+/// `AnonymousKind::Union`, and `max_payload_size` is the byte width of
 /// the largest member as computed by [`size_in_bytes`]. Backends
 /// consult `max_payload_size` to size the trailing `[M x i64]`
 /// payload buffer.

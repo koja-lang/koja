@@ -142,6 +142,10 @@ pub fn type_expr_of(ty: &ResolvedType, registry: &GlobalRegistry) -> TypeExpr {
             elements: elements.iter().map(|e| type_expr_of(e, registry)).collect(),
             span,
         },
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => TypeExpr::Union {
+            types: members.iter().map(|m| type_expr_of(m, registry)).collect(),
+            span,
+        },
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             type_args,
@@ -166,10 +170,6 @@ pub fn type_expr_of(ty: &ResolvedType, registry: &GlobalRegistry) -> TypeExpr {
         }
         | ResolvedType::Failed
         | ResolvedType::Unresolved => TypeExpr::named(vec![name_of("_")], span),
-        ResolvedType::Union(members) => TypeExpr::Union {
-            types: members.iter().map(|m| type_expr_of(m, registry)).collect(),
-            span,
-        },
     }
 }
 

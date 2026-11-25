@@ -13,12 +13,15 @@ use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::types::{display_resolution, lookup_type};
+use super::super::types::lookup_type;
 use super::resolve_pattern;
 use super::structs::{resolve_field_patterns_unbound, walk_field_patterns};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
-use crate::registry::{EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData};
+use crate::registry::{
+    DisplayStyle, EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData,
+    display_type,
+};
 
 pub(super) fn resolve_enum_unit_pattern(
     head: &mut EnumPatternHead<'_>,
@@ -280,7 +283,7 @@ pub(super) fn lookup_pattern_enum<'a>(
             format!(
                 "match arm pattern targets `{}`, but the subject has type `{}`",
                 entry.identifier,
-                display_resolution(subject_ty, resolver.registry),
+                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));

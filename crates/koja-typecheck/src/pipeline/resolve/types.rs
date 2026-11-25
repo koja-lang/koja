@@ -1,5 +1,5 @@
-//! Registry-backed [`ResolvedType`] predicates and rendering used
-//! across the resolve sub-pass.
+//! Registry-backed [`ResolvedType`] predicates used across the
+//! resolve sub-pass.
 //!
 //! "Primitive" here means a preloaded `Global.<name>` stdlib stub, see
 //! [`GlobalRegistry::with_stdlib_stubs`]. Constructors for those
@@ -18,7 +18,9 @@ use super::ops::is_primitive_equality_eligible;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::{Substitution, substitute};
-use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound};
+use crate::registry::{
+    DisplayStyle, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound, display_type,
+};
 
 /// Whether `path` resolves to a registered struct or builtin. Lets
 /// the resolver tell a nested struct from a struct-shaped enum
@@ -110,11 +112,12 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
     NUMERIC.iter().any(|name| is_primitive(ty, registry, name))
 }
 
-/// Build a canonical `ResolvedType::Union` from `members`. Steps:
-/// peel each member through aliases, flatten any `Union(_)` member
-/// into the outer vec, sort by `display_resolution` with the derived
-/// `Ord` as the tie-break, dedup structurally. Collapse 0 members to
-/// `Unit`, 1 member to itself, ≥2 to `Union(...)`. The sort+dedup
+/// Build a canonical `AnonymousKind::Union` from `members`. Steps:
+/// peel each member through aliases, flatten any `Union { .. }` member
+/// into the outer vec, sort by the [`display_type`] text in the
+/// source style with the derived `Ord` as the tie-break, dedup
+/// structurally. Collapse 0 members to
+/// `Unit`, 1 member to itself, ≥2 to `Union { .. }`. The sort+dedup
 /// makes `A | B` and `B | A` and `A | A | B` all equal as
 /// `ResolvedType` values, so the existing derive-`PartialEq` on
 /// `ResolvedType` compares unions correctly.
@@ -132,20 +135,20 @@ pub(crate) fn canonical_union(
     let mut flat = Vec::with_capacity(members.len());
     for member in members {
         match peel_alias(&member, registry) {
-            ResolvedType::Union(inner) => flat.extend(inner),
+            ResolvedType::Anonymous(AnonymousKind::Union { members: inner }) => flat.extend(inner),
             other => flat.push(other),
         }
     }
     flat.sort_by(|a, b| {
-        display_resolution(a, registry)
-            .cmp(&display_resolution(b, registry))
+        display_type(a, registry, DisplayStyle::Source)
+            .cmp(&display_type(b, registry, DisplayStyle::Source))
             .then_with(|| a.cmp(b))
     });
     flat.dedup();
     match flat.len() {
         0 => registry.primitive("Unit"),
         1 => flat.into_iter().next().expect("flat.len() == 1"),
-        _ => ResolvedType::Union(flat),
+        _ => ResolvedType::Anonymous(AnonymousKind::Union { members: flat }),
     }
 }
 
@@ -200,9 +203,7 @@ fn recursive_alias_of_union(
     peeled: &ResolvedType,
     registry: &GlobalRegistry,
 ) -> Option<GlobalRegistryId> {
-    if !matches!(peeled, ResolvedType::Union(_)) {
-        return None;
-    }
+    peeled.as_union()?;
     reachable_aliases(peeled, registry)
         .into_iter()
         .filter(|id| registry.is_recursive_alias(*id))
@@ -242,6 +243,11 @@ pub(crate) fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId
                 collect_type_ids(element, ids);
             }
         }
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
+            for member in members {
+                collect_type_ids(member, ids);
+            }
+        }
         ResolvedType::Named {
             resolution,
             type_args,
@@ -251,11 +257,6 @@ pub(crate) fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId
             }
             for arg in type_args {
                 collect_type_ids(arg, ids);
-            }
-        }
-        ResolvedType::Union(members) => {
-            for member in members {
-                collect_type_ids(member, ids);
             }
         }
         ResolvedType::Failed | ResolvedType::Unresolved => {}
@@ -352,7 +353,10 @@ pub(crate) fn types_equivalent(
                     .zip(b_elements)
                     .all(|(x, y)| types_equivalent(x, y, registry))
         }
-        (ResolvedType::Union(a_members), ResolvedType::Union(b_members)) => {
+        (
+            ResolvedType::Anonymous(AnonymousKind::Union { members: a_members }),
+            ResolvedType::Anonymous(AnonymousKind::Union { members: b_members }),
+        ) => {
             a_members.len() == b_members.len()
                 && a_members
                     .iter()
@@ -381,76 +385,6 @@ fn is_primitive_pair(
 ) -> bool {
     (is_primitive(a, registry, lhs) && is_primitive(b, registry, rhs))
         || (is_primitive(a, registry, rhs) && is_primitive(b, registry, lhs))
-}
-
-/// Human-readable rendering of a [`ResolvedType`] for diagnostics.
-/// Each `Global` head renders through the registry as its source
-/// spelling, `Int` or `IO.Error` rather than an opaque `#0`, so two
-/// nested types that share a leaf name stay apart, and type arguments
-/// are spelled out (`Option<fn (Int) -> Int>`) since conformance often
-/// hinges on them.
-pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    match ty {
-        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            let rendered_params = params
-                .iter()
-                .map(|p| display_resolution(p, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "fn ({rendered_params}) -> {}",
-                display_resolution(ret, registry),
-            )
-        }
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            let rendered = elements
-                .iter()
-                .map(|e| display_resolution(e, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({rendered})")
-        }
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            type_args,
-        } => {
-            let head = match registry.get(*id) {
-                Some(entry) => entry.identifier.source_name(),
-                None => format!("<id {id}>"),
-            };
-            if type_args.is_empty() {
-                return head;
-            }
-            let rendered = type_args
-                .iter()
-                .map(|arg| display_resolution(arg, registry))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{head}<{rendered}>")
-        }
-        ResolvedType::Named {
-            resolution: Resolution::Local(local_id),
-            ..
-        } => format!("<local {local_id}>"),
-        ResolvedType::Named {
-            resolution: Resolution::TypeParam { owner, index },
-            ..
-        } => registry
-            .type_param_name(*owner, *index)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-        ResolvedType::Named {
-            resolution: Resolution::Unresolved,
-            ..
-        }
-        | ResolvedType::Failed
-        | ResolvedType::Unresolved => "<unresolved>".to_string(),
-        ResolvedType::Union(members) => members
-            .iter()
-            .map(|m| display_resolution(m, registry))
-            .collect::<Vec<_>>()
-            .join(" | "),
-    }
 }
 
 /// Walk an inference substitution and emit one diagnostic per
@@ -523,7 +457,7 @@ pub(super) fn verify_bounds(
                     instantiated_bound
                         .args
                         .iter()
-                        .map(|arg| display_resolution(arg, registry))
+                        .map(|arg| display_type(arg, registry, DisplayStyle::Source))
                         .collect::<Vec<_>>()
                         .join(", "),
                 )
@@ -536,7 +470,7 @@ pub(super) fn verify_bounds(
             let message = format!(
                 "type `{}` does not implement protocol `{bound_label}` \
                  (required by type parameter `{param_name}` in `{}`)",
-                display_resolution(inferred, registry),
+                display_type(inferred, registry, DisplayStyle::Source),
                 callee.label,
             );
             diagnostics.push(
@@ -558,16 +492,15 @@ fn union_bound_hint(
     bound_label: &str,
     ctx: BoundContext<'_>,
 ) -> Option<String> {
-    let ResolvedType::Union(members) = peel_alias(inferred, ctx.registry) else {
-        return None;
-    };
+    let peeled = peel_alias(inferred, ctx.registry);
+    let members = peeled.as_union()?;
     let missing = members
         .iter()
         .find(|member| !ctx.registry.bound_satisfied(member, bound, ctx.overlay));
     Some(match missing {
         Some(member) => format!(
             "`{}` does not implement `{bound_label}`",
-            display_resolution(member, ctx.registry),
+            display_type(member, ctx.registry, DisplayStyle::Source),
         ),
         None => format!(
             "a union conforms to a protocol only when every function takes `self` and \
@@ -599,8 +532,9 @@ fn protocol_bound_satisfied(
             resolution: Resolution::TypeParam { .. },
             ..
         }
-        | ResolvedType::Anonymous(_)
-        | ResolvedType::Union(_) => Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay)),
+        | ResolvedType::Anonymous(_) => {
+            Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay))
+        }
         _ => None,
     }
 }

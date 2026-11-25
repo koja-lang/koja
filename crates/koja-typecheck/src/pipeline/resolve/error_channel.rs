@@ -22,8 +22,8 @@ use super::coercion::check_compatible_stamping;
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::match_expr::resolve_match_arms;
-use super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
-use crate::registry::{FunctionSignature, GlobalRegistry};
+use super::types::{is_primitive, peel_alias, types_equivalent};
+use crate::registry::{DisplayStyle, FunctionSignature, GlobalRegistry, display_type};
 
 /// Binder names for the synthesized `match` arms. Leading
 /// underscores keep them out of the way of user locals. Pattern
@@ -336,8 +336,8 @@ pub(super) fn resolve_fail_statement(
         diagnostics.push(Diagnostic::error_with_hint(
             format!(
                 "`fail` sends `{}`, but the enclosing function declares error type `{}`",
-                display_resolution(&actual, resolver.registry),
-                display_resolution(&channel.error, resolver.registry),
+                display_type(&actual, resolver.registry, DisplayStyle::Source),
+                display_type(&channel.error, resolver.registry, DisplayStyle::Source),
             ),
             "widen the declared error union to include this type, or rescue it \
              into a declared one",
@@ -512,7 +512,7 @@ fn non_result_subject_diagnostic(
 ) -> Diagnostic {
     let message = format!(
         "`{keyword}` needs a `Result` subject, got `{}`",
-        display_resolution(&subject.resolution, registry),
+        display_type(&subject.resolution, registry, DisplayStyle::Source),
     );
     let hint = if is_global_generic(&subject.resolution, "Option", registry) {
         "name the error first with `.or_err(error)`, which turns an `Option` into a `Result`"

@@ -30,7 +30,8 @@ use koja_ast::span::Span;
 
 use super::super::calls::resolve_method_call_expr;
 use super::super::ctx::Resolver;
-use super::super::types::{display_resolution, peel_alias};
+use super::super::types::peel_alias;
+use crate::registry::{DisplayStyle, display_type};
 
 /// Per-protocol metadata. Drives diagnostic phrasing,
 /// registry lookups, and the synthesis-method name. Kept as a
@@ -108,7 +109,8 @@ pub(super) fn narrow_union_hint(
     let Some(hint) = expected else {
         return Ok(None);
     };
-    let ResolvedType::Union(members) = peel_alias(hint, resolver.registry) else {
+    let peeled = peel_alias(hint, resolver.registry);
+    let Some(members) = peeled.as_union() else {
         return Ok(Some(hint.clone()));
     };
     let members: Vec<ResolvedType> = members
@@ -150,14 +152,19 @@ pub(super) fn narrow_union_hint(
         _ => {
             let names = candidates
                 .iter()
-                .map(|member| format!("`{}`", display_resolution(member, resolver.registry)))
+                .map(|member| {
+                    format!(
+                        "`{}`",
+                        display_type(member, resolver.registry, DisplayStyle::Source)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             diagnostics.push(Diagnostic::error_with_hint(
                 format!(
                     "{} is ambiguous for `{}`. More than one member implements `{}`",
                     spec.missing_root_label,
-                    display_resolution(hint, resolver.registry),
+                    display_type(hint, resolver.registry, DisplayStyle::Source),
                     spec.protocol_name,
                 ),
                 format!(

@@ -15,11 +15,9 @@ use koja_ast::span::Span;
 use super::super::coercion::check_compatible_stamping;
 use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
-use super::super::types::{
-    display_resolution, peel_alias, type_supports_equality, types_equivalent,
-};
+use super::super::types::{peel_alias, type_supports_equality, types_equivalent};
 use super::resolve_args;
-use crate::registry::{GlobalRegistry, ResolvedProtocolBound};
+use crate::registry::{DisplayStyle, GlobalRegistry, ResolvedProtocolBound, display_type};
 
 /// Which structural shape a method receiver has. Decides the
 /// admitted method set and the wording of rejections.
@@ -90,7 +88,11 @@ pub(super) fn resolve_structural_method_call(
             "no function `{method}` on {} type `{}`. {}s support only the universal \
              protocol functions {}",
             shape.label(),
-            display_resolution(&receiver.resolution, resolver.registry),
+            display_type(
+                &receiver.resolution,
+                resolver.registry,
+                DisplayStyle::Source
+            ),
             capitalize(shape.label()),
             shape.supported_methods(),
         );
@@ -193,11 +195,11 @@ fn resolve_structural_eq(
             format!(
                 "cannot compare {}s containing `{}`",
                 shape.label(),
-                display_resolution(&part, resolver.registry),
+                display_type(&part, resolver.registry, DisplayStyle::Source),
             ),
             format!(
                 "`{}` does not implement `Equality`",
-                display_resolution(&part, resolver.registry),
+                display_type(&part, resolver.registry, DisplayStyle::Source),
             ),
             call_span,
         ));
@@ -235,12 +237,10 @@ fn equality_mismatch_message(
     argument_ty: &ResolvedType,
     registry: &GlobalRegistry,
 ) -> String {
-    let receiver_label = display_resolution(receiver_ty, registry);
-    let argument_label = display_resolution(argument_ty, registry);
+    let receiver_label = display_type(receiver_ty, registry, DisplayStyle::Source);
+    let argument_label = display_type(argument_ty, registry, DisplayStyle::Source);
     let reason = match shape {
-        StructuralShape::Union
-            if matches!(peel_alias(argument_ty, registry), ResolvedType::Union(_)) =>
-        {
+        StructuralShape::Union if peel_alias(argument_ty, registry).as_union().is_some() => {
             format!("`{argument_label}` has a member that is not a member of `{receiver_label}`")
         }
         StructuralShape::Union => {
@@ -272,7 +272,8 @@ fn resolve_union_hash(
         diagnostics,
     );
     let hash_bound = protocol_bound("Hash", resolver.registry);
-    let ResolvedType::Union(members) = peel_alias(&receiver.resolution, resolver.registry) else {
+    let peeled = peel_alias(&receiver.resolution, resolver.registry);
+    let Some(members) = peeled.as_union() else {
         return int_ty;
     };
     let unhashable = members.iter().find(|member| {
@@ -286,11 +287,11 @@ fn resolve_union_hash(
         diagnostics.push(Diagnostic::error_with_hint(
             format!(
                 "cannot hash unions containing `{}`",
-                display_resolution(member, resolver.registry),
+                display_type(member, resolver.registry, DisplayStyle::Source),
             ),
             format!(
                 "`{}` does not implement `Hash`",
-                display_resolution(member, resolver.registry),
+                display_type(member, resolver.registry, DisplayStyle::Source),
             ),
             call_span,
         ));
@@ -315,7 +316,7 @@ fn first_part_without_equality(ty: &ResolvedType, resolver: &Resolver<'_>) -> Op
     let structural = peel_alias(ty, resolver.registry);
     let parts = match &structural {
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => elements,
-        ResolvedType::Union(members) => members,
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members,
         ResolvedType::Named {
             resolution: Resolution::Global(_),
             ..

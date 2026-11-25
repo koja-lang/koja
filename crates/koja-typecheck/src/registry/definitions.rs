@@ -358,7 +358,7 @@ pub struct ConstantDefinition {
 ///
 /// `expansion` is the canonical [`ResolvedType`] of the right-hand
 /// side. For `type Pet = Cat | Dog | Fish` that is a canonical
-/// [`ResolvedType::Union`], but any shape is permissible.
+/// `AnonymousKind::Union`, but any shape is permissible.
 ///
 /// `recursive` is true for a union that names its own alias inside a
 /// type argument, as in `type Tree = Int | List<Tree>`. Such an alias

@@ -251,8 +251,8 @@ impl Resolution {
     }
 }
 
-/// Northstar-aligned type annotation attached to every `Expr` by the typecheck pass
-/// typecheck.
+/// Northstar-aligned type annotation attached to every `Expr` by the
+/// typecheck pass.
 ///
 /// Split along the named/anonymous axis:
 ///
@@ -261,8 +261,8 @@ impl Resolution {
 ///   `type_args` are the generic arguments at this use site
 ///   (themselves `ResolvedType`s, so generics nest).
 /// - [`Self::Anonymous`]: structural types with no source name.
-///   Identity is by shape. Covers function and tuple types today,
-///   with records as a possible future addition.
+///   Identity is by shape. Covers function, tuple, and union types
+///   today, with records as a possible future addition.
 /// - [`Self::Unresolved`]: not determined yet. `Default` returns
 ///   this. At the top of an `Expr` it means resolve has not walked
 ///   the node. Nested inside a type it is a hole inference may
@@ -276,6 +276,7 @@ impl Resolution {
 /// - `Int` -> `Named { Global(int_id), [] }`
 /// - `List<Int>` -> `Named { Global(list_id), [Named { Global(int_id), [] }] }`
 /// - `fn (Int) -> Bool` -> `Anonymous(Function { [Int], Bool })`
+/// - `Int | String` -> `Anonymous(Union { [Int, String] })`
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ResolvedType {
     /// Anonymous structural type. Identity by shape, never the target
@@ -288,17 +289,6 @@ pub enum ResolvedType {
         resolution: Resolution,
         type_args: Vec<ResolvedType>,
     },
-
-    /// Anonymous union of two or more types: `A | B`. Members are
-    /// kept in canonical order (sorted by display, deduped, with
-    /// nested unions and aliases peeled and flattened) by the
-    /// `canonical_union` constructor in typecheck. The
-    /// invariant lets equality compare member vectors elementwise.
-    /// A named alias `type Pet = ...` is *not* this variant. It
-    /// stays as `Named { Global(alias_id), [] }` and only peels to
-    /// the underlying union at equivalence / widening / IR-lower
-    /// time, so diagnostics keep the user's chosen name.
-    Union(Vec<ResolvedType>),
 
     /// A diagnostic was reported and no type came out. Nothing fills
     /// it later. At the top of an `Expr` it marks a walked node, which
@@ -322,6 +312,15 @@ impl ResolvedType {
         }
     }
 
+    /// The members when this type is a union. Does not peel an alias,
+    /// so peel first when the type can be a named union.
+    pub fn as_union(&self) -> Option<&[ResolvedType]> {
+        match self {
+            Self::Anonymous(AnonymousKind::Union { members }) => Some(members),
+            _ => None,
+        }
+    }
+
     /// True iff every leaf is resolved. Seal uses this as its
     /// whole-tree invariant, where a single [`Self::Unresolved`] hole,
     /// a [`Self::Failed`] node, or a [`Resolution::Unresolved`] head
@@ -334,11 +333,13 @@ impl ResolvedType {
             Self::Anonymous(AnonymousKind::Tuple { elements }) => {
                 elements.iter().all(Self::is_resolved)
             }
+            Self::Anonymous(AnonymousKind::Union { members }) => {
+                members.iter().all(Self::is_resolved)
+            }
             Self::Named {
                 resolution,
                 type_args,
             } => resolution.is_resolved() && type_args.iter().all(Self::is_resolved),
-            Self::Union(members) => members.iter().all(Self::is_resolved),
             Self::Failed | Self::Unresolved => false,
         }
     }
@@ -347,8 +348,9 @@ impl ResolvedType {
 /// Kind tag for [`ResolvedType::Anonymous`]. Each variant is an
 /// anonymous type family with its own structural-equivalence rule.
 ///
-/// Covers [`Self::Function`] and [`Self::Tuple`] today. Records are a
-/// possible future addition.
+/// [`Self::Function`] and [`Self::Tuple`] are positional. A
+/// [`Self::Union`] is a set of members, and a member widens into it.
+/// Records are a possible future addition.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AnonymousKind {
     /// `fn (T, U) -> R`: structural function type. Equates positionally
@@ -360,4 +362,16 @@ pub enum AnonymousKind {
     /// A structural tuple type such as `(T, U)`, always two or more
     /// elements. Equates positionally on element types.
     Tuple { elements: Vec<ResolvedType> },
+    /// `A | B`: a union of two or more types. The `canonical_union`
+    /// constructor in typecheck builds it and keeps the members in
+    /// canonical order. The members are sorted by display and have no
+    /// duplicates, and nested unions and aliases are peeled and
+    /// flattened. The invariant lets equality compare the member
+    /// vectors element by element.
+    ///
+    /// A named alias `type Pet = ...` is not this variant. It stays
+    /// `Named { Global(alias_id), [] }` and peels to the union at
+    /// equivalence, widening, and IR lowering, so diagnostics keep
+    /// the name the user chose.
+    Union { members: Vec<ResolvedType> },
 }

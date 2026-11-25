@@ -134,7 +134,9 @@ fn record_recursive_aliases(
         .collect();
     for site in recursive {
         match registry.alias_expansion(site.id) {
-            Some(ResolvedType::Union(_)) => registry.mark_recursive_alias(site.id),
+            Some(ResolvedType::Anonymous(AnonymousKind::Union { .. })) => {
+                registry.mark_recursive_alias(site.id)
+            }
             Some(expansion) if names_alias(&expansion, registry) => {}
             _ => {
                 diagnostics.push(Diagnostic::error(
@@ -221,7 +223,9 @@ fn mentions_alias(
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
             any_mentions_alias(elements, target, registry, seen)
         }
-        ResolvedType::Union(members) => any_mentions_alias(members, target, registry, seen),
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
+            any_mentions_alias(members, target, registry, seen)
+        }
         ResolvedType::Failed | ResolvedType::Unresolved => false,
     }
 }
@@ -294,7 +298,7 @@ fn type_references_alias(
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => elements
             .iter()
             .any(|e| type_references_alias(e, registry, seen)),
-        ResolvedType::Union(members) => members
+        ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
             .iter()
             .any(|m| type_references_alias(m, registry, seen)),
         ResolvedType::Failed | ResolvedType::Unresolved => false,

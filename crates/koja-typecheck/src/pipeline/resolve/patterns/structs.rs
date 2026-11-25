@@ -13,11 +13,11 @@ use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::types::{display_resolution, lookup_type};
+use super::super::types::lookup_type;
 use super::resolve_pattern;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
-use crate::registry::{GlobalKind, ResolvedStructField};
+use crate::registry::{DisplayStyle, GlobalKind, ResolvedStructField, display_type};
 
 pub(super) fn resolve_struct_pattern(
     type_path: &[Name],
@@ -110,7 +110,7 @@ fn resolve_struct_metadata(
             format!(
                 "match arm pattern targets `{}`, but the subject has type `{}`",
                 entry.identifier,
-                display_resolution(subject_ty, resolver.registry),
+                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));

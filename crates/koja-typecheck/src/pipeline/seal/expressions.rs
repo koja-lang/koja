@@ -187,7 +187,6 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             let structural_receiver = matches!(
                 receiver.resolution,
                 ResolvedType::Anonymous(_)
-                    | ResolvedType::Union(_)
                     | ResolvedType::Named {
                         resolution: Resolution::TypeParam { .. },
                         ..

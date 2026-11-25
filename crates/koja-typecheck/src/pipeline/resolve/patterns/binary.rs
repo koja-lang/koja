@@ -38,7 +38,8 @@ use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::types::{display_resolution, is_primitive};
+use super::super::types::is_primitive;
+use crate::registry::{DisplayStyle, display_type};
 
 /// Resolve a `<<segments>>` pattern against `subject_ty`. Binary
 /// patterns never cover the subject, so the match still needs a
@@ -56,7 +57,7 @@ pub(super) fn resolve_binary_pattern(
         diagnostics.push(Diagnostic::error(
             format!(
                 "binary pattern requires `Binary` or `Bits` subject, got `{}`",
-                display_resolution(subject_ty, resolver.registry),
+                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));

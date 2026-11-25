@@ -8,7 +8,8 @@ use koja_ast::span::Span;
 use super::builders::{assign_local, binding_pattern, ident, method_call};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
-use super::types::{display_resolution, lookup_type, peel_alias};
+use super::types::{lookup_type, peel_alias};
+use crate::registry::{DisplayStyle, display_type};
 
 /// Rewrite one statement-position `for` into ordinary assignments,
 /// `loop`, and `match` nodes. The source expression is resolved first
@@ -59,7 +60,11 @@ pub(super) fn rewrite_for_statement(
         diagnostics.push(Diagnostic::error(
             format!(
                 "type `{}` in a `for` loop must implement `Enumeration<T, Cursor>`",
-                display_resolution(&iterable.resolution, resolver.registry),
+                display_type(
+                    &iterable.resolution,
+                    resolver.registry,
+                    DisplayStyle::Source
+                ),
             ),
             iterable.span,
         ));

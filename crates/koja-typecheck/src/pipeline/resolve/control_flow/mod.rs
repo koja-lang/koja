@@ -31,9 +31,9 @@ use super::coercion::{Compatible, check_compatible, check_compatible_stamping};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::speculation::{ArmSet, ArmTail, Restorable, resolve_arms};
-use super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
+use super::types::{is_primitive, peel_alias, types_equivalent};
 use super::walker::resolve_body_with_expected;
-use crate::registry::GlobalRegistry;
+use crate::registry::{DisplayStyle, GlobalRegistry, display_type};
 
 pub(super) fn resolve_if(
     condition: &mut Expr,
@@ -391,7 +391,7 @@ pub(super) fn widen_arm_tails(
 }
 
 fn is_resolved_union(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    ty.is_resolved() && matches!(peel_alias(ty, registry), ResolvedType::Union(_))
+    ty.is_resolved() && peel_alias(ty, registry).as_union().is_some()
 }
 
 /// True when every tail is resolved and two tails that do not
@@ -463,8 +463,8 @@ fn join_two_arms(
     diagnostics.push(Diagnostic::error(
         format!(
             "{keyword} arms have inconsistent types. {then_label}=`{}`, {else_label}=`{}`",
-            display_resolution(then_ty, registry),
-            display_resolution(else_ty, registry),
+            display_type(then_ty, registry, DisplayStyle::Source),
+            display_type(else_ty, registry, DisplayStyle::Source),
         ),
         span,
     ));
@@ -499,8 +499,8 @@ pub(super) fn join_arm_tails(
                     format!(
                         "{keyword} arms have inconsistent types. Expected `{}` (from {expected_label}), \
                          got `{}` (from {label})",
-                        display_resolution(expected, registry),
-                        display_resolution(ty, registry),
+                        display_type(expected, registry, DisplayStyle::Source),
+                        display_type(ty, registry, DisplayStyle::Source),
                     ),
                     span,
                 ));
@@ -568,7 +568,7 @@ pub(super) fn require_bool_condition(
         diagnostics.push(Diagnostic::error(
             format!(
                 "`{keyword}` condition must be `Bool`, got `{}`",
-                display_resolution(&condition.resolution, registry),
+                display_type(&condition.resolution, registry, DisplayStyle::Source),
             ),
             condition.span,
         ));

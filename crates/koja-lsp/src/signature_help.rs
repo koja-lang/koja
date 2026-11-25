@@ -8,8 +8,8 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::ExprKind;
-use koja_query::display::format_resolved_type;
 use koja_query::expr_at::{find_enclosing_call, signature_for_target};
+use koja_typecheck::{DisplayStyle, display_type};
 
 use crate::backend::Backend;
 
@@ -59,7 +59,7 @@ impl Backend {
                     label: ParameterLabel::Simple(format!(
                         "{}: {}",
                         p.name,
-                        format_resolved_type(&p.ty, registry)
+                        display_type(&p.ty, registry, DisplayStyle::Short)
                     )),
                     documentation: None,
                 })
@@ -69,13 +69,19 @@ impl Backend {
                 .params
                 .iter()
                 .filter(|p| p.name != "self")
-                .map(|p| format!("{}: {}", p.name, format_resolved_type(&p.ty, registry)))
+                .map(|p| {
+                    format!(
+                        "{}: {}",
+                        p.name,
+                        display_type(&p.ty, registry, DisplayStyle::Short)
+                    )
+                })
                 .collect();
             let label = format!(
                 "fn {}({}) -> {}",
                 function_name,
                 params_str.join(", "),
-                format_resolved_type(&sig.return_type, registry)
+                display_type(&sig.return_type, registry, DisplayStyle::Short)
             );
 
             let active_param = call_site.active_param as u32;

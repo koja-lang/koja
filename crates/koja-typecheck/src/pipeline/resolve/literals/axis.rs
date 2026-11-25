@@ -23,7 +23,7 @@ use koja_ast::span::Span;
 
 use super::super::coercion::{Mismatch, check_compatible_stamping, mismatch_message};
 use super::super::ctx::Resolver;
-use super::super::types::display_resolution;
+use crate::registry::{DisplayStyle, display_type};
 
 /// Diagnostic phrasing for a single axis. Two strings rather than
 /// one because the wording is two adjectives ("list literal
@@ -136,8 +136,8 @@ fn mismatch(
     Diagnostic::error(
         format!(
             "{collection} {axis} type mismatch. Expected `{}`, found `{}`",
-            display_resolution(expected, resolver.registry),
-            display_resolution(&actual.resolution, resolver.registry),
+            display_type(expected, resolver.registry, DisplayStyle::Source),
+            display_type(&actual.resolution, resolver.registry, DisplayStyle::Source),
         ),
         actual.span,
     )

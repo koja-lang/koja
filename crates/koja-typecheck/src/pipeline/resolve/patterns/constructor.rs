@@ -13,9 +13,8 @@ use koja_ast::ast::{Diagnostic, Name, Pattern};
 use koja_ast::identifier::{Resolution, ResolvedType};
 
 use super::super::ctx::Resolver;
-use super::super::types::display_resolution;
 use super::resolve_pattern;
-use crate::registry::{GlobalKind, ResolvedVariantData};
+use crate::registry::{DisplayStyle, GlobalKind, ResolvedVariantData, display_type};
 
 pub(super) fn resolve_constructor_pattern(
     pat: &mut Pattern,
@@ -108,7 +107,7 @@ fn constructor_metadata(
         diagnostics.push(Diagnostic::error(
             format!(
                 "constructor pattern `{name}(...)` requires an enum subject (got `{}`)",
-                display_resolution(subject_ty, resolver.registry),
+                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
             ),
             span,
         ));

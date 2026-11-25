@@ -9,12 +9,10 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::identifier::GlobalRegistryId;
-use koja_query::display::{
-    format_enum_def, format_protocol_def, format_resolved_type, format_struct_def,
-};
+use koja_query::display::{format_enum_def, format_protocol_def, format_struct_def};
 use koja_query::symbol::SymbolKind;
 use koja_query::{Analysis, SymbolKey, docs, signature};
-use koja_typecheck::{GlobalKind, RegistryEntry};
+use koja_typecheck::{DisplayStyle, GlobalKind, RegistryEntry, display_type};
 
 use crate::backend::Backend;
 
@@ -41,7 +39,7 @@ impl Backend {
                         Some(ty) => format!(
                             "{}: {}",
                             symbol.name,
-                            format_resolved_type(ty, doc.analysis.registry)
+                            display_type(ty, doc.analysis.registry, DisplayStyle::Short)
                         ),
                         None => symbol.name.clone(),
                     };
@@ -90,12 +88,15 @@ fn global_hover(
             format_protocol_def(name, declared, &def.methods, registry)
         }
         GlobalKind::Constant(Some(def)) => {
-            format!("const {name}: {}", format_resolved_type(&def.ty, registry))
+            format!(
+                "const {name}: {}",
+                display_type(&def.ty, registry, DisplayStyle::Short)
+            )
         }
         GlobalKind::TypeAlias(Some(definition)) => {
             format!(
                 "type {name} = {}",
-                format_resolved_type(&definition.expansion, registry)
+                display_type(&definition.expansion, registry, DisplayStyle::Short)
             )
         }
         GlobalKind::Struct(None)

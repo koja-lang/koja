@@ -31,10 +31,8 @@ use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::speculation::Speculation;
-use super::types::{
-    display_resolution, is_primitive, peel_alias, type_supports_equality, types_equivalent,
-};
-use crate::registry::{GlobalKind, GlobalRegistry};
+use super::types::{is_primitive, peel_alias, type_supports_equality, types_equivalent};
+use crate::registry::{DisplayStyle, GlobalKind, GlobalRegistry, display_type};
 
 /// Binder for the left operand in [`member_left_equality`]. The
 /// leading underscores keep it out of the way of user locals.
@@ -192,7 +190,7 @@ fn diagnose_equality_unsupported(
     diagnostics.push(Diagnostic::error(
         format!(
             "`{}` does not implement `Equality`, so `==` / `!=` cannot compare it",
-            display_resolution(&operand.resolution, resolver.registry),
+            display_type(&operand.resolution, resolver.registry, DisplayStyle::Source),
         ),
         operand.span,
     ));
@@ -374,7 +372,7 @@ pub(super) fn unary_type(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "unary `-` requires a signed Int or Float operand, got `{}`",
-                        display_resolution(ty, registry),
+                        display_type(ty, registry, DisplayStyle::Source),
                     ),
                     span,
                 ));
@@ -388,7 +386,7 @@ pub(super) fn unary_type(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "`not` requires a Bool operand, got `{}`",
-                        display_resolution(ty, registry),
+                        display_type(ty, registry, DisplayStyle::Source),
                     ),
                     span,
                 ));
@@ -567,8 +565,8 @@ fn push_op_mismatch(
         format!(
             "`{}` requires {expected}, got `{}` and `{}`",
             bin_op_label(op),
-            display_resolution(lhs, registry),
-            display_resolution(rhs, registry),
+            display_type(lhs, registry, DisplayStyle::Source),
+            display_type(rhs, registry, DisplayStyle::Source),
         ),
         span,
     ));

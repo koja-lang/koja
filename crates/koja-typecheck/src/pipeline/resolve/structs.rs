@@ -17,14 +17,16 @@ use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
-use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
+use crate::registry::{
+    DisplayStyle, GlobalKind, GlobalRegistry, ResolvedStructField, display_type,
+};
 
 use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::{BoundContext, Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::field_defaults::synthesize_default_init;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
-use super::types::{display_resolution, lookup_type, names_struct, peel_alias};
+use super::types::{lookup_type, names_struct, peel_alias};
 
 /// `A.B { … }` parses as a struct-shaped enum-variant construction. If
 /// the full path names a struct, rewrite it in place to a
@@ -316,8 +318,8 @@ fn emit_conflict(
             "type parameter `{}` of `{}` cannot be both `{}` and `{}`",
             callee.type_params[conflict.param_index],
             callee.label,
-            display_resolution(&conflict.prev, registry),
-            display_resolution(&conflict.actual, registry),
+            display_type(&conflict.prev, registry, DisplayStyle::Source),
+            display_type(&conflict.actual, registry, DisplayStyle::Source),
         ),
         span,
     ));
@@ -431,12 +433,16 @@ pub(super) fn resolve_field_access(
 ) -> ResolvedType {
     resolve_expr(receiver, resolver, diagnostics);
     match peel_alias(&receiver.resolution, resolver.registry) {
-        ResolvedType::Union(_) => {
+        ResolvedType::Anonymous(AnonymousKind::Union { .. }) => {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "cannot access field `{field}` on union type `{}`. \
                      Match the union first to bind a specific variant",
-                    display_resolution(&receiver.resolution, resolver.registry),
+                    display_type(
+                        &receiver.resolution,
+                        resolver.registry,
+                        DisplayStyle::Source
+                    ),
                 ),
                 span,
             ));
@@ -446,7 +452,11 @@ pub(super) fn resolve_field_access(
             diagnostics.push(Diagnostic::error_with_hint(
                 format!(
                     "cannot access field `{field}` on tuple `{}`",
-                    display_resolution(&receiver.resolution, resolver.registry),
+                    display_type(
+                        &receiver.resolution,
+                        resolver.registry,
+                        DisplayStyle::Source
+                    ),
                 ),
                 "tuples have no named or positional fields. Destructure \
                  instead with `(a, b) = value`",
