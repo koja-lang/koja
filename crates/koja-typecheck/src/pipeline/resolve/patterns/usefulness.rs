@@ -17,9 +17,10 @@ use std::collections::BTreeSet;
 use koja_ast::ast::{FieldPattern, Literal, Name, Pattern};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, ResolvedType};
 
-use super::super::types::{is_primitive, peel_alias, types_equivalent};
+use super::super::types::{is_primitive, peel_alias};
 use super::literals::literal_repr;
-use super::named_members;
+use super::typed_binding::named_members;
+use super::union_member::member_index;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     DisplayStyle, EnumDefinition, GlobalKind, GlobalRegistry, ResolvedStructField,
@@ -348,10 +349,7 @@ fn deconstruct(
             pattern,
             ..
         } => {
-            let index = peeled
-                .as_union()?
-                .iter()
-                .position(|member| types_equivalent(member, member_type, registry))?;
+            let index = member_index(peeled.as_union()?, member_type, registry)?;
             let covered = deconstruct(pattern, member_type, registry)?;
             Some(constructor(Constructor::UnionMember(index), vec![covered]))
         }

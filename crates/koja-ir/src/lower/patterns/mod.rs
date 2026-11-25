@@ -9,9 +9,10 @@
 //! result to wire the gating `CondBranch`(es) and the per-arm body
 //! block.
 //!
-//! Admits leaves (wildcard / binding / literal), `EnumUnit`,
-//! `EnumTuple` / `EnumStruct` / `Struct` with arbitrary nested
-//! payload / field patterns, and `Or` (alternatives restricted to
+//! Admits leaves (wildcard / binding / typed binding / literal),
+//! `Binary`, `EnumUnit`, `EnumTuple` / `EnumStruct` / `Struct` /
+//! `Tuple` with arbitrary nested payload / field / element
+//! patterns, `UnionMember`, and `Or` (alternatives restricted to
 //! literal / EnumUnit, no bindings). Every other shape is a feature
 //! gap diagnosed in typecheck and is unreachable on the success
 //! path.
@@ -27,6 +28,9 @@
 //!   recursively lower against the field type. Bindings produce
 //!   chained [`BindOp::StructField`] binds, non-binding fields add
 //!   AND-chained `TestStep`s.
+//! - [`tuples`]: anonymous-tuple destructure. The same walk as
+//!   [`structs`], with a [`BindOp::TupleElement`] read for each
+//!   element in place of the field read.
 //! - [`or_pattern`]: `A | B | C` chained through fresh
 //!   `match_or_alt_<n>` blocks, one [`TestStep`] per alternative
 //!   under [`ChainMode::Or`].

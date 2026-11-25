@@ -10,15 +10,19 @@
 //! Coverage and IR lowering read the wrapper, so neither of them
 //! finds the member again. [`super::constructor`] is the mirror of
 //! this step. It rewrites a node that only the parser makes.
+//!
+//! [`member_index`] and [`not_a_member_error`] are shared. Typed
+//! binding resolution uses both, and coverage uses the first.
 
 use koja_ast::ast::{Diagnostic, Name, Pattern, name_texts};
 use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use koja_ast::labels::pattern_span;
+use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::types::{lookup_type, peel_alias};
+use super::super::types::{lookup_type, peel_alias, types_equivalent};
 use super::resolve_pattern;
-use crate::registry::{DisplayStyle, GlobalKind, display_type};
+use crate::registry::{DisplayStyle, GlobalKind, GlobalRegistry, display_type};
 
 /// Resolve `pat` through a union subject. Returns `false` when the
 /// step does not apply, and the caller then resolves `pat` the usual
@@ -37,24 +41,23 @@ pub(super) fn resolve_through_union(
     let Some(named) = pattern_type(pat, subject_ty, resolver) else {
         return false;
     };
-    let union_label = display_type(subject_ty, resolver.registry, DisplayStyle::Source);
     match named.members.as_slice() {
         [member] => {
             wrap(pat, member.clone());
             resolve_pattern(pat, subject_ty, resolver, diagnostics);
             return true;
         }
-        [] => diagnostics.push(Diagnostic::error(
-            format!(
-                "type `{}` is not a member of union `{union_label}`",
-                named.type_name,
-            ),
+        [] => diagnostics.push(not_a_member_error(
+            &named.type_name,
+            subject_ty,
+            resolver.registry,
             pattern_span(pat),
         )),
         [first, ..] => diagnostics.push(Diagnostic::error_with_hint(
             format!(
-                "`{}` names more than one member of union `{union_label}`",
+                "`{}` names more than one member of union `{}`",
                 named.type_name,
+                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
             ),
             format!(
                 "name one member with a typed binding, as in `value: {} ->`, and match on \
@@ -66,6 +69,35 @@ pub(super) fn resolve_through_union(
     }
     resolve_pattern(pat, &ResolvedType::Failed, resolver, diagnostics);
     true
+}
+
+/// Index of the member of `members` that is the type `ty`, type
+/// arguments included.
+pub(super) fn member_index(
+    members: &[ResolvedType],
+    ty: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> Option<usize> {
+    members
+        .iter()
+        .position(|member| types_equivalent(member, ty, registry))
+}
+
+/// The error for a pattern that names the type `type_label` when the
+/// union `subject_ty` has no member of that type.
+pub(super) fn not_a_member_error(
+    type_label: &str,
+    subject_ty: &ResolvedType,
+    registry: &GlobalRegistry,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        format!(
+            "type `{type_label}` is not a member of union `{}`",
+            display_type(subject_ty, registry, DisplayStyle::Source),
+        ),
+        span,
+    )
 }
 
 /// The type that a pattern names, and the members of the subject

@@ -26,7 +26,7 @@ use super::{
     BindOp, BindStep, ChainMode, PatternCheck, PatternInputs, TestStep, lower_pattern_check,
 };
 use crate::function::IRBlockId;
-use crate::types::IRType;
+use crate::types::{IRType, ValueId};
 
 pub(super) fn lower_union_member_check(
     member_type: &ResolvedType,
@@ -44,22 +44,11 @@ pub(super) fn lower_union_member_check(
         };
         return lower_pattern_check(pattern, member_inputs, ctx, block);
     };
-    let tag = emit_union_tag(inputs.subject, &subject_ir, ctx, block);
-    let cond = emit_tag_eq(tag, member_index, ctx, block);
-    let mut steps = vec![TestStep {
-        cond,
-        test_block: block,
-    }];
+    let member_test = emit_member_test(inputs.subject, &subject_ir, member_index, ctx, block);
+    let mut steps = vec![member_test];
     let mut binds = Vec::new();
     let mut current_block = block;
-    let payload = BindStep {
-        op: BindOp::UnionPayload {
-            member_index,
-            member_type: member_ir.clone(),
-            union_type: subject_ir,
-        },
-        output_type: member_ir.clone(),
-    };
+    let payload = member_payload_step(member_index, &member_ir, &subject_ir);
     lower_subpattern_into(
         pattern,
         member_type,
@@ -80,6 +69,39 @@ pub(super) fn lower_union_member_check(
         },
         current_block,
     ))
+}
+
+/// Emit the test that `subject` holds the member at `member_index`
+/// of the union `subject_ir`.
+pub(super) fn emit_member_test(
+    subject: ValueId,
+    subject_ir: &IRType,
+    member_index: u8,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> TestStep {
+    let tag = emit_union_tag(subject, subject_ir, ctx, block);
+    TestStep {
+        cond: emit_tag_eq(tag, member_index, ctx, block),
+        test_block: block,
+    }
+}
+
+/// The step that reads the payload of the member at `member_index`
+/// from a value of the union `subject_ir`.
+pub(super) fn member_payload_step(
+    member_index: u8,
+    member_ir: &IRType,
+    subject_ir: &IRType,
+) -> BindStep {
+    BindStep {
+        op: BindOp::UnionPayload {
+            member_index,
+            member_type: member_ir.clone(),
+            union_type: subject_ir.clone(),
+        },
+        output_type: member_ir.clone(),
+    }
 }
 
 /// The tag of the member `member_ir` in the union `subject_ir`.

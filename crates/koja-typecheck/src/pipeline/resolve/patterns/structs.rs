@@ -2,11 +2,12 @@
 //! the shared field-pattern walker re-used by struct-shaped enum
 //! variants ([`super::enums::resolve_enum_struct_pattern`]).
 //!
-//! Field positions accept any pattern shape: wildcards, bindings,
-//! literals, nested structs, nested enums, or-alternatives. Omitted
-//! fields are implicit wildcards. IR lowering picks up the field
-//! bindings and any chained literal checks in koja-ir's
-//! `lower::patterns`.
+//! Field positions accept each pattern shape that the parser makes
+//! there, such as wildcards, bindings, literals, nested structs, and
+//! nested enums. The parser makes an or-pattern only at the top of a
+//! match arm, so a field never holds one. Omitted fields are
+//! implicit wildcards. IR lowering picks up the field bindings and
+//! any chained literal checks in koja-ir's `lower::patterns`.
 
 use koja_ast::ast::{Diagnostic, FieldPattern, Name, name_texts, path_text};
 use koja_ast::identifier::{Resolution, ResolvedType};

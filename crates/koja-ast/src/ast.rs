@@ -1515,24 +1515,23 @@ pub enum Pattern {
         fields: Vec<FieldPattern>,
         span: Span,
     },
-    /// A typed binding: `p: Post` -- matches a union member by type
-    /// and binds the unwrapped value. `local_id` is `None` after
-    /// parse and stamped by typecheck-resolve when the binding
-    /// enters scope (today only inside `receive` arms, while `match` arms
-    /// still reject typed bindings as a feature gap). The IR-side
-    /// translator reads it to thread the bound name through the same
-    /// `LocalRead` vocabulary as body-declared locals.
+    /// A typed binding: `p: Post`. On a union subject it matches the
+    /// members that the type names and binds the narrowed value. On
+    /// any other subject the type must be the subject type, and the
+    /// pattern binds the whole subject. A `receive` arm uses this
+    /// node for its envelope type. `local_id` is `None` after parse
+    /// and stamped by typecheck-resolve when the binding enters
+    /// scope. The IR-side translator reads it to thread the bound
+    /// name through the same `LocalRead` vocabulary as body-declared
+    /// locals.
     TypedBinding {
         local_id: Option<LocalId>,
         name: Name,
-        /// Resolved type of the bound payload, stamped by typecheck-
-        /// resolve when the pattern is admitted (today only the
-        /// pipeline `receive` arms, via
-        /// [`bind_receive_pattern`][resolver]). Lower passes consume
-        /// this directly so they do not have to re-walk `type_expr`
-        /// against the registry.
-        ///
-        /// [resolver]: https://docs.rs/koja-typecheck
+        /// Resolved type of the bound value, stamped by typecheck-
+        /// resolve when the pattern is admitted in a `match` arm or
+        /// a `receive` arm. Lower passes consume this directly so
+        /// they do not have to re-walk `type_expr` against the
+        /// registry.
         resolved_type: Option<ResolvedType>,
         type_expr: TypeExpr,
         span: Span,

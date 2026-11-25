@@ -373,12 +373,10 @@ fn emit_subpattern_projection(
 /// chain: prepend `prefix` to every nested [`PayloadBind`] (so it
 /// reads through the outer projection), and concatenate the
 /// nested [`TestStep`]s under the outer [`ChainMode::And`]
-/// discipline. Typecheck restricts nested or-patterns to literal /
-/// EnumUnit alternatives that produce no binds and a single
-/// Or-mode step. Lifting them into an And-chain would require
-/// re-coding the wiring, so the lowerer panics if it reaches
-/// here. (The fixtures gate currently rejects any nested
-/// or-pattern inside struct/enum fields.)
+/// discipline. An or-pattern never gets here, because the parser
+/// makes one only at the top of a match arm. Its Or-mode steps
+/// would need different wiring inside an And-chain, so the lowerer
+/// panics on one.
 pub(super) fn consume_inner_check(
     inner: PatternCheck,
     prefix: &BindStep,
