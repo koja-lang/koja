@@ -1,7 +1,8 @@
 //! Pattern-shape seal checks. Supported patterns are leaves
 //! (wildcards, literals, bindings, which must carry a stamped
 //! `LocalId`) plus the structural shapes resolve admits
-//! (`EnumUnit` / `EnumTuple` / `EnumStruct` / `Or` / `Struct`).
+//! (`EnumUnit` / `EnumTuple` / `EnumStruct` / `Or` / `Struct`), and
+//! the `UnionMember` wrapper that resolve puts around one of them.
 //! Every other shape is a feature-gap diagnostic in resolve and
 //! never reaches seal on the success path.
 
@@ -119,6 +120,14 @@ pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
                 );
             };
             seal_resolved_type(resolved_type, mode, *span);
+        }
+        Pattern::UnionMember {
+            member_type,
+            pattern,
+            span,
+        } => {
+            seal_resolved_type(member_type, mode, *span);
+            seal_pattern(pattern, mode);
         }
         other => seal_panic(
             &format!(

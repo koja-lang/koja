@@ -22,6 +22,9 @@
 //! - [`structs`]: plain-struct destructure and the field-pattern
 //!   walker shared with struct-shaped enum variants.
 //! - [`or_pattern`]: `A | B | C` alternatives.
+//! - [`union_member`]: a variant or struct pattern on a union
+//!   subject, wrapped in place in a `UnionMember` that records the
+//!   member it matches.
 //! - [`literals`]: literal-vs-subject type checking and the
 //!   canonical literal text that usefulness keys duplicate literals
 //!   on.
@@ -34,6 +37,7 @@ mod enums;
 mod literals;
 mod or_pattern;
 mod structs;
+mod union_member;
 mod usefulness;
 
 use koja_ast::ast::{Diagnostic, Pattern, name_texts};
@@ -57,6 +61,9 @@ pub(super) fn resolve_pattern(
     // Mirror of the value-side rewrite: `A.B { … }` becomes a `Struct`
     // pattern when the path names a struct.
     rewrite_dotted_struct_pattern(pat, resolver);
+    if union_member::resolve_through_union(pat, subject_ty, resolver, diagnostics) {
+        return;
+    }
     match pat {
         Pattern::Binding { local_id, name, .. } => {
             let id = resolver.scope.declare(name.as_str(), subject_ty.clone());
@@ -210,6 +217,13 @@ pub(super) fn resolve_pattern(
             *local_id = Some(id);
             *resolved_type = Some(resolved);
         }
+        // The wrapper already holds the member, so its pattern
+        // resolves against that member and not against the union.
+        Pattern::UnionMember {
+            member_type,
+            pattern,
+            ..
+        } => resolve_pattern(pattern, member_type, resolver, diagnostics),
     }
 }
 

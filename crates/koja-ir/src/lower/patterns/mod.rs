@@ -35,6 +35,10 @@
 //!   one [`BindOp::UnionPayload`] bind. A binding of a union of
 //!   members is one [`TestStep`] for each member the binding leaves
 //!   out, and one [`BindOp::UnionNarrow`] bind.
+//! - [`union_member`]: the wrapper that the typecheck puts around a
+//!   variant or struct pattern on a union subject. One tag test for
+//!   the member, then the inner pattern against the payload through
+//!   a [`BindOp::UnionPayload`] prefix.
 //! - [`literals`]: the `subject == const(value)` emission shared
 //!   between the dispatcher's `Pattern::Literal` arm and the
 //!   or-pattern literal-alternative arm.
@@ -45,6 +49,7 @@ mod or_pattern;
 mod structs;
 mod tuples;
 mod typed_binding;
+mod union_member;
 
 use std::collections::HashSet;
 
@@ -111,6 +116,7 @@ fn collect_pattern_binding_ids(pattern: &Pattern, ids: &mut HashSet<LocalId>) {
                 collect_pattern_binding_ids(branch, ids);
             }
         }
+        Pattern::UnionMember { pattern, .. } => collect_pattern_binding_ids(pattern, ids),
         Pattern::EnumUnit { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
     }
 }
@@ -370,6 +376,11 @@ pub(super) fn lower_pattern_check(
             ctx,
             block,
         )),
+        Pattern::UnionMember {
+            member_type,
+            pattern,
+            ..
+        } => union_member::lower_union_member_check(member_type, pattern, &inputs, ctx, block),
         Pattern::Wildcard { .. } => Ok((PatternCheck::CatchAll { binds: Vec::new() }, block)),
         other => {
             ctx.output.diagnostics.push(Diagnostic::error(

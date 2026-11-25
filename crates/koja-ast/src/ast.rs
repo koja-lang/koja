@@ -1537,6 +1537,18 @@ pub enum Pattern {
         type_expr: TypeExpr,
         span: Span,
     },
+    /// A pattern that matches one member of a union subject, then
+    /// matches `pattern` against that member. Only the typecheck
+    /// makes this node. Resolve wraps a variant or struct pattern in
+    /// it when the subject is a union, so `Parse.BadDigit(pos)` on a
+    /// `Net | Parse` subject becomes this node around the variant
+    /// pattern. `member_type` is the member that the pattern names,
+    /// and `span` is the span of the inner pattern.
+    UnionMember {
+        member_type: ResolvedType,
+        pattern: Box<Pattern>,
+        span: Span,
+    },
     /// A list pattern: `[head, tail]`.
     List { elements: Vec<Pattern>, span: Span },
     /// An anonymous tuple pattern such as `(a, b)`, always two or

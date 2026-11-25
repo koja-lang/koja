@@ -22,20 +22,14 @@ impl Process<WorkerConfig, Tick | Sig, String> for Worker
 
   fn handle(self, msg: Tick | Sig, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
-      t: Tick ->
-        match t
-          Tick.Beat(n) ->
-            "beat: #{n}".print()
-            ReplyTo.reply(from, "ok")
-            Step.Continue(self)
-        end
+      Tick.Beat(n) ->
+        "beat: #{n}".print()
+        ReplyTo.reply(from, "ok")
+        Step.Continue(self)
 
-      s: Sig ->
-        match s
-          Sig.Stop ->
-            ReplyTo.reply(from, "bye")
-            Step.Done(StopReason.Shutdown)
-        end
+      Sig.Stop ->
+        ReplyTo.reply(from, "bye")
+        Step.Done(StopReason.Shutdown)
     end
   end
 end

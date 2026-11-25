@@ -147,6 +147,24 @@ match wide
 end
 ```
 
+A variant pattern or a struct pattern reads a union too. The type that the
+pattern names picks the member, so the arm needs no typed binding first.
+
+```koja
+error: Parse | Net = Parse.Empty
+
+match error
+  Parse.BadDigit(pos) -> pos
+  Parse.Empty -> 0
+  _net: Net -> 1
+end
+```
+
+The pattern must pick exactly one member. `Option.Some(n)` picks no member of
+`Option<Int> | Option<String>`, so a typed binding must come first there. A
+member counts as covered when its own patterns cover it, and the `match`
+above is exhaustive.
+
 A union does conform to protocols, through its members.
 
 - `Debug`, `Equality`, and `Hash` are built in. A union has `format()`,
@@ -205,6 +223,15 @@ carry the result.
   `Coercion::UnionWiden` on the expression that widens.
 - `narrow_union_hint` picks the member for a literal.
 - `recursive_alias` finds the alias for the union of rule 7.
+- `resolve_through_union` picks the member for a variant or struct pattern
+  under rule 6. It puts a `Pattern::UnionMember` that holds the member around
+  the pattern.
+
+The typecheck records a decision in one of two forms. A conversion that
+always succeeds is an annotation on the expression, as `Coercion::UnionWiden`
+is. A test that can fail is a node, as `Pattern::UnionMember` is. Coverage
+must count the test and the IR must branch on it, so each of them reads it
+from the tree.
 
 In the IR, a union is `IRType::Union` with a name, and a declaration with
 that name holds its members. The name of an anonymous union comes from the

@@ -85,6 +85,7 @@ impl Printer {
             Pattern::Tuple { elements, span } => {
                 self.pattern_elements_to_doc("(", ")", elements, *span)
             }
+            Pattern::UnionMember { pattern, .. } => self.pattern_to_doc(pattern),
             // Leaves own no comment slots. A comment inside one (a typed
             // binding's type expression) relocates during attachment.
             _ => util::pattern_to_doc(pattern),

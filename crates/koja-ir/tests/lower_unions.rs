@@ -14,6 +14,10 @@
 //!   const-`==` predicate) and a payload extract
 //!   ([`IRInstruction::UnionPayloadGet`]) that feeds the bound
 //!   local at the head of the body block.
+//! - A variant or struct pattern on a union subject lowers to the
+//!   same tag check, then the check of the pattern against the
+//!   payload of the member. A union that collapses to the member at
+//!   a type argument has no tag check.
 //! - A call through a protocol bound with a union receiver lowers to
 //!   one tag switch with a call to the member's own impl in each arm.
 //! - Each package that lowers a union holds exactly one
@@ -30,7 +34,10 @@
 
 use std::collections::BTreeMap;
 
-use koja_ir::{ConstValue, IRInstruction, IRScript, IRSymbol, IRType, IRUnionDecl, ValueId};
+use koja_ir::{
+    ConstValue, IRBasicBlock, IRFunction, IRInstruction, IRScript, IRSymbol, IRType, IRUnionDecl,
+    ValueId,
+};
 
 mod common;
 
@@ -192,6 +199,230 @@ fn typed_binding_lowers_to_tag_test_and_payload_get() {
         vec![0, 1],
         "expected payload extracts to cover both canonical members [0, 1], got {payload_indices:?}",
     );
+}
+
+/// The one block of `blocks` that holds an instruction that `pick`
+/// accepts.
+fn block_with(blocks: &[IRBasicBlock], pick: impl Fn(&IRInstruction) -> bool) -> &IRBasicBlock {
+    let mut holders = blocks
+        .iter()
+        .filter(|block| block.instructions.iter().any(&pick));
+    let block = holders
+        .next()
+        .expect("expected a block with the instruction");
+    assert!(
+        holders.next().is_none(),
+        "expected one block with the instruction",
+    );
+    block
+}
+
+#[test]
+fn variant_pattern_on_a_union_tests_the_member_then_the_variant() {
+    // The member test and the variant test are two steps. The
+    // variant test reads the payload, so it must be in a block that
+    // only the success edge of the member test enters.
+    let source = "
+        enum Parse
+          BadDigit(Int)
+          Empty
+        end
+
+        enum Net
+          Timeout
+        end
+
+        fn route(error: Parse | Net) -> Int
+          match error
+            Parse.BadDigit(pos) -> pos
+            _ -> 0
+          end
+        end
+
+        route(Parse.Empty)
+        ";
+    let script = lower(source);
+    let blocks = &script_function(&script, "route").blocks;
+
+    let member_test = block_with(blocks, |i| matches!(i, IRInstruction::UnionTagGet { .. }));
+    let variant_test = block_with(blocks, |i| matches!(i, IRInstruction::EnumTagGet { .. }));
+    assert_ne!(
+        member_test.id, variant_test.id,
+        "expected the variant test in its own block, after the member test",
+    );
+
+    let payloads: Vec<ValueId> = variant_test
+        .instructions
+        .iter()
+        .filter_map(|i| match i {
+            IRInstruction::UnionPayloadGet { dest, .. } => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    let tested = variant_test.instructions.iter().find_map(|i| match i {
+        IRInstruction::EnumTagGet { value, .. } => Some(*value),
+        _ => None,
+    });
+    assert!(
+        matches!((payloads.as_slice(), tested), ([payload], Some(value)) if *payload == value),
+        "expected the variant test to read the payload of the member, got payloads \
+         {payloads:?} and tag subject {tested:?}",
+    );
+}
+
+#[test]
+fn struct_pattern_on_a_union_binds_a_field_through_the_member_payload() {
+    // `Cat{name: n}` has no test of its own, so the arm is one member
+    // test. The bind reads the payload and then the field.
+    let source = format!(
+        "{PET_PRELUDE}
+        fn name(pet: Pet) -> String
+          match pet
+            Cat{{name: n}} -> n
+            dog: Dog -> dog.name
+          end
+        end
+
+        name(Cat{{name: \"Tom\"}})
+        "
+    );
+    let script = lower(&source);
+    let name_fn = script_function(&script, "name");
+
+    let cat_payloads: Vec<ValueId> = all_instructions(&name_fn.blocks)
+        .filter_map(|i| match i {
+            IRInstruction::UnionPayloadGet {
+                dest,
+                member_index: 0,
+                ..
+            } => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    let [cat_payload] = cat_payloads.as_slice() else {
+        panic!("expected one payload read of the `Cat` member, got {cat_payloads:?}");
+    };
+    assert!(
+        all_instructions(&name_fn.blocks)
+            .any(|i| matches!(i, IRInstruction::FieldGet { base, .. } if base == cat_payload)),
+        "expected a FieldGet that reads `name` from the `Cat` payload {cat_payload:?}",
+    );
+}
+
+/// A generic function that matches an `Option<Int> | T` value with
+/// variant patterns of `Option<Int>`.
+const PICK_PRELUDE: &str = "
+        struct Holder<T>
+          value: Option<Int> | T
+        end
+
+        fn pick<T>(holder: Holder<T>) -> Int
+          match holder.value
+            Option.Some(n) -> n
+            Option.None -> -1
+            _other: T -> 0
+          end
+        end
+";
+
+/// The copies of `pick` in the test package. The first list holds
+/// each copy whose mangled name contains `needle`, and the second
+/// list holds the others.
+fn pick_copies<'a>(
+    script: &'a IRScript,
+    needle: &str,
+) -> (Vec<&'a IRFunction>, Vec<&'a IRFunction>) {
+    script
+        .packages
+        .iter()
+        .filter(|p| p.package == PACKAGE)
+        .flat_map(|p| p.functions.values())
+        .filter(|f| f.symbol.mangled().starts_with(&format!("{PACKAGE}.pick")))
+        .partition(|f| f.symbol.mangled().contains(needle))
+}
+
+#[test]
+fn variant_pattern_on_a_collapsed_union_has_no_member_test() {
+    // `Option<Int> | T` at `T = Option<Int>` is `Option<Int>`. That
+    // copy of `pick` matches the enum with no union test. The copy
+    // at `T = String` keeps the union and tests the member.
+    let source = format!(
+        "{PICK_PRELUDE}
+        text: Holder<String> = Holder{{value: \"a\"}}
+        same: Holder<Option<Int>> = Holder{{value: Option.None}}
+        pick(text) + pick(same)
+        "
+    );
+    let script = lower(&source);
+    let union_tests = |function: &IRFunction| {
+        all_instructions(&function.blocks)
+            .filter(|i| matches!(i, IRInstruction::UnionTagGet { .. }))
+            .count()
+    };
+    let (kept, collapsed) = pick_copies(&script, "String");
+    let ([kept], [collapsed]) = (kept.as_slice(), collapsed.as_slice()) else {
+        panic!("expected one `pick` at `String` and one at `Option<Int>`");
+    };
+    assert!(
+        union_tests(kept) > 0,
+        "expected `{}` to test the union member",
+        kept.symbol,
+    );
+    assert_eq!(
+        union_tests(collapsed),
+        0,
+        "expected `{}` to match the enum with no union test",
+        collapsed.symbol,
+    );
+    assert!(
+        all_instructions(&collapsed.blocks).any(|i| matches!(i, IRInstruction::EnumTagGet { .. })),
+        "expected `{}` to test the variant",
+        collapsed.symbol,
+    );
+}
+
+#[test]
+fn variant_pattern_keeps_its_member_next_to_a_second_member_of_the_enum() {
+    // `Option<Int> | T` at `T = Option<String>` holds two `Option`
+    // members. The variant patterns still read the `Option<Int>`
+    // member, and no payload read is of `Option<String>` but the one
+    // for `_other`.
+    let source = format!(
+        "{PICK_PRELUDE}
+        number: Option<Int> = Option.Some(4)
+        both: Holder<Option<String>> = Holder{{value: number}}
+        pick(both)
+        "
+    );
+    let script = lower(&source);
+    let (copies, _) = pick_copies(&script, "String");
+    let [pick] = copies.as_slice() else {
+        panic!("expected one `pick` at `Option<String>`");
+    };
+
+    let variant_subjects: Vec<ValueId> = all_instructions(&pick.blocks)
+        .filter_map(|i| match i {
+            IRInstruction::EnumTagGet { value, .. } => Some(*value),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        variant_subjects.len(),
+        2,
+        "expected one variant test for each of `Option.Some` and `Option.None`",
+    );
+    for subject in variant_subjects {
+        let member = all_instructions(&pick.blocks).find_map(|i| match i {
+            IRInstruction::UnionPayloadGet {
+                dest, member_type, ..
+            } if *dest == subject => Some(format!("{member_type:?}")),
+            _ => None,
+        });
+        assert!(
+            member.as_deref().is_some_and(|m| m.contains("Int64")),
+            "expected the variant test to read the `Option<Int>` member, got {member:?}",
+        );
+    }
 }
 
 #[test]

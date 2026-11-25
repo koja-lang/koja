@@ -110,18 +110,23 @@ impl VisitorMut for Substituter<'_> {
         visit_mut::walk_expr_mut(self, expr);
     }
 
-    /// Only [`Pattern::TypedBinding`] carries a generic-bearing
-    /// resolution. `match` arms on a union subject and `receive` arms
-    /// bind through it with annotations such as `xs: List<T>` or
-    /// `((), Option<ReplyTo<R>>)`, and a raw `T` left there would leak
-    /// into `resolved_type_to_ir_type` on re-lower.
+    /// [`Pattern::TypedBinding`] and [`Pattern::UnionMember`] carry a
+    /// generic-bearing resolution. `match` arms on a union subject
+    /// and `receive` arms bind through a typed binding with
+    /// annotations such as `xs: List<T>` or
+    /// `((), Option<ReplyTo<R>>)`. A union member pattern holds the
+    /// member it matches, such as `Option<T>`. A raw `T` left in
+    /// either would leak into `resolved_type_to_ir_type` on re-lower.
     fn visit_pattern_mut(&mut self, pattern: &mut Pattern) {
-        if let Pattern::TypedBinding {
-            resolved_type: Some(ty),
-            ..
-        } = pattern
-        {
-            self.rewrite(ty);
+        match pattern {
+            Pattern::TypedBinding {
+                resolved_type: Some(ty),
+                ..
+            }
+            | Pattern::UnionMember {
+                member_type: ty, ..
+            } => self.rewrite(ty),
+            _ => {}
         }
         visit_mut::walk_pattern_mut(self, pattern);
     }

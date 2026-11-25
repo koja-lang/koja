@@ -116,15 +116,10 @@ test "TCPSocket.read fails with TimedOut when the peer is silent"
   _ = listener.close()
 
   match result
-    Result.Ok(_) ->
-      fail "expected read to time out"
-
+    Result.Ok(_) -> fail "expected read to time out"
+    Result.Err(IOError.TimedOut) -> ()
     Result.Err(io_error: IOError) ->
-      match io_error
-        IOError.TimedOut -> ()
-        _ -> fail "expected TimedOut, got: #{io_error.message()}"
-      end
-
+      fail "expected TimedOut, got: #{io_error.message()}"
     Result.Err(tls_error: TLSError) ->
       fail "expected TimedOut, got: #{tls_error.message()}"
   end

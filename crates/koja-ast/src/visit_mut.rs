@@ -494,6 +494,7 @@ pub fn walk_pattern_mut<V: VisitorMut + ?Sized>(v: &mut V, pattern: &mut Pattern
             }
         }
         Pattern::TypedBinding { type_expr, .. } => v.visit_type_expr_mut(type_expr),
+        Pattern::UnionMember { pattern, .. } => v.visit_pattern_mut(pattern),
         Pattern::Or { patterns, .. } => {
             for pattern in patterns {
                 v.visit_pattern_mut(pattern);

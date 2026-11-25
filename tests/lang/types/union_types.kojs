@@ -60,3 +60,36 @@ slot = Comment{body: "Hi"}
 thread = Thread{top: p}
 thread.top = Comment{body: "Yo"}
 IO.puts("#{describe(slot)}, #{describe(thread.top)}")
+
+# A struct pattern and a variant pattern each match one member
+enum Flag
+  On
+  Off(String)
+end
+
+fn summary(x: Post | Comment | Flag) -> String
+  match x
+    Post{title: "Hello"} -> "the hello post"
+    Post{title: t} -> "post #{t}"
+    Comment{body: b} -> "comment #{b}"
+    Flag.On -> "on"
+    Flag.Off(reason) -> "off #{reason}"
+  end
+end
+
+IO.puts("#{summary(p)}, #{summary(Post{title: "Bye"})}")
+IO.puts("#{summary(Comment{body: "Hi"})}, #{summary(Flag.On)}")
+IO.puts(summary(Flag.Off("spam")))
+
+# The same patterns match a union inside a variant payload
+fn inside(slot: Option<Post | Flag>) -> String
+  match slot
+    Option.Some(Post{title: t}) -> "some post #{t}"
+    Option.Some(Flag.Off(reason)) -> "some off #{reason}"
+    Option.Some(Flag.On) -> "some on"
+    Option.None -> "none"
+  end
+end
+
+IO.puts("#{inside(Option.Some(p))}, #{inside(Option.Some(Flag.Off("late")))}")
+IO.puts("#{inside(Option.Some(Flag.On))}, #{inside(Option.None)}")

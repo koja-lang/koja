@@ -26,6 +26,10 @@
 //!   missing-member diagnostic. A duplicate member arm warns as
 //!   unreachable. Pointing a typed-binding at a non-union surfaces
 //!   the narrowing-site diagnostic.
+//! - **Member patterns**: a variant or struct pattern on a union
+//!   subject matches the member that its type names. Resolve records
+//!   that member in a `UnionMember` around the pattern, and coverage
+//!   names a missing variant or a missing member.
 //! - **Display**: alias names round-trip in diagnostics: a
 //!   `type Pet = Cat | Dog` mismatch reports `Pet`, not the expanded
 //!   `Cat | Dog`.
@@ -41,7 +45,7 @@
 //!   an element of a tuple literal on the right of a destructuring
 //!   assignment widen a member into the type of the target.
 
-use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Statement};
+use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Pattern, Statement};
 use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::util::dedent;
@@ -1087,6 +1091,335 @@ fn typed_binding_member_not_in_union_diagnoses() {
         source,
         &["type `TestApp.C` is not a member of union `TestApp.A | TestApp.B`"],
     );
+}
+
+/// Declarations for the tests of a variant or struct pattern on a
+/// union subject. They are two enums, two structs, and one generic
+/// struct.
+const MEMBER_PATTERN_PRELUDE: &str = "
+    enum Parse
+      BadDigit(Int)
+      Empty
+    end
+
+    enum Net
+      Timeout
+    end
+
+    struct Cat
+      name: String
+    end
+
+    struct Dog
+      name: String
+      age: Int
+    end
+
+    struct Crate<T>
+      item: T
+    end
+    ";
+
+fn member_pattern_script(tail: &str) -> String {
+    format!("{}{}", dedent(MEMBER_PATTERN_PRELUDE), dedent(tail))
+}
+
+/// The member type on each arm of the `match` that ends the script.
+/// Panics when an arm pattern is not a `UnionMember`.
+fn arm_member_types(checked: &CheckedProgram) -> Vec<&ResolvedType> {
+    let ExprKind::Match { arms, .. } = &trailing_expr(checked).kind else {
+        panic!("expected the script to end with a `match`");
+    };
+    arms.iter()
+        .map(|arm| match &arm.pattern {
+            Pattern::UnionMember { member_type, .. } => member_type,
+            other => panic!("expected a `UnionMember` arm pattern, got {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn variant_pattern_on_a_union_subject_records_its_member() {
+    let source = member_pattern_script(
+        "
+        error: Parse | Net = Parse.Empty
+        match error
+          Parse.BadDigit(pos) -> pos
+          Parse.Empty -> 0
+          Net.Timeout -> 1
+        end
+        ",
+    );
+    let checked = typecheck(&source);
+    let parse = package_leaf(&checked, "Parse");
+    let net = package_leaf(&checked, "Net");
+    assert_eq!(arm_member_types(&checked), [&parse, &parse, &net]);
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn struct_pattern_on_a_union_subject_records_its_member() {
+    let source = member_pattern_script(
+        "
+        pet: Cat | Dog = Cat{name: \"Tom\"}
+        match pet
+          Cat{name: n} -> n
+          Dog{name: n, age: 3} -> n
+          Dog{name: n} -> n
+        end
+        ",
+    );
+    let checked = typecheck(&source);
+    let cat = package_leaf(&checked, "Cat");
+    let dog = package_leaf(&checked, "Dog");
+    assert_eq!(arm_member_types(&checked), [&cat, &dog, &dog]);
+    assert_eq!(trailing_resolution(&checked), string_type(&checked));
+}
+
+#[test]
+fn variant_pattern_matches_a_union_in_a_variant_payload() {
+    // The repro of issue #156. The payload of `Result.Err` is a
+    // union, and each inner pattern names one member of it.
+    let source = member_pattern_script(
+        "
+        fn route(outcome: Result<Int, Parse | Net>) -> Int
+          match outcome
+            Result.Ok(value) -> value
+            Result.Err(Parse.BadDigit(pos)) -> pos
+            Result.Err(Parse.Empty) -> 0
+            Result.Err(Net.Timeout) -> 1
+          end
+        end
+
+        route(Result.Ok(1))
+        ",
+    );
+    typecheck(&source);
+}
+
+#[test]
+fn variant_pattern_matches_a_member_of_a_union_alias() {
+    let source = member_pattern_script(
+        "
+        type AppError = Parse | Net
+
+        fn route(error: AppError) -> Int
+          match error
+            Parse.BadDigit(pos) -> pos
+            Parse.Empty -> 0
+            Net.Timeout -> 1
+          end
+        end
+
+        route(Net.Timeout)
+        ",
+    );
+    typecheck(&source);
+}
+
+#[test]
+fn variant_pattern_shares_a_match_with_a_typed_binding() {
+    let source = member_pattern_script(
+        "
+        fn route(error: Parse | Net) -> Int
+          match error
+            Parse.BadDigit(pos) -> pos
+            Parse.Empty -> 0
+            _net: Net -> 1
+          end
+        end
+
+        route(Net.Timeout)
+        ",
+    );
+    typecheck(&source);
+}
+
+#[test]
+fn variant_patterns_that_miss_a_variant_name_the_variant() {
+    let source = member_pattern_script(
+        "
+        fn route(error: Parse | Net) -> Int
+          match error
+            Parse.BadDigit(pos) -> pos
+            Net.Timeout -> 1
+          end
+        end
+
+        route(Net.Timeout)
+        ",
+    );
+    assert_script_fails_with(
+        &source,
+        &["match is not exhaustive. Missing pattern(s) `TestApp.Parse.Empty`"],
+    );
+}
+
+#[test]
+fn variant_patterns_that_miss_a_member_name_the_member() {
+    let source = member_pattern_script(
+        "
+        fn route(error: Parse | Net) -> Int
+          match error
+            Parse.BadDigit(pos) -> pos
+            Parse.Empty -> 0
+          end
+        end
+
+        route(Net.Timeout)
+        ",
+    );
+    assert_script_fails_with(
+        &source,
+        &["match is not exhaustive. Missing pattern(s) `TestApp.Net`"],
+    );
+}
+
+#[test]
+fn variant_pattern_after_a_typed_binding_of_its_member_warns_unreachable() {
+    let source = member_pattern_script(
+        "
+        fn route(error: Parse | Net) -> Int
+          match error
+            _parse: Parse -> 0
+            Parse.Empty -> 1
+            Net.Timeout -> 2
+          end
+        end
+
+        route(Net.Timeout)
+        ",
+    );
+    let checked = typecheck(&source);
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings.iter().any(|m| m.contains("unreachable")),
+        "expected an unreachable warning for `Parse.Empty`, got {warnings:?}",
+    );
+}
+
+#[test]
+fn variant_pattern_of_a_type_outside_the_union_diagnoses() {
+    let source = member_pattern_script(
+        "
+        fn route(pet: Cat | Dog) -> Int
+          match pet
+            Net.Timeout -> 1
+            _ -> 0
+          end
+        end
+
+        route(Cat{name: \"Tom\"})
+        ",
+    );
+    assert_script_fails_with(
+        &source,
+        &["type `TestApp.Net` is not a member of union `TestApp.Cat | TestApp.Dog`"],
+    );
+}
+
+#[test]
+fn struct_pattern_that_names_two_members_diagnoses() {
+    // `Crate{...}` does not say which of the two `Crate` members it
+    // matches. The hint names a typed binding, which does.
+    let source = member_pattern_script(
+        "
+        fn open(item: Crate<Int> | Crate<String>) -> Int
+          match item
+            Crate{item: _} -> 1
+          end
+        end
+
+        open(Crate{item: 1})
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    assert!(
+        failure.diagnostics.iter().any(|d| {
+            d.message.contains(
+                "`TestApp.Crate` names more than one member of union \
+                 `TestApp.Crate<Int> | TestApp.Crate<String>`",
+            ) && d
+                .hint
+                .as_deref()
+                .is_some_and(|h| h.contains("`value: TestApp.Crate<Int> ->`"))
+        }),
+        "expected the ambiguous member error with a typed binding hint, got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn or_pattern_rejects_a_variant_of_a_union_member() {
+    let source = member_pattern_script(
+        "
+        fn route(error: Parse | Net) -> Int
+          match error
+            Parse.Empty | Net.Timeout -> 1
+            _ -> 0
+          end
+        end
+
+        route(Net.Timeout)
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    assert!(
+        failure.diagnostics.iter().any(|d| {
+            d.message
+                .contains("an or-pattern cannot hold a variant pattern when the subject is a union")
+                && d.hint
+                    .as_deref()
+                    .is_some_and(|h| h.contains("write one arm for each alternative"))
+        }),
+        "expected the or-pattern error with the one arm hint, got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn variant_pattern_of_an_unknown_variant_reports_one_error() {
+    // The member is found, so the only error is the one for the
+    // variant. No union mismatch follows it.
+    let source = member_pattern_script(
+        "
+        fn route(error: Parse | Net) -> Int
+          match error
+            Parse.Nope -> 1
+            _ -> 0
+          end
+        end
+
+        route(Net.Timeout)
+        ",
+    );
+    let failure = typecheck_fail(&source);
+    let messages = diagnostic_messages(&failure);
+    assert_eq!(messages, ["`TestApp.Parse` has no variant `Nope`"]);
+}
+
+#[test]
+fn variant_pattern_matches_a_member_of_a_generic_union() {
+    // `Option<Int> | T` holds `Option<Int>` for every `T`, so the
+    // variant patterns name that member in the generic body.
+    let source = "
+        struct Holder<T>
+          value: Option<Int> | T
+        end
+
+        fn pick<T>(holder: Holder<T>) -> Int
+          match holder.value
+            Option.Some(n) -> n
+            Option.None -> -1
+            _other: T -> 0
+          end
+        end
+
+          text: Holder<String> = Holder{value: \"a\"}
+          same: Holder<Option<Int>> = Holder{value: Option.None}
+          pick(text) + pick(same)
+        ";
+    typecheck(&dedent(source));
 }
 
 const HOLDER_PRELUDE: &str = "

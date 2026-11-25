@@ -61,11 +61,11 @@ struct App: Process<App, (), String>
       Result.Ok(_) ->
         IO.puts("read returned data")
 
+      Result.Err(IOError.TimedOut) ->
+        IO.puts("read timed out")
+
       Result.Err(io_error: IOError) ->
-        match io_error
-          IOError.TimedOut -> IO.puts("read timed out")
-          _ -> IO.puts("read failed: " <> io_error.message())
-        end
+        IO.puts("read failed: " <> io_error.message())
 
       Result.Err(tls_error: TLSError) ->
         IO.puts("read failed: " <> tls_error.message())

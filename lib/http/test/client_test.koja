@@ -124,17 +124,11 @@ test "request fails with Parse when the server closes with no response"
   _ = try finish_server(listener, server)
 
   match result
+    Result.Err(Error.Parse(Parser.Error.Malformed(_))) -> ()
     Result.Err(http_error: Error) ->
-      match http_error
-        Error.Parse(Parser.Error.Malformed(_)) -> ()
-        _ -> fail "expected Parse, got '#{http_error.message()}'"
-      end
-
-    Result.Err(other) ->
-      fail "expected Parse, got '#{failure_text(other)}'"
-
-    Result.Ok(_) ->
-      fail "expected Parse, got a response"
+      fail "expected Parse, got '#{http_error.message()}'"
+    Result.Err(other) -> fail "expected Parse, got '#{failure_text(other)}'"
+    Result.Ok(_) -> fail "expected Parse, got a response"
   end
 end
 
@@ -201,17 +195,12 @@ end
 
 priv fn expect_invalid_url(url: String, expected: String) ! Test.Failure
   match request(Method.Get, url, Headers.new(), "")
+    Result.Err(Error.InvalidUrl(message)) -> assert message.contains?(expected)
     Result.Err(http_error: Error) ->
-      match http_error
-        Error.InvalidUrl(message) -> assert message.contains?(expected)
-        _ -> fail "expected InvalidUrl, got '#{http_error.message()}'"
-      end
-
+      fail "expected InvalidUrl, got '#{http_error.message()}'"
     Result.Err(other) ->
       fail "expected InvalidUrl, got '#{failure_text(other)}'"
-
-    Result.Ok(_) ->
-      fail "expected InvalidUrl for '#{url}'"
+    Result.Ok(_) -> fail "expected InvalidUrl for '#{url}'"
   end
 end
 

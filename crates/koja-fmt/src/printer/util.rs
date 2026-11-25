@@ -554,6 +554,9 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             text(": "),
             type_expr_to_doc(type_expr),
         ]),
+        // Only the typecheck makes this node, and it has no syntax of
+        // its own. The source text is the inner pattern.
+        Pattern::UnionMember { pattern, .. } => pattern_to_doc(pattern),
         Pattern::List { elements, .. } => {
             let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
             concat(vec![text("["), intersperse(elems, text(", ")), text("]")])

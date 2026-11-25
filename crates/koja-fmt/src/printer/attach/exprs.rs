@@ -415,6 +415,7 @@ impl Attacher<'_> {
                     self.walk_pattern(alternative);
                 }
             }
+            Pattern::UnionMember { pattern, .. } => self.walk_pattern(pattern),
             _ => {}
         }
     }

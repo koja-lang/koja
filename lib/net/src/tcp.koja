@@ -362,13 +362,8 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
     -> Step<Self>
 
     match msg
-      io: IOReady ->
-        self.on_io_ready(io)
-
-      cmd: TCPServerMsg ->
-        match cmd
-          TCPServerMsg.AcceptReady -> self.drain_accepts()
-        end
+      io: IOReady -> self.on_io_ready(io)
+      TCPServerMsg.AcceptReady -> self.drain_accepts()
     end
   end
 
