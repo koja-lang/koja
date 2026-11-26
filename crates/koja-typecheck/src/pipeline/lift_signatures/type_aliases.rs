@@ -11,10 +11,19 @@
 //! offending alias's expansion is rewritten to
 //! [`ResolvedType::Failed`] so downstream peels short-circuit cleanly.
 //!
+//! A third sweep diagnoses each alias that is a member of a union in
+//! its own definition, as in `type T = Int | List<Float | T>`. A
+//! fourth sweep builds the unions of each alias again, each alias
+//! after the aliases it reads. Each alias resolves in file order, so
+//! a union that names a later alias first holds that alias as one
+//! member. `type B = Int | A` is then the same type before and after
+//! `type A = String | Bool`, and so is `type B = List<Int | A>`.
+//! [`super::type_declaration_order`] holds both sweeps.
+//!
 //! A guard is a type argument of `List`, `Map`, `Set`, or a generic
 //! struct or enum. A value of a guarded type has a fixed size, so an
 //! alias can name itself there, as in `type Tree = Int | List<Tree>`.
-//! A third sweep records each alias that does so on the registry.
+//! A fifth sweep records each alias that does so on the registry.
 //! Such an alias must be a union, because the union is what the IR
 //! gives a name of its own.
 
@@ -27,12 +36,16 @@ use crate::program::CheckedPackage;
 use crate::registry::{BuiltinShape, GlobalKind, GlobalRegistry};
 
 use super::for_each_item;
+use super::type_declaration_order::{
+    ContentEdge, content_edges, diagnose_content_cycles, rebuild_in_dependency_order,
+};
 use super::types::{TypeParamScope, resolve_type_expr};
 
 /// Lift every `Item::TypeAlias` across every file. Resolve the RHS,
 /// stamp the resulting `ResolvedType` on the registered alias
 /// entry. Then sweep for cycles and rewrite cycling aliases to
-/// `ResolvedType::Failed` so subsequent peels short-circuit.
+/// `ResolvedType::Failed` so subsequent peels short-circuit. The
+/// module doc describes the sweeps that follow.
 pub(super) fn lift_type_aliases(
     packages: &mut [CheckedPackage],
     registry: &mut GlobalRegistry,
@@ -59,26 +72,27 @@ pub(super) fn lift_type_aliases(
             scope.registry.set_type_alias_definition(id, resolved);
         },
     );
-    diagnose_alias_cycles(packages, registry, diagnostics);
+    let sites = collect_alias_sites(packages, registry);
+    let sound = diagnose_alias_cycles(sites, registry, diagnostics);
+    let ordered = diagnose_content_cycles(sound, registry, diagnostics);
+    rebuild_in_dependency_order(&ordered, registry);
+    record_recursive_aliases(&ordered, registry, diagnostics);
 }
 
 /// One registered alias's identity plus the declaration span for
-/// attributing a cycle diagnostic.
-struct AliasSite {
-    id: GlobalRegistryId,
-    identifier: Identifier,
-    span: koja_ast::span::Span,
+/// attributing a cycle diagnostic. `content_edges` holds each place
+/// where the right side reads the expansion of another alias.
+pub(super) struct AliasSite {
+    pub(super) content_edges: Vec<ContentEdge>,
+    pub(super) id: GlobalRegistryId,
+    pub(super) identifier: Identifier,
+    pub(super) span: koja_ast::span::Span,
 }
 
-/// For each alias entry, walk its expansion looking for itself. On a
-/// cycle, emit one diagnostic and rewrite the expansion to
-/// `ResolvedType::Failed` so downstream peels return the alias's
-/// `Named` head unchanged (no infinite recursion at peel time).
-fn diagnose_alias_cycles(
-    packages: &[CheckedPackage],
-    registry: &mut GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+/// One site for each alias declaration of `packages`, in file order.
+/// The resolve sweep must run first, because the content edges come
+/// from the stamps it leaves on each right side.
+fn collect_alias_sites(packages: &[CheckedPackage], registry: &GlobalRegistry) -> Vec<AliasSite> {
     let mut alias_sites: Vec<AliasSite> = Vec::new();
     for pkg in packages {
         for file in &pkg.files {
@@ -89,6 +103,7 @@ fn diagnose_alias_cycles(
                 let identifier = Identifier::single(&pkg.package, alias.name.text.clone());
                 if let Some((id, entry)) = registry.lookup(&identifier) {
                     alias_sites.push(AliasSite {
+                        content_edges: content_edges(&alias.type_expr, registry),
                         id,
                         identifier: entry.identifier.clone(),
                         span: alias.span,
@@ -97,6 +112,19 @@ fn diagnose_alias_cycles(
             }
         }
     }
+    alias_sites
+}
+
+/// For each alias entry, walk its expansion looking for itself. On a
+/// cycle, emit one diagnostic and rewrite the expansion to
+/// `ResolvedType::Failed` so downstream peels return the alias's
+/// `Named` head unchanged (no infinite recursion at peel time).
+/// Returns the sites with no such cycle.
+fn diagnose_alias_cycles(
+    alias_sites: Vec<AliasSite>,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<AliasSite> {
     // Detect every cycle before rewriting any expansion, so all
     // members of one cycle diagnose rather than just the first.
     let (cycling, sound): (Vec<AliasSite>, Vec<AliasSite>) =
@@ -113,7 +141,7 @@ fn diagnose_alias_cycles(
         ));
         registry.set_type_alias_definition_force(site.id, ResolvedType::Failed);
     }
-    record_recursive_aliases(&sound, registry, diagnostics);
+    sound
 }
 
 /// Record each alias that reaches itself through a guard. A union
@@ -160,7 +188,7 @@ fn names_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     )
 }
 
-fn is_alias(id: GlobalRegistryId, registry: &GlobalRegistry) -> bool {
+pub(super) fn is_alias(id: GlobalRegistryId, registry: &GlobalRegistry) -> bool {
     matches!(
         registry.get(id).map(|entry| &entry.kind),
         Some(GlobalKind::TypeAlias(_))

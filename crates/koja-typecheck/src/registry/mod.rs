@@ -693,11 +693,13 @@ impl GlobalRegistry {
     }
 
     /// Overwrite an alias's expansion regardless of its current
-    /// stamp state. Used by `lift_type_aliases`'s cycle sweep to
-    /// rewrite cycling aliases to `ResolvedType::Failed` so
-    /// downstream peels short-circuit cleanly. Panics if `id` is
-    /// not a `TypeAlias` entry. Only the cycle pass should call
-    /// this.
+    /// stamp state. Used by the two cycle sweeps of
+    /// `lift_type_aliases` to rewrite cycling aliases to
+    /// `ResolvedType::Failed` so downstream peels short-circuit
+    /// cleanly. Also used by the sweep that builds the unions of each
+    /// alias again, to store the result. Panics if `id` is not a
+    /// `TypeAlias` entry. Only the sweeps of `lift_type_aliases`
+    /// should call this.
     pub(crate) fn set_type_alias_definition_force(
         &mut self,
         id: GlobalRegistryId,

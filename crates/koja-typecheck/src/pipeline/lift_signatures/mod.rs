@@ -36,6 +36,7 @@ mod protocols;
 mod rename_type_params;
 mod structs;
 mod type_aliases;
+mod type_declaration_order;
 mod types;
 
 pub(crate) use impls::resolve_target_bounds;

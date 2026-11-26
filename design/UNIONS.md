@@ -195,6 +195,22 @@ Two aliases can name each other the same way. An alias cannot name itself
 as a direct member, or through a tuple, a function type, or a `CPtr`. Only
 an alias of a union can be recursive.
 
+A type declaration also cannot be a member of a union inside its own
+definition, as in `type Tree = Int | List<Float | Tree>`. Rule 1 has no
+answer for that union. The flat form of `Float | Tree` holds
+`List<Float | Tree>`, which holds `Float | Tree` again. The same is true
+when the path back to the type declaration goes through other type
+declarations. The union inside the type argument needs a type declaration
+of its own.
+
+```koja
+type Tree = Int | List<Item>
+type Item = Float | Tree
+```
+
+`Item` is `Float | Int | List<Item>`, and `Tree` is `Int | List<Item>`.
+Both hold in each order of the two declarations.
+
 A recursive alias breaks rule 2 on purpose. The members of the union name
 the alias, so a comparison by structure would never end. The alias is
 therefore the identity of the type.
@@ -249,9 +265,6 @@ describes the box.
 A case that the rules do not predict is a bug, and a bug is a GitHub issue.
 This list holds the open issues against the rules.
 
-- [#192](https://github.com/koja-lang/koja/issues/192): a union alias does
-  not flatten a union alias that the file declares later. This breaks
-  rule 1.
 - [#193](https://github.com/koja-lang/koja/issues/193): a generic struct
   literal or variant constructor does not take its type arguments from a
   member of the expected union. This is a missing position under rule 4.

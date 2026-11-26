@@ -1,0 +1,76 @@
+# A type declaration of a union takes the members of a type
+# declaration of a union that the file declares later. A union inside
+# a type argument does the same.
+
+# One forward step
+type Scalar = Int | Text
+type Text = String | Bool
+
+fn kind(value: Scalar) -> String
+  match value
+    _n: Int -> "int"
+    _s: String -> "string"
+    _f: Bool -> "bool"
+  end
+end
+
+text: Scalar = "s"
+IO.puts(kind(text))
+flag: Text = true
+wide: Scalar = flag
+IO.puts(kind(wide))
+
+# A chain of forward steps
+type Outer = Float | Middle
+type Middle = Int | Inner
+type Inner = String | Bool
+
+fn layer(value: Outer) -> String
+  match value
+    _x: Float -> "float"
+    _n: Int -> "int"
+    _s: String -> "string"
+    _f: Bool -> "bool"
+  end
+end
+
+inner: Inner = "s"
+middle: Middle = inner
+outer: Outer = middle
+IO.puts(layer(outer))
+IO.puts(layer(1.5))
+
+# A recursive type declaration that the file declares later
+type Tree = Int | Branch
+type Branch = String | List<Tree>
+
+fn size(tree: Tree) -> Int
+  match tree
+    _n: Int -> 1
+    _s: String -> 1
+    items: List<Tree> ->
+      items.reduce(0, fn (sum: Int, item: Tree) -> Int sum + size(item) end)
+  end
+end
+
+leaf: Tree = "s"
+IO.puts("#{size(leaf)}")
+branch: Branch = [1, "two", [3, "four"]]
+tree: Tree = branch
+IO.puts("#{size(tree)}")
+
+# A union inside a type argument
+type Row = Int | List<Float | Cell>
+type Cell = String | Bool
+
+fn shape(row: Row) -> String
+  match row
+    _n: Int -> "int"
+    cells: List<Float | Cell> -> "list of #{cells.length()}"
+  end
+end
+
+cells: List<Float | String | Bool> = [1.5, "two", true]
+row: Row = cells
+IO.puts(shape(row))
+IO.puts(shape(7))

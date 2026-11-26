@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A number literal that does not fit the type of an annotated declaration reports the value and the range, as in ``local `tiny` expects `Int8`, but value `300` does not fit in `Int8` (range -128..=127)``. A reassignment and a write to a field report the same.
+- A type declaration that is a member of a union inside its own definition is a compile error, as in `type Tree = Int | List<Float | Tree>`. Give the inner union a type declaration of its own, as in `type Item = Float | Tree` with `type Tree = Int | List<Item>`.
 
 ### Fixed
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A number literal takes the width of the local or the field on a reassignment, a write to a field, and a compound assignment. For `small: Int32 = 1`, the lines `small = 2` and `small += 1` compile, and so does `self.count += 1` for an `Int32` field. A sized value widens into an `Int` local or field, as in `total = small`.
 - The value of a reassignment reads its type from the local. For `found: Option<Int>`, the line `found = Option.None` compiles, and `items = []` compiles for a list.
 - A destructuring assignment from a tuple literal follows the rules of a plain assignment for each name. For `pet: Pet` and `small: Int32`, the line `(pet, small) = (dog, 7)` compiles.
+- A type declaration of a union takes the members of a type declaration of a union that the file declares later. For `type B = Int | A` followed by `type A = String | Bool`, `B` is a `Bool | Int | String`, and a `match` on a `B` value can have a `text: String ->` arm. A union inside a type argument, a tuple, or a function type does the same, so `type Row = List<Int | A>` is a `List<Bool | Int | String>` in each order of the two declarations.
 
 ## [0.21.0] - 2026-11-22
 
