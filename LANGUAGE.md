@@ -1282,6 +1282,13 @@ count([1, [2, [3, true]]]) # 4
 
 Two aliases can name each other the same way. An alias cannot name itself as a direct member, as in `type Chain = Int | Chain`, or through a tuple, a function type, or a `CPtr`. Only a union alias can be recursive, so `type Rows = List<Rows>` is an error.
 
+A type declaration also cannot be a member of a union inside its own definition, as in `type Tree = Int | List<Float | Tree>`. Give that union a type declaration of its own:
+
+```koja
+type Tree = Int | List<Item>
+type Item = Float | Tree
+```
+
 A recursive alias is a type of its own. Two recursive aliases with the same members are different types, and a value of one does not flow into a position that expects the other.
 
 ### Tuples

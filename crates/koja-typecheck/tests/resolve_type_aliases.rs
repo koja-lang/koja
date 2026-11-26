@@ -22,18 +22,27 @@
 //! - A union alias can name itself in a type argument of `List`,
 //!   `Map`, `Set`, or a generic struct or enum. Such an alias is a
 //!   type with a name of its own.
+//! - A type declaration of a union takes the members of each type
+//!   declaration of a union that it names, in each order of the two.
+//!   A union inside a type argument, a tuple, or a function type does
+//!   the same.
+//! - A type declaration that is a member of a union in its own
+//!   definition surfaces a cycle diagnostic at that member.
 //! - The same alias is exhaustiveness-aware in `match`: a typed-
 //!   binding arm hits each member of the underlying union, missing
 //!   members surface a clean diagnostic.
 
+use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::util::dedent;
 use koja_parser::ParseMode;
+use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    PACKAGE, assert_file_fails_with, check_packages, diagnostic_messages,
-    typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    PACKAGE, assert_file_fails_with, bool_type, check_packages, diagnostic_messages, float_type,
+    global_named, int_type, package_leaf, registry_id, string_type, typecheck_file as typecheck,
+    typecheck_file_fail as typecheck_fail,
 };
 
 #[test]
@@ -477,6 +486,419 @@ fn recursive_alias_does_not_satisfy_a_bound_that_a_member_fails() {
         end
         ";
     assert_file_fails_with(source, &["does not implement protocol `TestApp.Marked`"]);
+}
+
+/// The expansion that the registry holds for the type declaration
+/// `name` of the test package.
+fn expansion_of(checked: &CheckedProgram, name: &str) -> ResolvedType {
+    let id = registry_id(checked, PACKAGE, &[name]);
+    checked
+        .registry
+        .alias_expansion(id)
+        .unwrap_or_else(|| panic!("type `{name}` has no expansion"))
+}
+
+#[test]
+fn union_type_declaration_takes_the_members_of_a_later_one() {
+    let source = "
+        type B = Int | A
+        type A = String | Bool
+
+        fn kind(b: B) -> String
+          match b
+            _n: Int -> \"int\"
+            _s: String -> \"string\"
+            _f: Bool -> \"bool\"
+          end
+        end
+
+        fn main -> String
+          text: B = \"s\"
+          flag: A = true
+          wide: B = flag
+          \"#{kind(text)} #{kind(wide)}\"
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn union_type_declaration_chain_flattens_at_each_forward_step() {
+    let source = "
+        type C = Float | B
+        type B = Int | A
+        type A = String | Bool
+
+        fn main -> C
+          text: C = \"s\"
+          text
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let expected = ResolvedType::Anonymous(AnonymousKind::Union {
+        members: vec![
+            bool_type(&checked),
+            float_type(&checked),
+            int_type(&checked),
+            string_type(&checked),
+        ],
+    });
+    assert_eq!(expansion_of(&checked, "C"), expected);
+}
+
+#[test]
+fn union_type_declaration_is_one_type_in_each_order() {
+    let later = "
+        type B = Int | A
+        type A = String | Bool
+        ";
+    let earlier = "
+        type A = String | Bool
+        type B = Int | A
+        ";
+    for source in [later, earlier] {
+        let checked = typecheck(&dedent(source));
+        let expected = ResolvedType::Anonymous(AnonymousKind::Union {
+            members: vec![
+                bool_type(&checked),
+                int_type(&checked),
+                string_type(&checked),
+            ],
+        });
+        assert_eq!(expansion_of(&checked, "B"), expected, "source: {source}");
+    }
+}
+
+#[test]
+fn union_type_declaration_takes_the_members_of_a_later_recursive_one() {
+    let source = "
+        type V = Int | W
+        type W = String | List<V>
+
+        fn size(v: V) -> Int
+          match v
+            _n: Int -> 1
+            _s: String -> 1
+            items: List<V> ->
+              items.reduce(0, fn (sum: Int, item: V) -> Int sum + size(item) end)
+          end
+        end
+
+        fn main -> Int
+          text: V = \"s\"
+          w: W = [1, \"two\", [3, \"four\"]]
+          v: V = w
+          size(text) + size(v)
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn recursive_type_declaration_pair_is_one_type_in_each_order() {
+    let later = "
+        type V = Int | W
+        type W = String | List<V>
+        ";
+    let earlier = "
+        type W = String | List<V>
+        type V = Int | W
+        ";
+    for source in [later, earlier] {
+        let checked = typecheck(&dedent(source));
+        let expected = ResolvedType::Anonymous(AnonymousKind::Union {
+            members: vec![
+                int_type(&checked),
+                global_named(&checked, "List", vec![package_leaf(&checked, "V")]),
+                string_type(&checked),
+            ],
+        });
+        assert_eq!(expansion_of(&checked, "V"), expected, "source: {source}");
+        // `V` names itself in `List<V>`. The union of `V` holds the
+        // members of `W`, so `W` names `V` and never itself.
+        let is_recursive = |name: &str| {
+            let id = registry_id(&checked, PACKAGE, &[name]);
+            checked.registry.is_recursive_alias(id)
+        };
+        assert!(is_recursive("V"), "source: {source}");
+        assert!(!is_recursive("W"), "source: {source}");
+    }
+}
+
+#[test]
+fn union_type_declaration_collapses_with_a_later_type_declaration_of_a_member() {
+    let source = "
+        type B = Int | A
+        type A = Int
+
+        fn twice(b: B) -> Int
+          b * 2
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(expansion_of(&checked, "B"), int_type(&checked));
+}
+
+#[test]
+fn union_type_declaration_cycle_of_two_diagnoses_both() {
+    let source = "
+        type A = Int | B
+        type B = String | A
+        ";
+    assert_file_fails_with(
+        source,
+        &[
+            "type alias `TestApp.A` references itself (cycle)",
+            "type alias `TestApp.B` references itself (cycle)",
+        ],
+    );
+}
+
+/// A union of `members`, which must be in canonical order.
+fn union_of(members: Vec<ResolvedType>) -> ResolvedType {
+    ResolvedType::Anonymous(AnonymousKind::Union { members })
+}
+
+/// The two declaration orders of `first` and `second`.
+fn each_order(first: &str, second: &str) -> [String; 2] {
+    [
+        format!("{first}\n{second}\n"),
+        format!("{second}\n{first}\n"),
+    ]
+}
+
+/// Assert that the type declaration `name` has the expansion
+/// `expected` in each order of the declarations `first` and `second`.
+fn assert_expansion_in_each_order(
+    first: &str,
+    second: &str,
+    name: &str,
+    expected: impl Fn(&CheckedProgram) -> ResolvedType,
+) {
+    for source in each_order(first, second) {
+        let checked = typecheck(&source);
+        assert_eq!(
+            expansion_of(&checked, name),
+            expected(&checked),
+            "source: {source}"
+        );
+    }
+}
+
+/// Assert that each order of the declarations `first` and `second`
+/// fails with a diagnostic for each text of `needles`.
+fn assert_fails_in_each_order(first: &str, second: &str, needles: &[&str]) {
+    for source in each_order(first, second) {
+        assert_file_fails_with(&source, needles);
+    }
+}
+
+#[test]
+fn union_in_a_list_argument_takes_the_members_of_a_type_declaration_in_each_order() {
+    assert_expansion_in_each_order(
+        "type B = List<Int | A>",
+        "type A = String | Bool",
+        "B",
+        |checked| {
+            let element = union_of(vec![
+                bool_type(checked),
+                int_type(checked),
+                string_type(checked),
+            ]);
+            global_named(checked, "List", vec![element])
+        },
+    );
+}
+
+#[test]
+fn union_in_a_tuple_element_takes_the_members_of_a_type_declaration_in_each_order() {
+    assert_expansion_in_each_order(
+        "type B = (Int | A, String)",
+        "type A = String | Bool",
+        "B",
+        |checked| {
+            let first = union_of(vec![
+                bool_type(checked),
+                int_type(checked),
+                string_type(checked),
+            ]);
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: vec![first, string_type(checked)],
+            })
+        },
+    );
+}
+
+#[test]
+fn union_in_a_function_parameter_takes_the_members_of_a_type_declaration_in_each_order() {
+    assert_expansion_in_each_order(
+        "type B = fn (Int | A) -> Int",
+        "type A = String | Bool",
+        "B",
+        |checked| {
+            let param = union_of(vec![
+                bool_type(checked),
+                int_type(checked),
+                string_type(checked),
+            ]);
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: vec![param],
+                ret: Box::new(int_type(checked)),
+            })
+        },
+    );
+}
+
+#[test]
+fn union_in_an_argument_of_a_member_takes_the_members_of_a_type_declaration_in_each_order() {
+    assert_expansion_in_each_order(
+        "type B = Int | List<Float | A>",
+        "type A = String | Bool",
+        "B",
+        |checked| {
+            let element = union_of(vec![
+                bool_type(checked),
+                float_type(checked),
+                string_type(checked),
+            ]);
+            union_of(vec![
+                int_type(checked),
+                global_named(checked, "List", vec![element]),
+            ])
+        },
+    );
+}
+
+#[test]
+fn union_in_a_list_argument_takes_the_members_of_a_recursive_type_declaration_in_each_order() {
+    assert_expansion_in_each_order(
+        "type W = String | List<Float | V>",
+        "type V = Int | List<V>",
+        "W",
+        |checked| {
+            let element = union_of(vec![
+                float_type(checked),
+                int_type(checked),
+                global_named(checked, "List", vec![package_leaf(checked, "V")]),
+            ]);
+            union_of(vec![
+                global_named(checked, "List", vec![element]),
+                string_type(checked),
+            ])
+        },
+    );
+}
+
+#[test]
+fn nested_union_takes_the_members_of_a_type_declaration_chain_in_each_order() {
+    let b = "type B = List<Int | A>";
+    let a = "type A = String | C";
+    let c = "type C = Bool | Float";
+    // In the second order, `B` takes the members of `A` before `A`
+    // has the members of `C`.
+    for order in [[b, a, c], [a, b, c], [c, a, b]] {
+        let source = format!("{}\n", order.join("\n"));
+        let checked = typecheck(&source);
+        let element = union_of(vec![
+            bool_type(&checked),
+            float_type(&checked),
+            int_type(&checked),
+            string_type(&checked),
+        ]);
+        let expected = global_named(&checked, "List", vec![element]);
+        assert_eq!(expansion_of(&checked, "B"), expected, "source: {source}");
+    }
+}
+
+#[test]
+fn recursive_type_declaration_with_a_named_inner_union_is_one_type_in_each_order() {
+    let outer = "type T = Int | List<Item>";
+    let inner = "type Item = Float | T";
+    let items = |checked: &CheckedProgram| {
+        global_named(checked, "List", vec![package_leaf(checked, "Item")])
+    };
+    assert_expansion_in_each_order(outer, inner, "Item", |checked| {
+        union_of(vec![float_type(checked), int_type(checked), items(checked)])
+    });
+    assert_expansion_in_each_order(outer, inner, "T", |checked| {
+        union_of(vec![int_type(checked), items(checked)])
+    });
+}
+
+#[test]
+fn type_declaration_in_a_nested_union_of_its_own_definition_diagnoses_at_the_member() {
+    let source = "type T = Int | List<Float | T>\n";
+    let failure = typecheck_fail(source);
+    let [diagnostic] = failure.diagnostics.as_slice() else {
+        panic!(
+            "expected one diagnostic, got {:#?}",
+            diagnostic_messages(&failure)
+        );
+    };
+    assert_eq!(
+        diagnostic.message,
+        "type `TestApp.T` is a member of a union in its own definition (cycle)"
+    );
+    assert_eq!(
+        diagnostic.hint.as_deref(),
+        Some("give the union inside the type argument a type declaration of its own")
+    );
+    // The span is the `T` inside the list, and not the declaration.
+    let member = source.rfind('T').expect("the source names `T`");
+    assert_eq!(diagnostic.span.start.offset as usize, member);
+    assert_eq!(diagnostic.span.end.offset as usize, member + 1);
+}
+
+#[test]
+fn two_type_declarations_in_nested_unions_of_each_other_diagnose_both() {
+    assert_fails_in_each_order(
+        "type A = Int | List<String | B>",
+        "type B = Float | List<Bool | A>",
+        &[
+            "type `TestApp.A` is a member of a union in its own definition through \
+             `TestApp.B` (cycle)",
+            "type `TestApp.B` is a member of a union in its own definition through \
+             `TestApp.A` (cycle)",
+        ],
+    );
+}
+
+#[test]
+fn type_declaration_cycle_through_a_direct_member_and_a_nested_union_diagnoses_both() {
+    assert_fails_in_each_order(
+        "type A = Int | B",
+        "type B = String | List<Float | A>",
+        &[
+            "type `TestApp.A` is a member of a union in its own definition through \
+             `TestApp.B` (cycle)",
+            "type `TestApp.B` is a member of a union in its own definition through \
+             `TestApp.A` (cycle)",
+        ],
+    );
+}
+
+#[test]
+fn type_declaration_cycle_through_a_declaration_of_a_bare_name_diagnoses_both() {
+    assert_fails_in_each_order(
+        "type T = Int | List<Float | U>",
+        "type U = T",
+        &[
+            "type `TestApp.T` is a member of a union in its own definition through \
+             `TestApp.U` (cycle)",
+            "type `TestApp.U` is a member of a union in its own definition through \
+             `TestApp.T` (cycle)",
+        ],
+    );
+}
+
+#[test]
+fn type_declaration_that_reads_a_cycle_gets_no_diagnostic_of_its_own() {
+    let source = "type T = Int | List<Float | T>\ntype U = String | T\n";
+    let failure = typecheck_fail(source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        ["type `TestApp.T` is a member of a union in its own definition (cycle)"]
+    );
 }
 
 #[test]

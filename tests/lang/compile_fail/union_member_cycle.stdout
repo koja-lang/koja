@@ -1,0 +1,1 @@
+type `union_member_cycle.Tree` is a member of a union in its own definition (cycle)
