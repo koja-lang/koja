@@ -40,24 +40,10 @@ end
 
 fn route(outcome: Result<Int, ParseError | NetError | AuthError>) -> String
   match outcome
-    Result.Ok(v) ->
-      "ok #{v}"
-
-    Result.Err(e) ->
-      match e
-        err: ParseError ->
-          match err
-            ParseError.BadDigit(s) -> "parse #{s}"
-          end
-
-        err: NetError ->
-          "net"
-
-        err: AuthError ->
-          match err
-            AuthError.Denied(s) -> "auth #{s}"
-          end
-      end
+    Result.Ok(v) -> "ok #{v}"
+    Result.Err(ParseError.BadDigit(s)) -> "parse #{s}"
+    Result.Err(NetError.Timeout) -> "net"
+    Result.Err(AuthError.Denied(s)) -> "auth #{s}"
   end
 end
 

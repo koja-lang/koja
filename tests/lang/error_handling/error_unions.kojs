@@ -48,6 +48,19 @@ end
 IO.puts(route(combined(true)))
 IO.puts(route(combined(false)))
 
+# A variant pattern matches through the union in the `Err` payload.
+fn detail(outcome: Result<Int, AppError>) -> String
+  match outcome
+    Result.Ok(v) -> "ok #{v}"
+    Result.Err(ParseError.BadDigit(text)) -> "bad digit #{text}"
+    Result.Err(NetError.Timeout) -> "timeout"
+  end
+end
+
+IO.puts(detail(combined(true)))
+IO.puts(detail(combined(false)))
+IO.puts(detail(Result.Err(ParseError.BadDigit("x"))))
+
 # `try` and `fail` inside a closure target the closure's own
 # Result return type.
 fn via_closure(n: Int) -> Int ! NetError

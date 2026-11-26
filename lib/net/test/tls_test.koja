@@ -49,15 +49,10 @@ test "verifying client rejects a self-signed server certificate"
   end
 
   match upgraded
-    Result.Ok(_) ->
-      fail "handshake should have failed certificate verification"
-
+    Result.Ok(_) -> fail "handshake should have failed certificate verification"
+    Result.Err(TLSError.VerificationFailed(_)) -> ()
     Result.Err(tls_error: TLSError) ->
-      match tls_error
-        TLSError.VerificationFailed(_) -> ()
-        _ -> fail "expected verification failure, got: #{tls_error.message()}"
-      end
-
+      fail "expected verification failure, got: #{tls_error.message()}"
     Result.Err(io_error: IOError) ->
       fail "expected verification failure, got: #{io_error.message()}"
   end
@@ -96,15 +91,10 @@ test "TLS read fails with TimedOut when the peer is silent"
   end
 
   match result
-    Result.Ok(_) ->
-      fail "expected read to time out"
-
+    Result.Ok(_) -> fail "expected read to time out"
+    Result.Err(IOError.TimedOut) -> ()
     Result.Err(io_error: IOError) ->
-      match io_error
-        IOError.TimedOut -> ()
-        _ -> fail "expected TimedOut, got: #{io_error.message()}"
-      end
-
+      fail "expected TimedOut, got: #{io_error.message()}"
     Result.Err(tls_error: TLSError) ->
       fail "expected TimedOut, got: #{tls_error.message()}"
   end
@@ -209,15 +199,10 @@ test "a client handshake rejects a protocol name it cannot encode"
   end
 
   match upgraded
-    Result.Ok(_) ->
-      fail "expected the handshake to reject the name"
-
+    Result.Ok(_) -> fail "expected the handshake to reject the name"
+    Result.Err(TLSError.ProtocolNameInvalid) -> ()
     Result.Err(tls_error: TLSError) ->
-      match tls_error
-        TLSError.ProtocolNameInvalid -> ()
-        _ -> fail "expected ProtocolNameInvalid, got: #{tls_error.message()}"
-      end
-
+      fail "expected ProtocolNameInvalid, got: #{tls_error.message()}"
     Result.Err(io_error: IOError) ->
       fail "expected ProtocolNameInvalid, got: #{io_error.message()}"
   end

@@ -56,6 +56,7 @@ pub fn pattern_kind_label(pattern: &Pattern) -> &'static str {
         Pattern::Struct { .. } => "struct",
         Pattern::Tuple { .. } => "tuple",
         Pattern::TypedBinding { .. } => "typed-binding",
+        Pattern::UnionMember { .. } => "union-member",
         Pattern::Wildcard { .. } => "wildcard",
     }
 }
@@ -74,6 +75,7 @@ pub fn pattern_span(pattern: &Pattern) -> Span {
         | Pattern::Struct { span, .. }
         | Pattern::Tuple { span, .. }
         | Pattern::TypedBinding { span, .. }
+        | Pattern::UnionMember { span, .. }
         | Pattern::Wildcard { span, .. } => *span,
     }
 }

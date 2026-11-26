@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A `match` arm on a union can name more than one member, as in `rest: Bool | String ->` for a `Bool | Int | String` value. The arm runs for each of those members, and `rest` is a `Bool | String`.
+- An enum variant pattern and a struct pattern match one member of a union. For a `Result<Int, ParseError | NetError>`, the arm `Result.Err(ParseError.BadDigit(pos)) ->` compiles, and so does `Cat{name: n} ->` for a `Cat | Dog` value. A `match` is exhaustive when its arms cover every variant of each member.
 
 ### Changed
 

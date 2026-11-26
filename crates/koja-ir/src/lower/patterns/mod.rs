@@ -9,9 +9,10 @@
 //! result to wire the gating `CondBranch`(es) and the per-arm body
 //! block.
 //!
-//! Admits leaves (wildcard / binding / literal), `EnumUnit`,
-//! `EnumTuple` / `EnumStruct` / `Struct` with arbitrary nested
-//! payload / field patterns, and `Or` (alternatives restricted to
+//! Admits leaves (wildcard / binding / typed binding / literal),
+//! `Binary`, `EnumUnit`, `EnumTuple` / `EnumStruct` / `Struct` /
+//! `Tuple` with arbitrary nested payload / field / element
+//! patterns, `UnionMember`, and `Or` (alternatives restricted to
 //! literal / EnumUnit, no bindings). Every other shape is a feature
 //! gap diagnosed in typecheck and is unreachable on the success
 //! path.
@@ -27,6 +28,9 @@
 //!   recursively lower against the field type. Bindings produce
 //!   chained [`BindOp::StructField`] binds, non-binding fields add
 //!   AND-chained `TestStep`s.
+//! - [`tuples`]: anonymous-tuple destructure. The same walk as
+//!   [`structs`], with a [`BindOp::TupleElement`] read for each
+//!   element in place of the field read.
 //! - [`or_pattern`]: `A | B | C` chained through fresh
 //!   `match_or_alt_<n>` blocks, one [`TestStep`] per alternative
 //!   under [`ChainMode::Or`].
@@ -35,6 +39,10 @@
 //!   one [`BindOp::UnionPayload`] bind. A binding of a union of
 //!   members is one [`TestStep`] for each member the binding leaves
 //!   out, and one [`BindOp::UnionNarrow`] bind.
+//! - [`union_member`]: the wrapper that the typecheck puts around a
+//!   variant or struct pattern on a union subject. One tag test for
+//!   the member, then the inner pattern against the payload through
+//!   a [`BindOp::UnionPayload`] prefix.
 //! - [`literals`]: the `subject == const(value)` emission shared
 //!   between the dispatcher's `Pattern::Literal` arm and the
 //!   or-pattern literal-alternative arm.
@@ -45,6 +53,7 @@ mod or_pattern;
 mod structs;
 mod tuples;
 mod typed_binding;
+mod union_member;
 
 use std::collections::HashSet;
 
@@ -111,6 +120,7 @@ fn collect_pattern_binding_ids(pattern: &Pattern, ids: &mut HashSet<LocalId>) {
                 collect_pattern_binding_ids(branch, ids);
             }
         }
+        Pattern::UnionMember { pattern, .. } => collect_pattern_binding_ids(pattern, ids),
         Pattern::EnumUnit { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
     }
 }
@@ -370,6 +380,11 @@ pub(super) fn lower_pattern_check(
             ctx,
             block,
         )),
+        Pattern::UnionMember {
+            member_type,
+            pattern,
+            ..
+        } => union_member::lower_union_member_check(member_type, pattern, &inputs, ctx, block),
         Pattern::Wildcard { .. } => Ok((PatternCheck::CatchAll { binds: Vec::new() }, block)),
         other => {
             ctx.output.diagnostics.push(Diagnostic::error(

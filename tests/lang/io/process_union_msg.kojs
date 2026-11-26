@@ -23,21 +23,15 @@ impl Process<ParentConfig, MsgA | MsgB, String> for Parent
 
   fn handle(self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
-      a: MsgA ->
-        match a
-          MsgA.Ping(s) ->
-            "ping: #{s}".print()
-            ReplyTo.reply(from, "ok")
-            Step.Continue(Parent{count: self.count + 1})
-        end
+      MsgA.Ping(s) ->
+        "ping: #{s}".print()
+        ReplyTo.reply(from, "ok")
+        Step.Continue(Parent{count: self.count + 1})
 
-      b: MsgB ->
-        match b
-          MsgB.Pong(n) ->
-            "pong: #{n}".print()
-            ReplyTo.reply(from, "ok")
-            Step.Continue(Parent{count: self.count + 1})
-        end
+      MsgB.Pong(n) ->
+        "pong: #{n}".print()
+        ReplyTo.reply(from, "ok")
+        Step.Continue(Parent{count: self.count + 1})
     end
   end
 end

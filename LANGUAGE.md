@@ -1210,6 +1210,16 @@ match pet
 end
 ```
 
+A struct pattern or an enum variant pattern also matches one member. The type in the pattern names the member, so the arm needs no binding first:
+
+```koja
+match pet
+  Cat{name: n} -> n
+  Dog{name: n} -> n
+  fish: Fish -> fish.species
+end
+```
+
 A union satisfies a [trait bound](#trait-bounds) when every member implements the protocol. A call through the bound runs the function of the member the value holds:
 
 ```koja
@@ -1563,6 +1573,17 @@ end
 ```
 
 A `type` alias names a recurring union: `type AppError = HTTP.Error | ParseError`. Callers match on the union member to route errors (see [Union Types](#union-types)).
+
+A variant pattern inside `Result.Err` routes on one error of the union, and a typed binding takes the rest of a member:
+
+```koja
+match fetch_user(id)
+  Result.Ok(user) -> show(user)
+  Result.Err(ParseError.Empty) -> retry(id)
+  Result.Err(parse_error: ParseError) -> report(parse_error)
+  Result.Err(_) -> offline()
+end
+```
 
 ### `rescue`
 

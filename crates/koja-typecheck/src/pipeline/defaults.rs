@@ -544,6 +544,7 @@ fn collect_pattern_bindings(pattern: &Pattern, bindings: &mut HashSet<String>) {
                 }
             }
         }
+        Pattern::UnionMember { pattern, .. } => collect_pattern_bindings(pattern, bindings),
         Pattern::EnumUnit { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
     }
 }

@@ -1,4 +1,7 @@
 ok 1
 net error
+ok 1
+timeout
+bad digit x
 small = 6
 big = -1

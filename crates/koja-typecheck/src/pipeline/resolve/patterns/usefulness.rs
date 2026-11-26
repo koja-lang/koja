@@ -19,7 +19,8 @@ use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, Resolved
 
 use super::super::types::{is_primitive, peel_alias};
 use super::literals::literal_repr;
-use super::named_members;
+use super::typed_binding::named_members;
+use super::union_member::member_index;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     DisplayStyle, EnumDefinition, GlobalKind, GlobalRegistry, ResolvedStructField,
@@ -32,7 +33,9 @@ pub(crate) enum Constructor {
     Bool(bool),
     /// The only constructor of a tuple or struct type.
     Single,
-    /// Index into the canonical member list of a union.
+    /// Index into the canonical member list of a union. Its one
+    /// payload column is the member, so an arm can cover part of a
+    /// member.
     UnionMember(usize),
     /// Enum discriminant tag.
     Variant(u32),
@@ -215,7 +218,13 @@ fn field_types(
 ) -> Vec<ResolvedType> {
     let peeled = peel_alias(ty, registry);
     match ctor {
-        Constructor::Bool(_) | Constructor::UnionMember(_) => Vec::new(),
+        Constructor::Bool(_) => Vec::new(),
+        Constructor::UnionMember(index) => peeled
+            .as_union()
+            .and_then(|members| members.get(index))
+            .into_iter()
+            .cloned()
+            .collect(),
         Constructor::Single => match &peeled {
             ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => elements.clone(),
             _ => struct_of(&peeled, registry)
@@ -325,14 +334,24 @@ fn deconstruct(
                 return Some(WILDCARD);
             };
             let indexes = named_members(bound, members, registry).ok()?;
+            // A typed binding covers every value of the member.
             let union_member =
-                |index: &usize| constructor(Constructor::UnionMember(*index), Vec::new());
+                |index: &usize| constructor(Constructor::UnionMember(*index), vec![WILDCARD]);
             Some(match indexes.as_slice() {
                 [index] => union_member(index),
                 // A binding that names a union of members matches
                 // each one of them.
                 indexes => DeconstructedPattern::Or(indexes.iter().map(union_member).collect()),
             })
+        }
+        Pattern::UnionMember {
+            member_type,
+            pattern,
+            ..
+        } => {
+            let index = member_index(peeled.as_union()?, member_type, registry)?;
+            let covered = deconstruct(pattern, member_type, registry)?;
+            Some(constructor(Constructor::UnionMember(index), vec![covered]))
         }
     }
 }
@@ -626,12 +645,15 @@ fn render_witness(
                 format!("{name}{{{body}}}")
             }
         },
-        Constructor::UnionMember(index) => match &peeled {
-            ResolvedType::Anonymous(AnonymousKind::Union { members }) => members
-                .get(*index)
-                .map(|member| display_type(member, registry, DisplayStyle::Source))
-                .unwrap_or_else(|| "_".to_string()),
-            _ => "_".to_string(),
+        // A member with a missing part prints that part, such as
+        // `Parse.Empty`. A member that is missing as a whole prints
+        // its type.
+        Constructor::UnionMember(_) => match (fields.first(), field_types.first()) {
+            (Some(DeconstructedPattern::Wildcard) | None, Some(member)) => {
+                display_type(member, registry, DisplayStyle::Source)
+            }
+            (Some(part), Some(member)) => render_witness(part, member, registry),
+            (_, None) => "_".to_string(),
         },
         Constructor::Variant(tag) => {
             let Some((id, definition, _)) = enum_of(&peeled, registry) else {

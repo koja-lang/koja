@@ -2,7 +2,9 @@
 //! to literal / `EnumUnit` (no bindings) so the arm binds nothing
 //! whichever alternative fires. Reachability of each alternative,
 //! within the or-pattern and against earlier arms, is a usefulness
-//! question answered in [`super::super::match_expr`].
+//! question answered in [`super::super::match_expr`]. An `EnumUnit`
+//! alternative on a union subject is an error, because it would match
+//! through the union.
 
 use koja_ast::ast::{Diagnostic, Pattern};
 use koja_ast::identifier::ResolvedType;
@@ -36,6 +38,16 @@ pub(super) fn resolve_or_pattern(
             continue;
         }
         resolve_pattern(alternative, subject_ty, resolver, diagnostics);
+        // On a union subject, a variant alternative is two tests in
+        // sequence, the member and then the variant. The or-chain
+        // lowering has one test for each alternative.
+        if matches!(alternative, Pattern::UnionMember { .. }) {
+            diagnostics.push(Diagnostic::error_with_hint(
+                "an or-pattern cannot hold a variant pattern when the subject is a union",
+                "write one arm for each alternative",
+                pattern_span(alternative),
+            ));
+        }
     }
 }
 

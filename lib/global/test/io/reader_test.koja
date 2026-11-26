@@ -64,16 +64,9 @@ test "read_string fails with InvalidUTF8 on bad bytes"
   _ = fd.close()
 
   match result
-    Result.Ok(text) ->
-      fail "expected InvalidUTF8, got: #{text}"
-
-    Result.Err(conversion: String.ConversionError) ->
-      match conversion
-        String.ConversionError.InvalidUTF8 -> ()
-      end
-
-    Result.Err(e) ->
-      fail "expected InvalidUTF8, got: #{e}"
+    Result.Ok(text) -> fail "expected InvalidUTF8, got: #{text}"
+    Result.Err(String.ConversionError.InvalidUTF8) -> ()
+    Result.Err(e) -> fail "expected InvalidUTF8, got: #{e}"
   end
 end
 
@@ -83,16 +76,9 @@ test "read_line fails with InvalidUTF8 on bad bytes"
   _ = fd.close()
 
   match result
-    Result.Ok(line) ->
-      fail "expected InvalidUTF8, got: #{line}"
-
-    Result.Err(conversion: String.ConversionError) ->
-      match conversion
-        String.ConversionError.InvalidUTF8 -> ()
-      end
-
-    Result.Err(e) ->
-      fail "expected InvalidUTF8, got: #{e}"
+    Result.Ok(line) -> fail "expected InvalidUTF8, got: #{line}"
+    Result.Err(String.ConversionError.InvalidUTF8) -> ()
+    Result.Err(e) -> fail "expected InvalidUTF8, got: #{e}"
   end
 end
 

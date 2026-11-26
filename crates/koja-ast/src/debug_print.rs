@@ -887,6 +887,14 @@ impl<'a> Printer<'a> {
                     *span,
                 );
             }
+            Pattern::UnionMember {
+                member_type,
+                pattern,
+                span,
+            } => {
+                let header = format!("UnionMember {}", format_resolved_type(member_type));
+                self.nested(&header, *span, |p| p.pattern(pattern));
+            }
             Pattern::List { elements, span } => {
                 self.nested("List", *span, |p| {
                     for e in elements {

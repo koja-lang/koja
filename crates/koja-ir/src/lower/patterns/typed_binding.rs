@@ -20,10 +20,11 @@
 use koja_ast::ast::Name;
 use koja_ast::identifier::{LocalId, ResolvedType};
 
-use super::super::arms::{emit_tag_eq, emit_tag_ne};
+use super::super::arms::emit_tag_ne;
 use super::super::ctx::FnLowerCtx;
 use super::super::package::resolved_type_to_ir_type;
 use super::super::unions::emit_union_tag;
+use super::union_member::{emit_member_test, member_payload_step};
 use super::{
     BindOp, BindStep, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep,
     ensure_local_declared, lower_binding_check, require_local,
@@ -105,29 +106,18 @@ fn lower_member_check(
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> (PatternCheck, IRBlockId) {
-    let tag = emit_union_tag(subject, subject_ir, ctx, block);
-    let cond = emit_tag_eq(tag, member_index, ctx, block);
+    let member_test = emit_member_test(subject, subject_ir, member_index, ctx, block);
     ensure_local_declared(local, member_ir, ctx);
     ctx.mark_slot_borrowed(local);
     let bind = PayloadBind {
         local,
-        chain: vec![BindStep {
-            op: BindOp::UnionPayload {
-                member_index,
-                member_type: member_ir.clone(),
-                union_type: subject_ir.clone(),
-            },
-            output_type: member_ir.clone(),
-        }],
+        chain: vec![member_payload_step(member_index, member_ir, subject_ir)],
     };
     (
         PatternCheck::Tests {
             chain_mode: ChainMode::And,
             payload_binds: vec![bind],
-            steps: vec![TestStep {
-                cond,
-                test_block: block,
-            }],
+            steps: vec![member_test],
         },
         block,
     )

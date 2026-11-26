@@ -9,17 +9,11 @@ end
 
 test "read nonexistent file fails with NotFound"
   match File.read("/tmp/nonexistent_koja_file_test_12345")
-    Result.Ok(_) ->
-      fail "expected the read to fail"
-
+    Result.Ok(_) -> fail "expected the read to fail"
+    Result.Err(FileError.NotFound) -> ()
     Result.Err(file_error: FileError) ->
-      match file_error
-        FileError.NotFound -> ()
-        _ -> fail "expected NotFound, got: #{file_error.message()}"
-      end
-
-    Result.Err(e) ->
-      fail "expected NotFound, got: #{e}"
+      fail "expected NotFound, got: #{file_error.message()}"
+    Result.Err(e) -> fail "expected NotFound, got: #{e}"
   end
 end
 
@@ -155,16 +149,9 @@ test "text read fails with InvalidUTF8 on bad bytes"
   File.delete(path)
 
   match result
-    Result.Ok(_) ->
-      fail "expected the read to fail"
-
-    Result.Err(conversion: String.ConversionError) ->
-      match conversion
-        String.ConversionError.InvalidUTF8 -> ()
-      end
-
-    Result.Err(e) ->
-      fail "expected InvalidUTF8, got: #{e}"
+    Result.Ok(_) -> fail "expected the read to fail"
+    Result.Err(String.ConversionError.InvalidUTF8) -> ()
+    Result.Err(e) -> fail "expected InvalidUTF8, got: #{e}"
   end
 end
 

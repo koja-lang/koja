@@ -503,6 +503,7 @@ pub fn walk_pattern<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, pattern: &'ast P
             }
         }
         Pattern::TypedBinding { type_expr, .. } => v.visit_type_expr(type_expr),
+        Pattern::UnionMember { pattern, .. } => v.visit_pattern(pattern),
         Pattern::Or { patterns, .. } => {
             for pattern in patterns {
                 v.visit_pattern(pattern);

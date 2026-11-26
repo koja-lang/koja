@@ -23,15 +23,12 @@ struct App: Process<App, AppMsg | IOReady, String>
     -> Step<Self>
 
     match msg
-      io: IOReady ->
-        match io
-          IOReady.Read(_) ->
-            IO.puts("io ready read")
-            Step.Done(StopReason.Shutdown)
+      IOReady.Read(_) ->
+        IO.puts("io ready read")
+        Step.Done(StopReason.Shutdown)
 
-          _ ->
-            Step.Continue(self)
-        end
+      io: IOReady ->
+        Step.Continue(self)
 
       cmd: AppMsg ->
         Step.Continue(self)

@@ -16,14 +16,16 @@
 //!   structs, `Type.Variant{ field: x, ... }` for struct-variant enums)
 //!   resolve each named field against the declared roster, accept any
 //!   nested pattern shape (wildcard / binding / literal / nested
-//!   struct / nested enum / or-alternatives), and stamp a `LocalId`
-//!   on every binding. Omitted fields are implicit wildcards
+//!   struct / nested enum), and stamp a `LocalId` on every binding.
+//!   Omitted fields are implicit wildcards
 //! - constructor shorthand (`Some(x)` / `None` against an enum subject)
 //!   rewrites in place to the corresponding `EnumTuple` / `EnumUnit`,
 //!   reusing every downstream invariant
-//! - unsupported pattern shapes (`Pattern::List`, `Pattern::TypedBinding`,
-//!   `Pattern::Binary`) and literal patterns over non-primitive subjects
-//!   diagnose feature gaps
+//! - a typed binding (`name: Type`) narrows a union subject to one
+//!   member or to a union of members. On any other subject the type
+//!   must be the subject type, and the pattern binds the whole subject
+//! - the unsupported pattern shape `Pattern::List` and literal patterns
+//!   over non-primitive subjects diagnose feature gaps
 //! - bindings stamp a `LocalId` on the AST node
 //! - reachability fires warning-severity diagnostics for any arm (or
 //!   or-pattern alternative) that earlier arms already cover, including

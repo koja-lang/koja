@@ -1,20 +1,23 @@
 //! Match-arm pattern resolution.
 //!
-//! Admits `Wildcard`, `Binding`, primitive `Literal`, `EnumUnit`,
-//! `EnumTuple` / `EnumStruct` / `Struct` with arbitrary nested
-//! pattern shapes in payload / field positions (literals, nested
-//! enums, nested structs, or-alternatives), `Or` (alternatives
-//! restricted to literal / EnumUnit, no bindings), and
-//! `Constructor` shorthand (`Some(x)`, `None`, `Ok(x)`, ...).
+//! Admits `Wildcard`, `Binding`, `TypedBinding`, primitive
+//! `Literal`, `Binary`, `EnumUnit`, and `EnumTuple` / `EnumStruct` /
+//! `Struct` / `Tuple` with nested patterns in payload, field, and
+//! element positions. Also admits `Or` (alternatives restricted to
+//! literal / EnumUnit, no bindings) and `Constructor` shorthand
+//! (`Some(x)`, `None`, `Ok(x)`, ...). The parser makes an `Or` only
+//! at the top of a match arm, so a nested position never holds one.
 //! `Constructor` rewrites in place to the corresponding `EnumTuple`
 //! / `EnumUnit` after looking the variant up on the subject's enum,
 //! so seal / generics-substitute / lowering never see the shape.
-//! Every other shape diagnoses a feature gap. Coverage is not
+//! A `List` pattern reports a feature gap. Coverage is not
 //! computed here. [`super::match_expr`] runs [`usefulness`] over the
 //! resolved arms once every pattern has its types.
 //!
 //! # Module layout
 //!
+//! - [`binary`]: `<<segments>>` patterns on a `Binary` or `Bits`
+//!   subject.
 //! - [`constructor`]: `Some(x)` / `None` / `Ok(x)` shorthand,
 //!   rewritten in place to its qualified form.
 //! - [`enums`]: `EnumUnit` / `EnumTuple` / `EnumStruct` shapes,
@@ -22,6 +25,11 @@
 //! - [`structs`]: plain-struct destructure and the field-pattern
 //!   walker shared with struct-shaped enum variants.
 //! - [`or_pattern`]: `A | B | C` alternatives.
+//! - [`typed_binding`]: the type check of a `name: Type` pattern
+//!   against its subject.
+//! - [`union_member`]: a variant or struct pattern on a union
+//!   subject, wrapped in place in a `UnionMember` that records the
+//!   member it matches.
 //! - [`literals`]: literal-vs-subject type checking and the
 //!   canonical literal text that usefulness keys duplicate literals
 //!   on.
@@ -34,6 +42,8 @@ mod enums;
 mod literals;
 mod or_pattern;
 mod structs;
+mod typed_binding;
+mod union_member;
 mod usefulness;
 
 use koja_ast::ast::{Diagnostic, Pattern, name_texts};
@@ -42,8 +52,7 @@ use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
 use super::ctx::Resolver;
-use super::types::{is_primitive, names_struct, peel_alias, types_equivalent};
-use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
+use super::types::{is_primitive, names_struct, peel_alias};
 use crate::registry::{DisplayStyle, GlobalKind, GlobalRegistry, display_type};
 
 pub(super) use usefulness::{DeconstructedPattern, SubjectCoverage};
@@ -57,6 +66,9 @@ pub(super) fn resolve_pattern(
     // Mirror of the value-side rewrite: `A.B { … }` becomes a `Struct`
     // pattern when the path names a struct.
     rewrite_dotted_struct_pattern(pat, resolver);
+    if union_member::resolve_through_union(pat, subject_ty, resolver, diagnostics) {
+        return;
+    }
     match pat {
         Pattern::Binding { local_id, name, .. } => {
             let id = resolver.scope.declare(name.as_str(), subject_ty.clone());
@@ -167,78 +179,26 @@ pub(super) fn resolve_pattern(
             type_expr,
             span,
         } => {
-            let resolved = resolve_type_expr(
+            let bound = typed_binding::resolve_bound_type(
                 type_expr,
-                TypeParamScope::new(resolver.type_param_owners),
-                resolver.resolution_scope(),
+                subject_ty,
+                *span,
+                resolver,
                 diagnostics,
             );
-            if !resolved.is_resolved() {
-                return;
+            if let Some(bound) = bound {
+                let id = resolver.scope.declare(name.as_str(), bound.clone());
+                *local_id = Some(id);
+                *resolved_type = Some(bound);
             }
-            let peeled_subject = peel_alias(subject_ty, resolver.registry);
-            match &peeled_subject {
-                ResolvedType::Anonymous(AnonymousKind::Union { members }) => {
-                    if let Err(missing) = named_members(&resolved, members, resolver.registry) {
-                        diagnostics.push(Diagnostic::error(
-                            format!(
-                                "type `{}` is not a member of union `{}`",
-                                display_type(&missing, resolver.registry, DisplayStyle::Source),
-                                display_type(subject_ty, resolver.registry, DisplayStyle::Source),
-                            ),
-                            *span,
-                        ));
-                        return;
-                    }
-                }
-                _ if subject_ty.is_resolved()
-                    && !types_equivalent(subject_ty, &resolved, resolver.registry) =>
-                {
-                    diagnostics.push(Diagnostic::error(
-                        format!(
-                            "typed-binding pattern requires a union subject, \
-                             got `{}`",
-                            display_type(subject_ty, resolver.registry, DisplayStyle::Source),
-                        ),
-                        *span,
-                    ));
-                    return;
-                }
-                _ => {}
-            }
-            let id = resolver.scope.declare(name.as_str(), resolved.clone());
-            *local_id = Some(id);
-            *resolved_type = Some(resolved);
         }
-    }
-}
-
-/// The members of the subject union that a typed binding names, as
-/// indexes into `members`. One index when the binding names one
-/// member, and one index for each member when it names a union of
-/// members. The error is the first type that the binding names and
-/// the subject union does not hold.
-fn named_members(
-    bound: &ResolvedType,
-    members: &[ResolvedType],
-    registry: &GlobalRegistry,
-) -> Result<Vec<usize>, ResolvedType> {
-    let member_index = |ty: &ResolvedType| {
-        members
-            .iter()
-            .position(|member| types_equivalent(member, ty, registry))
-    };
-    if let Some(index) = member_index(bound) {
-        return Ok(vec![index]);
-    }
-    match peel_alias(bound, registry) {
-        ResolvedType::Anonymous(AnonymousKind::Union {
-            members: bound_members,
-        }) => bound_members
-            .into_iter()
-            .map(|member| member_index(&member).ok_or(member))
-            .collect(),
-        _ => Err(bound.clone()),
+        // The wrapper already holds the member, so its pattern
+        // resolves against that member and not against the union.
+        Pattern::UnionMember {
+            member_type,
+            pattern,
+            ..
+        } => resolve_pattern(pattern, member_type, resolver, diagnostics),
     }
 }
 

@@ -455,6 +455,7 @@ impl Checker<'_, '_> {
                     self.bind_pattern(pattern, state);
                 }
             }
+            Pattern::UnionMember { pattern, .. } => self.bind_pattern(pattern, state),
         }
     }
 
