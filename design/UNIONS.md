@@ -98,6 +98,13 @@ default type of the literal wins. Without that member, the one member that
 implements the literal protocol gets the literal. Two such members is an
 error.
 
+A generic struct literal, a variant constructor, and a call of a generic
+function follow the same rule. Each one builds a value of one generic type.
+In a position that expects a union, the one member of that generic type
+gives the type arguments, so `Box{value: 3}` is a `Box<Int32>` in a
+`String | Box<Int32>` position. With no such member, or with two or more,
+the values decide the type arguments.
+
 ### 5. A type argument does not widen
 
 `List<Cat>` does not flow into `List<Pet>`, and `Option<Cat>` does not flow
@@ -238,6 +245,9 @@ carry the result.
 - `check_compatible_stamping` applies rules 3 and 4. It records
   `Coercion::UnionWiden` on the expression that widens.
 - `narrow_union_hint` picks the member for a literal.
+- `member_hint` picks the member for a generic struct literal, a variant
+  constructor, or a generic call. `fill_from_expected` reads the type
+  arguments from that member.
 - `recursive_alias` finds the alias for the union of rule 7.
 - `resolve_through_union` picks the member for a variant or struct pattern
   under rule 6. It puts a `Pattern::UnionMember` that holds the member around
@@ -265,9 +275,6 @@ describes the box.
 A case that the rules do not predict is a bug, and a bug is a GitHub issue.
 This list holds the open issues against the rules.
 
-- [#193](https://github.com/koja-lang/koja/issues/193): a generic struct
-  literal or variant constructor does not take its type arguments from a
-  member of the expected union. This is a missing position under rule 4.
 - [#204](https://github.com/koja-lang/koja/issues/204): a destructuring
   assignment from a call does not widen an element into its local. Only a
   tuple literal on the right pairs each name with an expression. This is a

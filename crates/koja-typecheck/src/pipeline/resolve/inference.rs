@@ -6,7 +6,8 @@
 //!   fold conflicts into its own diagnostic shape.
 //! - [`fill_from_expected`] tries to unify a template against a hint
 //!   without ever overriding existing bindings. The expected type is
-//!   advisory, never authoritative.
+//!   advisory, never authoritative. An expected union gives the one
+//!   member that the template can build.
 //! - [`try_pre_seeded_subst`] runs the expected type first and the
 //!   values second on a copy, and gives the copy back when the values
 //!   agree with it.
@@ -82,7 +83,74 @@ pub(super) fn unify_pairs<'a, T, I, F>(
 /// conflict the attempt is discarded, already-bound slots stay
 /// authoritative. Use for bidirectional return-type / element-type /
 /// payload-type hints.
+///
+/// An expected union gives the one member that `template` can build,
+/// as [`member_hint`] decides.
 pub(super) fn fill_from_expected(
+    template: &ResolvedType,
+    actual: &ResolvedType,
+    subst: &mut Substitution,
+    registry: &GlobalRegistry,
+) {
+    let hint = member_hint(template, actual, registry);
+    fill_from_type(template, &hint, subst, registry);
+}
+
+/// The type that `template` reads its type arguments from, for the
+/// expected type `hint`.
+///
+/// A constructor or a generic call builds one named type, and
+/// `template` has the head of that type. A union has no head, so
+/// [`unify_into`] reads nothing from an expected union. The answer is
+/// the one member of the union that has the head of `template`. The
+/// surrounding slot then widens the built value into the union. For
+/// `Box{value: 3}` in a position that expects `String | Box<Int32>`,
+/// the answer is `Box<Int32>`.
+///
+/// The hint and each member are peeled first, so an alias of a
+/// generic type or of a union gives the same answer. An expected type
+/// that is not a union is the answer after the peel.
+///
+/// The hint passes through as it is in three cases. The template is
+/// not a named type with a global head, such as a bare `T` or a
+/// tuple. No member has the head. Two or more members have the head,
+/// as in `Box<Int> | Box<String>`. The values then decide the type
+/// arguments, and the usual diagnostic reports a mismatch.
+fn member_hint(
+    template: &ResolvedType,
+    hint: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> ResolvedType {
+    let ResolvedType::Named {
+        resolution: head @ Resolution::Global(_),
+        ..
+    } = template
+    else {
+        return hint.clone();
+    };
+    let peeled = peel_alias(hint, registry);
+    let Some(members) = peeled.as_union() else {
+        return peeled;
+    };
+    let mut with_head = members
+        .iter()
+        .map(|member| peel_alias(member, registry))
+        .filter(
+            |member| matches!(member, ResolvedType::Named { resolution, .. } if resolution == head),
+        );
+    match (with_head.next(), with_head.next()) {
+        (Some(member), None) => member,
+        _ => hint.clone(),
+    }
+}
+
+/// Unify `template` against `actual` on a copy of `subst`, and keep
+/// the copy when there is no conflict. An `actual` that is not fully
+/// resolved fills nothing.
+///
+/// [`fill_from_bounds`] calls this with a protocol argument. That is
+/// not an expected type, so it gets no [`member_hint`].
+fn fill_from_type(
     template: &ResolvedType,
     actual: &ResolvedType,
     subst: &mut Substitution,
@@ -193,7 +261,7 @@ fn fill_from_bounds(callees: &[Callee<'_>], subst: &mut Substitution, ctx: Bound
                         continue;
                     };
                     for (template, actual) in bound.args.iter().zip(&protocol_args) {
-                        fill_from_expected(template, actual, subst, registry);
+                        fill_from_type(template, actual, subst, registry);
                     }
                 }
             }

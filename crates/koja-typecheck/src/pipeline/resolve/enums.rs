@@ -200,17 +200,10 @@ fn infer_enum_type_args(
     let registry = ctx.registry;
     let pairs = payload_pairs(variant, data);
     let template = canonical_enum_template(callee.id, callee.type_params.len());
-    // Unify does not peel user aliases, so `Maybe = Option<Int>`
-    // must become `Option<Int>` before it can fill `T`.
-    let hint = expected.map(|hint| peel_alias(hint, registry));
     let mut subst = Substitution::single(callee.id, callee.type_params.len());
-    if let Some(pre_seeded) = try_pre_seeded_subst(
-        &subst,
-        &template,
-        hint.as_ref(),
-        pairs.iter().copied(),
-        registry,
-    ) {
+    if let Some(pre_seeded) =
+        try_pre_seeded_subst(&subst, &template, expected, pairs.iter().copied(), registry)
+    {
         subst = pre_seeded;
     } else {
         unify_pairs(pairs, &mut subst, registry, |conflict, payload_span| {
@@ -223,7 +216,7 @@ fn infer_enum_type_args(
                 diagnostics,
             );
         });
-        if let Some(hint) = &hint {
+        if let Some(hint) = expected {
             fill_from_expected(&template, hint, &mut subst, registry);
         }
     }

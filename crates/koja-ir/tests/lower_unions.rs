@@ -9,6 +9,9 @@
 //!   `Coercion::UnionWiden` at typecheck and lowers to a single
 //!   [`IRInstruction::UnionWrap`] with the member's index in the
 //!   canonical member list.
+//! - A generic struct literal in a union position is built at the
+//!   type of the one member that it can build, and one
+//!   [`IRInstruction::UnionWrap`] takes the built struct.
 //! - A `p: Member -> body` arm in a `match` over a union subject
 //!   lowers to a tag check ([`IRInstruction::UnionTagGet`] plus a
 //!   const-`==` predicate) and a payload extract
@@ -139,6 +142,54 @@ fn generic_variant_payload_lowers_to_union_wrap() {
     assert!(
         matches!(constructed.as_slice(), [option] if option.contains(&union.to_string())),
         "expected one `Option.Some` over `{union}`, got {constructed:?}",
+    );
+}
+
+#[test]
+fn generic_struct_literal_in_a_union_position_wraps_the_member() {
+    // The annotation gives the literal the member `Box<Int32>`. The
+    // struct is built at that type, and one `UnionWrap` of it feeds
+    // the write to the local.
+    let source = "
+        struct Box<T>
+          value: T
+        end
+
+        boxed: String | Box<Int32> = Box{value: 3}
+        ";
+    let script = lower(source);
+
+    let (built, built_type) = all_instructions(&script.blocks)
+        .find_map(|i| match i {
+            IRInstruction::StructInit { dest, ty, .. } => Some((*dest, ty)),
+            _ => None,
+        })
+        .expect("expected a StructInit for the `Box` literal");
+    assert!(
+        built_type.to_string().contains("Int32"),
+        "expected the literal to build a `Box<Int32>`, got `{built_type}`",
+    );
+
+    let wraps: Vec<(ValueId, &IRType, ValueId)> = all_instructions(&script.blocks)
+        .filter_map(|i| match i {
+            IRInstruction::UnionWrap {
+                dest,
+                member_type,
+                value,
+                ..
+            } => Some((*dest, member_type, *value)),
+            _ => None,
+        })
+        .collect();
+    let [(wrapped, member_type, value)] = wraps.as_slice() else {
+        panic!("expected exactly one UnionWrap for the literal, got {wraps:?}");
+    };
+    assert_eq!(*value, built, "the wrap takes the built struct");
+    assert_eq!(**member_type, IRType::Struct(built_type.clone()));
+    assert!(
+        all_instructions(&script.blocks)
+            .any(|i| matches!(i, IRInstruction::LocalWrite { value, .. } if value == wrapped)),
+        "expected the wrapped value {wrapped:?} to feed a LocalWrite",
     );
 }
 

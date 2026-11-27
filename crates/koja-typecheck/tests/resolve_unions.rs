@@ -40,14 +40,15 @@
 //! - **Inference**: the expected type sets a type parameter before
 //!   the value does, so a member widens in the payload of a generic
 //!   variant constructor and in a tuple literal passed to a generic
-//!   call.
+//!   call. An expected union gives a generic struct literal, variant
+//!   constructor, or call the one member that it can build.
 //! - **Writes**: a reassignment of a local, a write to a field, and
 //!   an element of a tuple literal on the right of a destructuring
 //!   assignment widen a member into the type of the target.
 
 use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Pattern, Statement};
 use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
-use koja_ast::identifier::{AnonymousKind, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{CheckedProgram, Substitution, peel_alias, substitute};
 
@@ -1728,6 +1729,196 @@ fn tuple_value_argument_does_not_widen_in_a_generic_call() {
         vec![
             "argument `item` to `List.append` expects `(String, TestApp.Pet)`, got \
              `(String, TestApp.Cat)`"
+        ],
+    );
+}
+
+const BOX_PRELUDE: &str = "
+    struct Box<T>
+      value: T
+    end
+    ";
+
+/// [`pet_script`] with the generic struct `Box<T>` before the tail.
+fn box_script(tail: &str) -> String {
+    format!(
+        "{}{}{}",
+        dedent(PET_PRELUDE),
+        dedent(BOX_PRELUDE),
+        dedent(tail)
+    )
+}
+
+/// `Box<arg>` for the struct of [`box_script`].
+fn box_of(checked: &CheckedProgram, arg: ResolvedType) -> ResolvedType {
+    ResolvedType::Named {
+        resolution: Resolution::Global(registry_id(checked, PACKAGE, &["Box"])),
+        type_args: vec![arg],
+    }
+}
+
+/// A raw union. The members must already be in canonical order.
+fn union_of(members: Vec<ResolvedType>) -> ResolvedType {
+    ResolvedType::Anonymous(AnonymousKind::Union { members })
+}
+
+#[test]
+fn struct_literal_takes_its_type_arguments_from_a_union_member() {
+    // `Box<Int32>` is the one member that a `Box` literal can build,
+    // so it sets `T` and the literal `3` is an `Int32`. The built
+    // value then widens into the union.
+    let source = box_script("boxed: String | Box<Int32> = Box{value: 3}\n");
+    let checked = typecheck(&source);
+    let value = last_assignment_value(&checked);
+    let member = box_of(&checked, global_named(&checked, "Int32", Vec::new()));
+    assert_eq!(value.resolution, member);
+    assert_eq!(
+        value.coercion,
+        Some(Coercion::UnionWiden(union_of(vec![
+            string_type(&checked),
+            member
+        ])))
+    );
+}
+
+#[test]
+fn variant_constructor_takes_its_type_arguments_from_a_union_member() {
+    // The payload of `Result.Ok` cannot set `E`, and `Option.None`
+    // has no payload. The member is the only source in each case.
+    let source = pet_script(
+        "
+        done: Int | Result<Int, String> = Result.Ok(3)
+        empty: String | Option<Int> = Option.None
+        ",
+    );
+    let checked = typecheck(&source);
+    let value = last_assignment_value(&checked);
+    let member = global_named(&checked, "Option", vec![int_type(&checked)]);
+    assert_eq!(value.resolution, member);
+    assert_eq!(
+        value.coercion,
+        Some(Coercion::UnionWiden(union_of(vec![
+            member,
+            string_type(&checked)
+        ])))
+    );
+}
+
+#[test]
+fn generic_call_takes_its_type_arguments_from_a_union_member() {
+    // The return type of the call has the head of one member, so the
+    // member sets the type parameters that no argument can set.
+    let source = box_script(
+        "
+        fn none<T> -> Option<T>
+          Option.None
+        end
+
+        fn wrap<T>(item: T) -> Box<T>
+          Box{value: item}
+        end
+
+        found: String | Option<Int> = none()
+        boxed: String | Box<Int32> = wrap(3)
+        table: String | Map<String, Int> = Map.new()
+        items: String | List<Int> = List.new()
+        ",
+    );
+    let checked = typecheck(&source);
+    let value = last_assignment_value(&checked);
+    let member = global_named(&checked, "List", vec![int_type(&checked)]);
+    assert_eq!(value.resolution, member);
+    assert_eq!(
+        value.coercion,
+        Some(Coercion::UnionWiden(union_of(vec![
+            member,
+            string_type(&checked)
+        ])))
+    );
+}
+
+#[test]
+fn union_member_sets_type_arguments_in_each_position_that_names_the_union() {
+    let source = box_script(
+        "
+        type Slot = String | Box<Int32>
+        type Tree = Int | Box<Tree>
+
+        struct Shelf
+          slot: Slot
+        end
+
+        fn make -> String | Box<Int32>
+          Box{value: 3}
+        end
+
+        fn count(slot: String | Box<Int32>) -> Int
+          1
+        end
+
+        count(Box{value: 3})
+        shelf = Shelf{slot: Box{value: 3}}
+        shelf.slot = Box{value: 4}
+        slot: Slot = Box{value: 3}
+        slot = Box{value: 5}
+        slots: List<Slot> = [Box{value: 3}, \"a\"]
+        home: String | Box<Pet> = Box{value: tom}
+        tree: Tree = Box{value: 3}
+        ",
+    );
+    let checked = typecheck(&source);
+    // The member of a recursive alias names the alias, so the built
+    // value is a `Box<Tree>` and the literal `3` widens into `Tree`.
+    let value = last_assignment_value(&checked);
+    let tree = package_leaf(&checked, "Tree");
+    assert_eq!(value.resolution, box_of(&checked, tree.clone()));
+    assert_eq!(value.coercion, Some(Coercion::UnionWiden(tree)));
+}
+
+#[test]
+fn two_members_with_the_same_head_leave_the_values_to_decide() {
+    let source = box_script("boxed: Box<Int> | Box<String> = Box{value: \"a\"}\n");
+    let checked = typecheck(&source);
+    assert_eq!(
+        last_assignment_value(&checked).resolution,
+        box_of(&checked, string_type(&checked)),
+    );
+}
+
+#[test]
+fn two_members_with_the_same_head_give_a_unit_variant_no_type_arguments() {
+    let source = pet_script("empty: Option<Int> | Option<String> = Option.None\n");
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec!["typecheck cannot infer type parameter `T` of `Option` from unit variant `None`"],
+    );
+}
+
+#[test]
+fn union_with_no_member_of_the_built_type_keeps_the_mismatch() {
+    let source = box_script("boxed: Int | String = Box{value: 3}\n");
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![
+            "type annotation on `boxed` says `Int | String`, but the right-hand side has type \
+             `TestApp.Box<Int>`"
+        ],
+    );
+}
+
+#[test]
+fn value_that_conflicts_with_the_union_member_reports_the_member() {
+    // The member sets `T` to `Int32`, so the errors are the same as
+    // for a position that expects `Box<Int32>` alone.
+    let source = box_script("boxed: String | Box<Int32> = Box{value: \"a\"}\n");
+    let failure = typecheck_fail(&source);
+    assert_eq!(
+        diagnostic_messages(&failure),
+        vec![
+            "type parameter `T` of `TestApp.Box` cannot be both `Int32` and `String`",
+            "field `value` of `TestApp.Box` expects `Int32`, got `String`",
         ],
     );
 }
