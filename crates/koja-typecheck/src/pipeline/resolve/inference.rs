@@ -135,9 +135,9 @@ fn member_hint(
     let mut with_head = members
         .iter()
         .map(|member| peel_alias(member, registry))
-        .filter(|member| {
-            matches!(member, ResolvedType::Named { resolution, .. } if resolution == head)
-        });
+        .filter(
+            |member| matches!(member, ResolvedType::Named { resolution, .. } if resolution == head),
+        );
     match (with_head.next(), with_head.next()) {
         (Some(member), None) => member,
         _ => hint.clone(),

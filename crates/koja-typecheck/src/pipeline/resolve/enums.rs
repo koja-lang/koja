@@ -201,13 +201,9 @@ fn infer_enum_type_args(
     let pairs = payload_pairs(variant, data);
     let template = canonical_enum_template(callee.id, callee.type_params.len());
     let mut subst = Substitution::single(callee.id, callee.type_params.len());
-    if let Some(pre_seeded) = try_pre_seeded_subst(
-        &subst,
-        &template,
-        expected,
-        pairs.iter().copied(),
-        registry,
-    ) {
+    if let Some(pre_seeded) =
+        try_pre_seeded_subst(&subst, &template, expected, pairs.iter().copied(), registry)
+    {
         subst = pre_seeded;
     } else {
         unify_pairs(pairs, &mut subst, registry, |conflict, payload_span| {
