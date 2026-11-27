@@ -5,12 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.1] - 2026-11-27
 
 ### Added
 
-- A `match` arm on a union can name more than one member, as in `rest: Bool | String ->` for a `Bool | Int | String` value. The arm runs for each of those members, and `rest` is a `Bool | String`.
 - An enum variant pattern and a struct pattern match one member of a union. For a `Result<Int, ParseError | NetError>`, the arm `Result.Err(ParseError.BadDigit(pos)) ->` compiles, and so does `Cat{name: n} ->` for a `Cat | Dog` value. A `match` is exhaustive when its arms cover every variant of each member.
+- A `match` arm on a union can name more than one member, as in `rest: Bool | String ->` for a `Bool | Int | String` value. The arm runs for each of those members, and `rest` is a `Bool | String`.
 
 ### Changed
 
@@ -19,18 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A union that uses a type parameter is the same type as the union written by hand when the parameter gets its type. For `struct Holder<T>` with a field `value: String | T`, the field of a `Holder<Int | Bool>` is a `Bool | Int | String`, and the field of a `Holder<String>` is a `String`. A function that returns `Int | T` returns an `Int` when `T` is `Int`. In a generic body, a `match` on an `Int | T` value with the arms `n: Int ->` and `t: T ->` runs the first arm when `T` is `Int`.
 - A generic function can return a union that uses its type parameter. `fn wrap<T>(item: T) -> Int | List<T>` with the body `[item]` compiles. A local variable of such a type works too, and so does a method of a generic struct.
-- A `match` arm can give a binding the type of the value it matches, as in `n: Int ->` for an `Int` value. The arm matches every value, the same as `n ->`. The annotation also works inside enum, tuple, and struct patterns, as in `Option.Some(n: Int) ->`.
-- A member of a union widens in the payload of a generic enum variant. For `type Pet = Cat | Dog`, a function that returns `Option<Pet>` can end with `Option.Some(cat)`. This works in every position that names the type, and for `Result.Ok`, `Result.Err`, and the variants of each generic enum. A literal works the same way, so `x: Option<Int32> = Option.Some(42)` compiles.
-- A member of a union widens in a tuple literal that is an argument of a generic function. For a `List<(String, Pet)>`, `pets.append(("tom", tom))` compiles when `tom` is a `Cat`.
-- A member of a union widens on a reassignment and on a write to a field. For `pet: Pet = cat`, the line `pet = dog` compiles, and so does `home.pet = dog` for a field of type `Pet`. A union with fewer members widens the same way. A local with no annotation keeps the type of its first value.
 - A number literal takes the width of the local or the field on a reassignment, a write to a field, and a compound assignment. For `small: Int32 = 1`, the lines `small = 2` and `small += 1` compile, and so does `self.count += 1` for an `Int32` field. A sized value widens into an `Int` local or field, as in `total = small`.
+- A member of a union widens on a reassignment and on a write to a field. For `pet: Pet = cat`, the line `pet = dog` compiles, and so does `home.pet = dog` for a field of type `Pet`. A union with fewer members widens the same way. A local with no annotation keeps the type of its first value.
 - The value of a reassignment reads its type from the local. For `found: Option<Int>`, the line `found = Option.None` compiles, and `items = []` compiles for a list.
-- A destructuring assignment from a tuple literal follows the rules of a plain assignment for each name. For `pet: Pet` and `small: Int32`, the line `(pet, small) = (dog, 7)` compiles.
+- A member of a union widens in the payload of a generic enum variant. For `type Pet = Cat | Dog`, a function that returns `Option<Pet>` can end with `Option.Some(cat)`. This works in every position that names the type, and for `Result.Ok`, `Result.Err`, and the variants of each generic enum. A literal works the same way, so `x: Option<Int32> = Option.Some(42)` compiles.
 - A generic struct literal, variant constructor, or function call takes its type arguments from a member of the expected union. For a `String | Box<Int32>`, the value `Box{value: 3}` compiles, and so do `Option.None` for a `String | Option<Int>` and `List.new()` for a `String | List<Int>`. When two members have the same generic type, the values decide.
-- A struct literal takes its type arguments from a type declaration of a generic type. For `type IntBox = Box<Int32>`, the line `box: IntBox = Box{value: 3}` compiles.
+- A union that uses a type parameter is the same type as the union written by hand when the parameter gets its type. For `struct Holder<T>` with a field `value: String | T`, the field of a `Holder<Int | Bool>` is a `Bool | Int | String`, and the field of a `Holder<String>` is a `String`. A function that returns `Int | T` returns an `Int` when `T` is `Int`. In a generic body, a `match` on an `Int | T` value with the arms `n: Int ->` and `t: T ->` runs the first arm when `T` is `Int`.
 - A type declaration of a union takes the members of a type declaration of a union that the file declares later. For `type B = Int | A` followed by `type A = String | Bool`, `B` is a `Bool | Int | String`, and a `match` on a `B` value can have a `text: String ->` arm. A union inside a type argument, a tuple, or a function type does the same, so `type Row = List<Int | A>` is a `List<Bool | Int | String>` in each order of the two declarations.
+- A member of a union widens in a tuple literal that is an argument of a generic function. For a `List<(String, Pet)>`, `pets.append(("tom", tom))` compiles when `tom` is a `Cat`.
+- A destructuring assignment from a tuple literal follows the rules of a plain assignment for each name. For `pet: Pet` and `small: Int32`, the line `(pet, small) = (dog, 7)` compiles.
+- A `match` arm can give a binding the type of the value it matches, as in `n: Int ->` for an `Int` value. The arm matches every value, the same as `n ->`. The annotation also works inside enum, tuple, and struct patterns, as in `Option.Some(n: Int) ->`.
+- A struct literal takes its type arguments from a type declaration of a generic type. For `type IntBox = Box<Int32>`, the line `box: IntBox = Box{value: 3}` compiles.
 
 ## [0.21.0] - 2026-11-22
 

@@ -1810,8 +1810,8 @@ Every project and dependency package declares two constants from its `koja.toml`
 
 ```koja
 IO.puts("#{PACKAGE_NAME} #{PACKAGE_VERSION}")  # my_app 1.2.0
-IO.puts(Mathx.PACKAGE_VERSION)                  # 0.4.0
-IO.puts(Koja.version())                         # 0.21.0
+IO.puts(Mathx.PACKAGE_VERSION)                 # 0.4.0
+IO.puts(Koja.version())                        # 0.21.1
 ```
 
 ### Visibility
