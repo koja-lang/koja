@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A number literal takes the width of the local or the field on a reassignment, a write to a field, and a compound assignment. For `small: Int32 = 1`, the lines `small = 2` and `small += 1` compile, and so does `self.count += 1` for an `Int32` field. A sized value widens into an `Int` local or field, as in `total = small`.
 - The value of a reassignment reads its type from the local. For `found: Option<Int>`, the line `found = Option.None` compiles, and `items = []` compiles for a list.
 - A destructuring assignment from a tuple literal follows the rules of a plain assignment for each name. For `pet: Pet` and `small: Int32`, the line `(pet, small) = (dog, 7)` compiles.
+- A generic struct literal, variant constructor, or function call takes its type arguments from a member of the expected union. For a `String | Box<Int32>`, the value `Box{value: 3}` compiles, and so do `Option.None` for a `String | Option<Int>` and `List.new()` for a `String | List<Int>`. When two members have the same generic type, the values decide.
+- A struct literal takes its type arguments from a type declaration of a generic type. For `type IntBox = Box<Int32>`, the line `box: IntBox = Box{value: 3}` compiles.
 - A type declaration of a union takes the members of a type declaration of a union that the file declares later. For `type B = Int | A` followed by `type A = String | Bool`, `B` is a `Bool | Int | String`, and a `match` on a `B` value can have a `text: String ->` arm. A union inside a type argument, a tuple, or a function type does the same, so `type Row = List<Int | A>` is a `List<Bool | Int | String>` in each order of the two declarations.
 
 ## [0.21.0] - 2026-11-22

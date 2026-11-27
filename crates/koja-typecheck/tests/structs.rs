@@ -12,7 +12,7 @@
 //! surface forms produce identical registry entries and resolution
 //! shape.
 
-use koja_ast::ast::{ExprKind, name_texts};
+use koja_ast::ast::{ExprKind, Statement, name_texts};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{Dispatch, GlobalKind, ResolvedStructField};
@@ -21,8 +21,8 @@ mod common;
 
 use common::{
     PACKAGE, assert_script_fails_with, diagnostic_messages, find_struct_decl, function_signature,
-    global_leaf, method_signature, package_leaf, registry_id, struct_definition, trailing_expr,
-    typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    global_leaf, method_signature, package_leaf, registry_id, script_body, struct_definition,
+    trailing_expr, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -1118,6 +1118,33 @@ fn generic_struct_construction_infers_type_args_from_field_values() {
         ResolvedType::Named {
             resolution: Resolution::Global(pair_id),
             type_args: vec![int, string],
+        },
+    );
+}
+
+#[test]
+fn generic_struct_construction_takes_type_args_from_an_alias_of_the_struct() {
+    // The annotation names `Box<Int32>` through a type declaration,
+    // so `T` is `Int32` before the literal `3` has a say.
+    let source = "
+        struct Box<T>
+          value: T
+        end
+
+        type IntBox = Box<Int32>
+
+        boxed: IntBox = Box{value: 3}
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let Some(Statement::Assignment { value, .. }) = script_body(&checked).last() else {
+        panic!("expected the script to end with an assignment");
+    };
+    assert_eq!(
+        value.resolution,
+        ResolvedType::Named {
+            resolution: Resolution::Global(registry_id(&checked, PACKAGE, &["Box"])),
+            type_args: vec![global_leaf(&checked, "Int32")],
         },
     );
 }

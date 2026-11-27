@@ -93,3 +93,48 @@ end
 
 IO.puts("#{inside(Option.Some(p))}, #{inside(Option.Some(Flag.Off("late")))}")
 IO.puts("#{inside(Option.Some(Flag.On))}, #{inside(Option.None)}")
+
+# A generic literal, variant, or call takes its type arguments from a member
+struct Box<T>
+  value: T
+end
+
+fn contents(held: String | Box<Int32>) -> String
+  match held
+    text: String -> "text #{text}"
+    box: Box<Int32> -> "box #{box.value}"
+  end
+end
+
+fn found(held: String | Option<Int>) -> String
+  match held
+    text: String -> "text #{text}"
+    Option.Some(n) -> "some #{n}"
+    Option.None -> "none"
+  end
+end
+
+fn measure(held: String | List<Int>) -> String
+  match held
+    text: String -> "text #{text}"
+    items: List<Int> -> "list of #{items.length()}"
+  end
+end
+
+boxed: String | Box<Int32> = Box{value: 3}
+empty: String | Option<Int> = Option.None
+fresh: String | List<Int> = List.new()
+IO.puts("#{contents(boxed)}, #{found(empty)}, #{measure(fresh)}")
+
+# The member of a recursive alias sets the type argument at each level
+type Nest = Int | Box<Nest>
+
+fn depth(nest: Nest) -> Int
+  match nest
+    _n: Int -> 0
+    inner: Box<Nest> -> 1 + depth(inner.value)
+  end
+end
+
+nest: Nest = Box{value: Box{value: 3}}
+IO.puts("depth #{depth(nest)}")
