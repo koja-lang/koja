@@ -1628,15 +1628,15 @@ pub extern "C" fn koja_rt_reductions_grant() -> u32 {
 ///
 /// Constructs a tagged buffer: tag=2 (IO event), then the IOReady enum
 /// layout: variant byte (0=Read, 1=Write, 2=Error) at offset 8, followed
-/// by the `IO.Descriptor` struct (i64 `raw`) at offset 16. Routed to the
+/// by the `IO.Descriptor` struct (i32 `raw`) at offset 12. Routed to the
 /// target's business queue.
-pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
+pub fn send_io_event(pid: i64, variant: u8, fd: i32) {
     let buf = unsafe {
         let buf = memory::alloc(IO_READY_BUF_SIZE);
         ptr::write_bytes(buf, 0, IO_READY_BUF_SIZE);
         *buf = TAG_IO_READY;
         *buf.add(IO_READY_VARIANT_OFFSET) = variant;
-        *(buf.add(IO_READY_FD_OFFSET) as *mut i64) = fd;
+        *(buf.add(IO_READY_FD_OFFSET) as *mut i32) = fd;
         buf
     };
 

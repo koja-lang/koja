@@ -1,5 +1,7 @@
+alias IO.Descriptor.Interest
 alias IO.Error as IOError
 alias IO.Reader.Options as ReaderOptions
+alias IO.Ready as IOReady
 alias Net.IPAddress
 alias Net.Socket
 alias Net.Socket.Address as SocketAddress
@@ -148,6 +150,32 @@ test "TCPSocket.set_nodelay sets the option on both ends of a connection"
   try require(client_off)
 end
 
+test "TCPSocket.descriptor gets IO.Ready after the peer writes"
+  (listener, port) = try bind_loopback_tcp()
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
+  client = try require(TCPSocket.connect_addr(addr))
+  accepted = listener.accept(Option.Some(SHORT_WAIT))
+  _ = listener.close()
+  server = try require(accepted)
+
+  watched = server.descriptor()
+  watcher = spawn Watcher.start(server)
+  written = client.write_all("ping")
+  ready = watcher.call(WatchMsg.Ready, 2000)
+  read = server.read(16, ReaderOptions{timeout: Option.Some(SHORT_WAIT)})
+  _ = client.close()
+  _ = server.close()
+
+  try require(written)
+  assert try require(read) == "ping".to_binary()
+
+  match ready
+    Result.Ok(IOReady.Read(descriptor)) -> assert descriptor.raw == watched.raw
+    Result.Ok(other) -> fail "expected Read, got: #{other}"
+    Result.Err(_) -> fail "no readiness message arrived"
+  end
+end
+
 test "UDPSocket.bind to port 0"
   sock = try require(UDPSocket.bind(0))
   _ = sock.close()
@@ -193,6 +221,39 @@ test "UDP recv_from returns a complete sender address"
   assert address.ip.version == IPAddress.Version.V4
   assert address.ip.to_string() == "127.0.0.1"
   assert address.port > 0
+end
+
+priv enum WatchMsg
+  # Reply with the readiness message, once it arrived.
+  Ready
+end
+
+# Watches the descriptor of a socket. Answers `WatchMsg.Ready` with the
+# readiness message, and holds the answer until that message arrives.
+priv struct Watcher: Process<TCPSocket, WatchMsg | IOReady, IOReady>
+  caller: Option<ReplyTo<IOReady>> = Option.None
+  ready: Option<IOReady> = Option.None
+
+  fn start(socket: TCPSocket) -> Self ! Process.StopReason
+    socket.descriptor().watch(Interest.Readable)
+    Watcher{}
+  end
+
+  fn handle(self, msg: WatchMsg | IOReady, from: Option<ReplyTo<IOReady>>)
+    -> Process.Step<Self>
+
+    match msg
+      ready: IOReady -> self.ready = Option.Some(ready)
+      ask: WatchMsg -> self.caller = from
+    end
+
+    match self.ready
+      Option.Some(ready) -> ReplyTo.reply(self.caller, ready)
+      Option.None -> Option.None
+    end
+
+    Process.Step.Continue(self)
+  end
 end
 
 priv fn bind_loopback_udp -> (UDPSocket, Int) ! Test.Failure

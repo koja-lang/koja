@@ -23,7 +23,9 @@ use crate::layout::enums::{
 };
 use crate::layout::structs::{declare_struct_type, define_struct_body};
 use crate::layout::unions::{declare_union_type, define_union_body};
-use crate::layout::wire_contract::{assert_wire_enum_order, assert_wire_struct_layout};
+use crate::layout::wire_contract::{
+    assert_wire_enum_order, assert_wire_payload_layout, assert_wire_struct_layout,
+};
 use crate::main_wrapper::{
     emit_app_name_global, emit_exit_code_global, emit_process_entry_main, emit_script_main,
 };
@@ -53,6 +55,7 @@ pub(crate) fn compile_packages(
     define_types(ctx, packages)?;
     assert_wire_enum_order(ctx);
     assert_wire_struct_layout(ctx);
+    assert_wire_payload_layout(ctx);
     // Built constant globals need every struct and enum body above,
     // and every function body below loads them.
     declare_built_constant_globals(ctx, packages)?;

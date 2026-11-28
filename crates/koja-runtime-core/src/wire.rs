@@ -25,6 +25,14 @@
 //! against these constants, and the `lang_process_*` / `lang_io`
 //! suites cover the rest of the shape end to end.
 //!
+//! The `IO_READY_*` and `EXIT_SIGNAL_*` offsets place the fields of a
+//! Koja value, so they must equal the layout the backend gives
+//! `IO.Ready` and `Process.ExitSignal`. The wire-contract check in
+//! `koja-ir-llvm` (`layout/wire_contract.rs`) mirrors them the same
+//! way. It compares its mirror with the LLVM layout on every compile,
+//! and a dev-dependency unit test there pins the mirror against these
+//! constants.
+//!
 //! Tags are routing classes, not payload shapes: they decide which part
 //! of the receiver's mailbox an envelope lands in (see
 //! [`crate::mailbox`]). Receive arms only ever see `TAG_BUSINESS`,
@@ -62,13 +70,13 @@ pub const TAG_HEADER_SIZE: usize = 8;
 /// Total size of a lifecycle envelope: tag header + one variant byte.
 pub const LIFECYCLE_BUF_SIZE: usize = 16;
 
-/// Total size of an IOReady envelope: tag header + variant byte +
-/// `IO.Descriptor`.
-pub const IO_READY_BUF_SIZE: usize = 24;
+/// Total size of an IOReady envelope, which is the tag header and the
+/// 8-byte `IO.Ready` enum (variant byte, 3 pad bytes, `IO.Descriptor`).
+pub const IO_READY_BUF_SIZE: usize = 16;
 /// Offset of the IOReady variant byte within the envelope.
 pub const IO_READY_VARIANT_OFFSET: usize = 8;
-/// Offset of the `IO.Descriptor` (i64) within an IOReady envelope.
-pub const IO_READY_FD_OFFSET: usize = 16;
+/// Offset of the `IO.Descriptor` (i32 `raw`) within an IOReady envelope.
+pub const IO_READY_FD_OFFSET: usize = 12;
 
 /// IOReady variant: the fd became readable.
 pub const IO_READY_READ: u8 = 0;

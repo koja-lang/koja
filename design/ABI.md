@@ -140,9 +140,9 @@ offset 0                  offset TAG_HEADER_SIZE (8)
 | `TAG_EXIT_SIGNAL`              | 4     |
 | `TAG_HEADER_SIZE`              | 8     |
 | `LIFECYCLE_BUF_SIZE`           | 16    |
-| `IO_READY_BUF_SIZE`            | 24    |
+| `IO_READY_BUF_SIZE`            | 16    |
 | `IO_READY_VARIANT_OFFSET`      | 8     |
-| `IO_READY_FD_OFFSET`           | 16    |
+| `IO_READY_FD_OFFSET`           | 12    |
 | `EXIT_SIGNAL_BUF_SIZE`         | 40    |
 | `EXIT_SIGNAL_PID_OFFSET`       | 8     |
 | `EXIT_SIGNAL_REASON_OFFSET`    | 16    |
@@ -164,6 +164,19 @@ An exit-signal payload is the dying `Pid` followed by
 `Process.ExitReason`. The reason stores its tag at offset 16. A crash stores
 the managed `CrashInfo.message` and `CrashInfo.backtrace` pointers at offsets
 24 and 32. Non-crash variants leave those pointers null.
+
+An I/O readiness payload is an `IO.Ready` value, which is 8 bytes. The
+variant byte is at offset 8, three pad bytes follow it, and the 32-bit
+`IO.Descriptor.raw` is at offset 12. Every variant carries the descriptor at
+that offset.
+
+The runtime writes these two payloads field by field, so each offset must
+equal the layout that LLVM gives the stdlib declaration. The wire-contract
+check in `koja-ir-llvm` (`layout/wire_contract.rs`) measures the LLVM types of
+`IO.Ready` and `Process.ExitSignal` on every compile and fails the build when
+an offset or a size differs. A unit test there pins the numbers it compares
+against the constants in `wire.rs`. Eval builds both values from the
+declarations and does not depend on the offsets.
 
 Lifecycle and I/O payloads carry declaration-order variant bytes.
 

@@ -899,7 +899,9 @@ fn lang_process_io_signal() {
 /// event through its `handle` (tag-2 dispatch) instead of trapping.
 /// Pre-filled STDIN makes the fd readable immediately. The interpreter
 /// now drives its own cooperative reactor (see `koja-ir-eval/src/reactor`),
-/// so the watch -> `IOReady` path holds there too.
+/// so the watch -> `IOReady` path holds there too. The fixture then
+/// watches STDOUT and prints the descriptor of each event, so the
+/// expected output also pins the `IO.Descriptor` payload.
 #[test]
 fn lang_process_io() {
     for backend in BACKENDS {
