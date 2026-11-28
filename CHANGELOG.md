@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `TCPSocket.descriptor()` returns the file descriptor of a connection, as `TCPListener.descriptor()` does. A process calls `watch` on it to get an `IO.Ready` message when the connection has bytes to read.
+
 ### Changed
 
 - `map = map.remove(key)` and `set = set.remove(item)` are faster, most of all on a large table.
@@ -17,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A binary pattern under `--backend=llvm` matches a `Bits` value by its bit length, as the interpreter does. `<<first::8>>` does not match a value of 12 bits.
 - A `: Bits` rest segment under `--backend=llvm` keeps the partial last byte of the value. For `<<0xAA, 5::4>>`, the arm `<<head::8, rest: Bits>>` binds `rest` to `<<5::4>>`.
 - `Map` and `Set` under `--backend=llvm` no longer use tombstones. `remove` takes the entry out of the table and shifts the entries after it back. A tombstone stayed in the table after each `remove`, so a later `put` or `insert` could store a key twice, and a lookup of a missing key could hang after many removes.
+- `IOReady.Read(descriptor)` and `IOReady.Write(descriptor)` under `--backend=llvm` bind the descriptor that became ready, as the interpreter does. A process that watches more than one descriptor can tell them apart.
 
 ## [0.21.1] - 2026-11-27
 

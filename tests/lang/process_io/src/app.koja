@@ -10,6 +10,10 @@ end
 # watches STDIN for readability and must receive the reactor's readiness
 # event through its ordinary `handle` (tag-2 dispatch), not trap. The
 # test harness pre-fills STDIN so the fd is readable immediately.
+#
+# The process then watches STDOUT for writability and prints the
+# descriptor that each event carries. STDOUT is descriptor 1, so a
+# payload that arrives as zero shows in the output.
 
 struct App: Process<App, AppMsg | IOReady, String>
   fn start(config: App) -> Result<Self, StopReason>
@@ -23,8 +27,14 @@ struct App: Process<App, AppMsg | IOReady, String>
     -> Step<Self>
 
     match msg
-      IOReady.Read(_) ->
-        IO.puts("io ready read")
+      IOReady.Read(descriptor) ->
+        IO.puts("io ready read #{descriptor.raw}")
+        stdout = IO.Descriptor{raw: 1}
+        stdout.watch(IO.Descriptor.Interest.Writable)
+        Step.Continue(self)
+
+      IOReady.Write(descriptor) ->
+        IO.puts("io ready write #{descriptor.raw}")
         Step.Done(StopReason.Shutdown)
 
       io: IOReady ->

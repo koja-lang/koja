@@ -1,2 +1,3 @@
 ready
-io ready read
+io ready read 0
+io ready write 1

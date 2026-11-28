@@ -1157,8 +1157,23 @@ Every write has `write_timeout`. A write blocks the worker, and a
 blocked worker reads nothing. A peer that does not read for that
 long loses the connection.
 
-When a connection has no open stream for `idle_timeout`, the worker
-calls `shut_down()` and closes.
+When a connection has no open stream and no handler that runs for
+`idle_timeout`, the worker calls `shut_down()` and closes.
+
+Four settings that come from the HTTP/1.1 worker mean this on
+HTTP/2.
+
+- `read_timeout` bounds one request. A request that does not end
+  within it, counted from its `Request` event, gets a 408 on its
+  stream. The connection stays open, as it does after a 413 and a
+  501.
+- `max_requests_per_connection` does not apply. A connection serves
+  streams until it is idle or the client leaves.
+- `on_request` runs in the process of the request, after the handler
+  returns. What it logs or traces belongs to that request.
+- `on_crash` is `fn (Request, Process.CrashInfo) -> ()`. It runs in
+  the worker and gets the request, the panic message, and the
+  backtrace.
 
 ### A canceled request runs to its end
 

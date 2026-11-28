@@ -162,6 +162,18 @@ struct TCPSocket
   end
 
   @doc """
+  Returns the underlying file descriptor, for `IO.Descriptor.watch` and
+  `IO.Descriptor.block`.
+
+  A TLS session can hold bytes that the descriptor does not show as
+  readable. After an `IO.Ready` message, read with a timeout of
+  `Duration.ZERO` until a read finds nothing.
+  """
+  fn descriptor(self) -> IO.Descriptor
+    self.socket.descriptor
+  end
+
+  @doc """
   Turns the `TCP_NODELAY` option on or off. A new connection has it
   off. The system then holds a small write while bytes sent before it
   wait for an acknowledgment (Nagle's algorithm), which can delay a

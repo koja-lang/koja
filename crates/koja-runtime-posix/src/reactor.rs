@@ -207,7 +207,7 @@ fn apply_wakers(wakers: Vec<Waker>) -> usize {
     }
     for waker in wakers {
         if let Waker::Deliver { fd, pid, readiness } = waker {
-            send_io_event(pid, io_variant(readiness), fd as i64);
+            send_io_event(pid, io_variant(readiness), fd);
         }
     }
     published
@@ -281,7 +281,7 @@ fn wake(waker: Waker) {
             }
         }
         Waker::Deliver { fd, pid, .. } => {
-            send_io_event(pid, IO_READY_ERROR, fd as i64);
+            send_io_event(pid, IO_READY_ERROR, fd);
         }
     }
     notify_all_workers();
