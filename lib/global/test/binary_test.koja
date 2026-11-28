@@ -132,6 +132,107 @@ test "match discards leading bytes and binds payload"
   end
 end
 
+test "match binds fields that do not sit on byte boundaries"
+  header = <<0x80, 0x00, 0x00, 0x07>>
+
+  match header
+    <<reserved::1, stream::31>> ->
+      assert reserved == 1
+      assert stream == 7
+
+    _ ->
+      fail "bit field pattern"
+  end
+end
+
+test "match binds a field that covers nine bytes"
+  wide = <<0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x0F>>
+
+  match wide
+    <<_::4, value::64, low::4>> ->
+      assert value == 0x123456789ABCDEF0
+      assert low == 15
+
+    _ ->
+      fail "nine byte pattern"
+  end
+end
+
+test "match binds a signed field that does not sit on byte boundaries"
+  nibbles = <<0xF7>>
+
+  match nibbles
+    <<high::4 signed, low::4 signed>> ->
+      assert high == -1
+      assert low == 7
+
+    _ ->
+      fail "signed nibble pattern"
+  end
+end
+
+test "match tests a literal that does not sit on byte boundaries"
+  flags = <<0xA5>>
+
+  match flags
+    <<0::1, _::7>> -> fail "the top bit is set"
+    <<5::3, rest::5>> -> assert rest == 5
+    _ -> fail "bit literal pattern"
+  end
+end
+
+test "match tests a wide literal that does not sit on byte boundaries"
+  ones = <<0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF0>>
+
+  match ones
+    <<_::4, 0::72, _::4>> -> fail "the middle bits are set"
+    <<_::4, -1::72 signed, _::4>> -> ()
+    _ -> fail "wide bit literal pattern"
+  end
+end
+
+test "match on Bits counts bits, not whole bytes"
+  partial = <<0xAA, 5::4>>
+
+  match partial
+    <<_::8>> ->
+      fail "a pattern of 8 bits matched 12 bits"
+
+    <<_::16>> ->
+      fail "a pattern of 16 bits matched 12 bits"
+
+    <<first::8, last::4>> ->
+      assert first == 0xAA
+      assert last == 5
+
+    _ ->
+      fail "bit length pattern"
+  end
+end
+
+test "match greedy rest: Bits keeps a partial last byte"
+  partial = <<0xAA, 0xBB, 5::4>>
+
+  match partial
+    <<head::8, rest: Bits>> ->
+      assert head == 0xAA
+      assert rest.bit_size() == 12
+      assert rest == <<0xBB, 5::4>>
+
+    _ ->
+      fail "partial tail pattern"
+  end
+end
+
+test "match greedy rest: Bits that is only a partial byte"
+  partial = <<0xAA, 5::4>>
+
+  match partial
+    <<_::8, rest: Bits>> -> assert rest == <<5::4>>
+    _ -> fail "partial byte tail pattern"
+  end
+end
+
 test "pattern too short for data falls through"
   short = <<0x01>>
 

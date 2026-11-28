@@ -3,12 +3,10 @@
 //!
 //! Algorithm:
 //!
-//! 1. Load the subject's runtime bit length from `subject - 8`,
-//!    shift right by 3 for the byte length.
-//! 2. Compare the byte length against `layout.fixed_bits >> 3`
-//!    (`EQ` when there is no greedy tail, `UGE` when there is). A
-//!    failed check short-circuits to `false` without touching the
-//!    payload.
+//! 1. Load the subject's runtime bit length from `subject - 8`.
+//! 2. Compare the bit length against `layout.fixed_bits` (`EQ` when
+//!    there is no greedy tail, `UGE` when there is). A failed check
+//!    short-circuits to `false` without touching the payload.
 //! 3. Test phase. AND together every literal segment's comparison
 //!    ([`LoweredBinaryPattern::LiteralInt`] / `LiteralBytes`
 //!    against the constant). A failed test short-circuits to
@@ -26,8 +24,13 @@
 //!    - [`LoweredBinaryPattern::Discard`] is a no-op in both
 //!      phases.
 //!
-//! All sub-byte arithmetic is gated to the byte-aligned path.
-//! Typecheck rejects bit-misaligned greedy tails, but a `Bits`
+//! An integer segment on byte boundaries reads whole bytes in its
+//! byte order. Any other integer segment reads its bits most
+//! significant first, which is the one order a run of bits has. The
+//! interpreter reads both the same way.
+//!
+//! A greedy tail is gated to a byte-aligned `bit_offset`.
+//! Typecheck rejects bit-misaligned `: Binary` tails, but a `Bits`
 //! greedy tail with a byte-aligned fixed prefix and a sub-byte
 //! suffix still flows through here. The emitter `memcpy`s
 //! `ceil(remaining_bits / 8)` bytes and lets the heap layout carry
@@ -74,8 +77,7 @@ pub(super) fn emit_binary_match<'ctx>(
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let payload = lookup(values, subject).into_pointer_value();
     let bit_length = load_bit_length(ctx, payload, "bin_pat_bit_len")?;
-    let byte_length = byte_count(ctx, bit_length, Rounding::Floor, "bin_pat_byte_len")?;
-    let length_ok = length_check(ctx, &layout, byte_length)?;
+    let length_ok = length_check(ctx, &layout, bit_length)?;
 
     // Segment extraction indexes off the subject length, so on a
     // too-short subject the reads run past the payload and the
@@ -117,7 +119,7 @@ pub(super) fn emit_binary_match<'ctx>(
     // arm, or every miss leaks one block.
     ctx.builder.position_at_end(bind_block);
     for segment in segments {
-        emit_segment_bind(ctx, payload, bit_length, byte_length, segment)?;
+        emit_segment_bind(ctx, payload, bit_length, segment)?;
     }
     let bind_end = ctx.builder.get_insert_block().unwrap_or(bind_block);
     ctx.builder
@@ -139,18 +141,17 @@ pub(super) fn emit_binary_match<'ctx>(
     Ok(result.as_basic_value().into_int_value())
 }
 
-/// `byte_length == fixed_bits / 8` (exact match) when the pattern
-/// has no greedy tail, `byte_length >= fixed_bits / 8` (prefix
-/// match) when it does. `fixed_bits` is always a multiple of 8 at
-/// this point. The only sub-byte sources are literal segments
-/// with sub-byte widths, which lower-side rejects.
+/// `bit_length == fixed_bits` (exact match) when the pattern has no
+/// greedy tail, `bit_length >= fixed_bits` (prefix match) when it
+/// does. The check counts bits, as the interpreter does. A pattern
+/// whose segments do not fill whole bytes matches a `Bits` subject
+/// of that exact length, and no segment reads past the payload.
 fn length_check<'ctx>(
     ctx: &EmitContext<'ctx>,
     layout: &LoweredBinaryMatchLayout,
-    byte_length: IntValue<'ctx>,
+    bit_length: IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let required_bytes = layout.fixed_bits / 8;
     let pred = if layout.has_greedy_tail {
         IntPredicate::UGE
     } else {
@@ -159,8 +160,8 @@ fn length_check<'ctx>(
     ctx.builder
         .build_int_compare(
             pred,
-            byte_length,
-            i64_ty.const_int(required_bytes, false),
+            bit_length,
+            i64_ty.const_int(layout.fixed_bits, false),
             "bin_pat_len_ok",
         )
         .or_ice()
@@ -206,7 +207,6 @@ fn emit_segment_bind<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
     bit_length: IntValue<'ctx>,
-    byte_length: IntValue<'ctx>,
     segment: &LoweredBinaryPattern,
 ) -> Result<(), LlvmError> {
     match segment {
@@ -230,19 +230,17 @@ fn emit_segment_bind<'ctx>(
         }
         LoweredBinaryPattern::GreedyTail {
             bit_offset, local, ..
-        } => emit_greedy_tail(ctx, payload, bit_length, byte_length, *bit_offset, *local),
+        } => emit_greedy_tail(ctx, payload, bit_length, *bit_offset, *local),
     }
 }
 
-/// Compare the byte-aligned slice at `bit_offset` against the
-/// constant `value`. Sub-byte widths flow through here too, but
-/// only at sub-byte `bit_offset`s. The emitter gates to byte
-/// alignment. The literal-only path that hits sub-byte widths
-/// is `<<x::3, _::5>>`-style and is not required by any current
-/// test.
+/// Compare the `width` bits at `bit_offset` against the low `width`
+/// bits of the constant `value`.
 ///
-/// Widths past 64 bits do not fit the `i64` compare, so they become
-/// a `memcmp` against the literal's encoded bytes instead.
+/// Widths past 64 bits do not fit the `i64` compare. On byte
+/// boundaries they become a `memcmp` against the literal's encoded
+/// bytes. Off byte boundaries they go through
+/// [`emit_wide_literal_bits`].
 fn emit_literal_int<'ctx>(
     ctx: &EmitContext<'ctx>,
     cursor: BitCursor<'ctx>,
@@ -250,19 +248,15 @@ fn emit_literal_int<'ctx>(
     width: u64,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let bit_offset = cursor.bit_offset;
-    if !bit_offset.is_multiple_of(8) || !width.is_multiple_of(8) {
-        return Err(LlvmError::Codegen(format!(
-            "LLVM emit: sub-byte binary literal pattern segment (bit_offset={bit_offset}, \
-             width={width}) is not yet supported",
-        )));
-    }
-    let num_bytes = width / 8;
-    if width > 64 {
-        let bytes = encode_wide_literal(value, num_bytes, cursor.endian);
+    if width > 64 && on_byte_boundaries(bit_offset, width) {
+        let bytes = encode_wide_literal(value, width / 8, cursor.endian);
         return emit_literal_bytes(ctx, cursor.payload, bit_offset, &bytes);
     }
+    if width > 64 {
+        return emit_wide_literal_bits(ctx, cursor, value, width);
+    }
     let i64_ty = ctx.context.i64_type();
-    let extracted = extract_int(ctx, cursor, num_bytes)?;
+    let extracted = extract_segment(ctx, cursor, width)?;
     let mask = mask_for_width(ctx, width);
     let masked_ext = ctx
         .builder
@@ -276,6 +270,56 @@ fn emit_literal_int<'ctx>(
     ctx.builder
         .build_int_compare(IntPredicate::EQ, masked_ext, masked_lit, "lit_eq")
         .or_ice()
+}
+
+/// Compare a literal wider than 64 bits that does not sit on byte
+/// boundaries. The bits go most significant first, in runs of at
+/// most 64, and every run must match.
+fn emit_wide_literal_bits<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    cursor: BitCursor<'ctx>,
+    value: i128,
+    width: u64,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let mut all_eq = true_i1(ctx);
+    let mut done = 0;
+    while done < width {
+        let run = (width - done).min(64);
+        let expected = literal_run(value, width - done - run, run);
+        let extracted = extract_bits(ctx, cursor.payload, cursor.bit_offset + done, run)?;
+        let run_eq = ctx
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                extracted,
+                i64_ty.const_int(expected, false),
+                "lit_run_eq",
+            )
+            .or_ice()?;
+        all_eq = ctx
+            .builder
+            .build_and(all_eq, run_eq, "lit_run_and")
+            .or_ice()?;
+        done += run;
+    }
+    Ok(all_eq)
+}
+
+/// The `run` bits of `value` whose lowest bit has the significance
+/// `low`, as the low bits of a `u64`. Bits past the 128-bit payload
+/// take the sign fill, so a negative literal stays negative at any
+/// width.
+fn literal_run(value: i128, low: u64, run: u64) -> u64 {
+    (0..run).fold(0, |bits, i| {
+        let significance = low + i;
+        let set = if significance >= 128 {
+            value < 0
+        } else {
+            (value >> significance) & 1 == 1
+        };
+        bits | (u64::from(set) << i)
+    })
 }
 
 /// The two's complement encoding of `value` over `num_bytes` bytes in
@@ -363,15 +407,7 @@ fn emit_bind_int<'ctx>(
     ty: &IRType,
     width: u64,
 ) -> Result<(), LlvmError> {
-    let bit_offset = cursor.bit_offset;
-    if !bit_offset.is_multiple_of(8) || !width.is_multiple_of(8) {
-        return Err(LlvmError::Codegen(format!(
-            "LLVM emit: sub-byte binary binding pattern segment (bit_offset={bit_offset}, \
-             width={width}) is not yet supported",
-        )));
-    }
-    let num_bytes = width / 8;
-    let extracted = extract_int(ctx, cursor, num_bytes)?;
+    let extracted = extract_segment(ctx, cursor, width)?;
     let extended = extend_for_sign(ctx, extracted, sign, width)?;
     let narrowed = narrow_to_ir_type(ctx, extended, ty)?;
     let slot = ctx.local_slot(local);
@@ -386,11 +422,14 @@ fn emit_bind_int<'ctx>(
 /// `: Binary` tails, and `: Bits` tails accept any prefix shape but
 /// the lower path only emits byte-aligned `bit_offset`s through this
 /// helper.
+///
+/// `remaining_bytes` rounds up, so the tail of a `Bits` subject
+/// keeps its partial last byte. That byte is the last byte of the
+/// subject, whose unused bits are already zero.
 fn emit_greedy_tail<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
     bit_length: IntValue<'ctx>,
-    byte_length: IntValue<'ctx>,
     bit_offset: u64,
     local: Option<IRLocalId>,
 ) -> Result<(), LlvmError> {
@@ -412,14 +451,11 @@ fn emit_greedy_tail<'ctx>(
     let prefix_bytes_const = i64_ty.const_int(prefix_bytes, false);
     let prefix_bits_const = i64_ty.const_int(prefix_bits, false);
 
-    let remaining_bytes = ctx
-        .builder
-        .build_int_sub(byte_length, prefix_bytes_const, "tail_bytes")
-        .or_ice()?;
     let remaining_bits = ctx
         .builder
         .build_int_sub(bit_length, prefix_bits_const, "tail_bits")
         .or_ice()?;
+    let remaining_bytes = byte_count(ctx, remaining_bits, Rounding::Ceil, "tail_bytes")?;
 
     let alloc_size = block_alloc_size(ctx, remaining_bytes, false, "tail_alloc_size")?;
     let malloc = declare_malloc_extern(ctx);
@@ -456,31 +492,12 @@ fn extract_int<'ctx>(
     cursor: BitCursor<'ctx>,
     num_bytes: u64,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let byte_offset = cursor.bit_offset / 8;
     let mut result = i64_ty.const_int(0, false);
     let is_little = matches!(cursor.endian, BinaryEndian::Little);
     for i in 0..num_bytes {
-        let ptr = unsafe {
-            ctx.builder
-                .build_in_bounds_gep(
-                    i8_ty,
-                    cursor.payload,
-                    &[i64_ty.const_int(byte_offset + i, false)],
-                    "seg_byte_ptr",
-                )
-                .or_ice()?
-        };
-        let byte_val = ctx
-            .builder
-            .build_load(i8_ty, ptr, "seg_byte")
-            .or_ice()?
-            .into_int_value();
-        let extended = ctx
-            .builder
-            .build_int_z_extend(byte_val, i64_ty, "seg_ext")
-            .or_ice()?;
+        let extended = load_byte(ctx, cursor.payload, byte_offset + i)?;
         let shift_amount = if is_little {
             i * 8
         } else {
@@ -496,6 +513,96 @@ fn extract_int<'ctx>(
         result = ctx.builder.build_or(result, shifted, "seg_or").or_ice()?;
     }
     Ok(result)
+}
+
+/// Read `width` bits, at most 64, at any bit position and return
+/// them in the low bits of an `i64`. The bits go most significant
+/// first, which is the one order a run of bits has.
+///
+/// The run can cover nine bytes. Each byte moves to its place in
+/// the result, and the mask drops the bits before the run. The bits
+/// after the run fall off in the right shift of the last byte.
+fn extract_bits<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    payload: PointerValue<'ctx>,
+    bit_offset: u64,
+    width: u64,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let first_byte = bit_offset / 8;
+    let num_bytes = (bit_offset + width).div_ceil(8) - first_byte;
+    let trailing_bits = num_bytes * 8 - bit_offset % 8 - width;
+    let mut result = i64_ty.const_int(0, false);
+    for i in 0..num_bytes {
+        let extended = load_byte(ctx, payload, first_byte + i)?;
+        let place = (num_bytes - 1 - i) * 8;
+        let placed = if place > trailing_bits {
+            let shift = i64_ty.const_int(place - trailing_bits, false);
+            ctx.builder
+                .build_left_shift(extended, shift, "bits_shl")
+                .or_ice()?
+        } else if place < trailing_bits {
+            let shift = i64_ty.const_int(trailing_bits - place, false);
+            ctx.builder
+                .build_right_shift(extended, shift, false, "bits_lshr")
+                .or_ice()?
+        } else {
+            extended
+        };
+        result = ctx.builder.build_or(result, placed, "bits_or").or_ice()?;
+    }
+    ctx.builder
+        .build_and(result, mask_for_width(ctx, width), "bits_mask")
+        .or_ice()
+}
+
+/// Read an integer segment of at most 64 bits. A segment on byte
+/// boundaries goes through [`extract_int`], which honors its byte
+/// order. Any other segment goes through [`extract_bits`].
+fn extract_segment<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    cursor: BitCursor<'ctx>,
+    width: u64,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    if on_byte_boundaries(cursor.bit_offset, width) {
+        extract_int(ctx, cursor, width / 8)
+    } else {
+        extract_bits(ctx, cursor.payload, cursor.bit_offset, width)
+    }
+}
+
+/// Load the payload byte at `byte_offset`, zero-extended to `i64`.
+fn load_byte<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    payload: PointerValue<'ctx>,
+    byte_offset: u64,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
+    let ptr = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(
+                i8_ty,
+                payload,
+                &[i64_ty.const_int(byte_offset, false)],
+                "seg_byte_ptr",
+            )
+            .or_ice()?
+    };
+    let byte_val = ctx
+        .builder
+        .build_load(i8_ty, ptr, "seg_byte")
+        .or_ice()?
+        .into_int_value();
+    ctx.builder
+        .build_int_z_extend(byte_val, i64_ty, "seg_ext")
+        .or_ice()
+}
+
+/// True when a segment starts on a byte boundary and fills whole
+/// bytes.
+fn on_byte_boundaries(bit_offset: u64, width: u64) -> bool {
+    bit_offset.is_multiple_of(8) && width.is_multiple_of(8)
 }
 
 /// Sign-extend the low `width` bits when `sign == Signed`. Without

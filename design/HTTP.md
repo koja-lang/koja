@@ -436,7 +436,7 @@ field of a private type, so `Parser.State` is public. It carries
 `@doc false`, which keeps it out of the generated documentation, as
 `Lease.Token` does in `pooler`. A caller has no use for it.
 
-`http2` returns a list of events from one `receive` call. The
+`http2` returns a list of events from one `read` call. The
 parsers return one event at a time, because HTTP/1.1 carries one
 message at a time and the owner acts between events. `h11` works the
 same way, and it serves both ends of a connection.
@@ -634,7 +634,7 @@ and it gives back events and the bytes to send.
 ```koja
 conn = ServerConnection.new(Settings{})
 
-(conn, events) = conn.receive(bytes)
+(conn, events) = conn.read(bytes)
 conn = try conn.respond(stream, response)
 (conn, output) = conn.take_output()
 ```
@@ -674,11 +674,16 @@ Both types share the rest.
 
 | Function              | Effect                                   |
 | --------------------- | ---------------------------------------- |
-| `receive(bytes)`      | Take bytes from the peer, return events  |
+| `read(bytes)`         | Take bytes from the peer, return events  |
 | `take_output()`       | Return the bytes to send and clear them  |
 | `reset(stream, code)` | Cancel one stream                        |
 | `ping()`              | Queue a PING                             |
 | `shut_down()`         | Queue a GOAWAY and accept no new streams |
+| `open_streams()`      | Return the number of open streams        |
+
+The call that takes bytes is `read`, because `receive` is a reserved
+word in Koja. The idle timeout in `ranger` and the drain in `scout`
+both need `open_streams`.
 
 `StreamID` is its own type, so a stream cannot be confused with any
 other integer. `HTTP2.PREFACE` is the 24-byte client preface, which
@@ -717,7 +722,8 @@ events come for it. `Closed` says the same for the connection.
 `UnsupportedMethod` is a request whose method is not in `Method`.
 The connection cannot build a `Request` for it, so the owner answers
 it. It matches `Parser.Error.UnsupportedMethod` on the HTTP/1.1
-side.
+side. The stream stays open for the answer, and the connection
+discards the body of that request.
 
 ### Sending is whole messages for now
 
@@ -736,28 +742,41 @@ write the same code to build one from `Data` events. `Collector`
 is that code.
 
 ```koja
-collector = collector.start(stream, head)
+collector = try collector.start(stream, head)
 collector = try collector.append(stream, chunk)
 (collector, message) = collector.finish(stream)
 ```
 
 A `Collector<T>` holds the unfinished messages of one connection by
-stream. `append` fails when a body passes `max_body_bytes`, and the
-owner then resets the stream or answers 413. `finish` returns the
-head and the body together. A `Reset` drops the stream's entry.
+stream. `start` fails when the head declares a body larger than
+`max_body_bytes`, and `append` fails when the body passes it. Both
+fail with `Collector.Error.BodyTooLarge`, and the owner then resets
+the stream or answers 413. `finish` returns the head and the body
+together as an `Option<T>`, which is `None` when the stream has no
+entry. On a `Reset` the owner calls `discard(stream)`, which drops
+the stream's entry.
+
+`T` is bound by a protocol, `Collector.Message`, with two functions.
+`declared_length` reads the `content-length` of a head, and
+`with_body` returns the head with a body. `http2` implements it for
+`HTTP.Request` and `HTTP.Response`.
 
 The collector is the only part of the package that assumes a
 buffered body. A streaming owner skips it and reads the `Data`
 events itself.
 
-The connection returns flow control credit as soon as `receive`
+The connection returns flow control credit as soon as `read`
 hands the bytes over. That is correct while the owner buffers,
 because the body cap bounds the memory. A streaming owner must say
 when it has used the bytes, and that function lands with streaming.
 
 ### What is inside
 
-One type for each file, none of them public.
+One type for each file. A type that no public field and no public
+signature names is `priv`. Koja does not let a public field or
+signature name a `priv` type, so the rest are public with
+`@doc false`, which keeps them out of the docs. No caller should use
+one.
 
 - **`Frame`.** Encodes and decodes the ten frame types. The 9-byte
   frame header is one binary pattern.
@@ -768,7 +787,9 @@ One type for each file, none of them public.
   stream.
 - **`Stream`.** The state machine from RFC 9113 section 5.1.
 - **The core.** Settings exchange, the stream table, and the output
-  queue.
+  queue. `Map` iteration differs between the two backends, so the
+  core keeps a list beside the stream table wherever order reaches
+  the wire or the event list.
 
 ```koja
 match buffer
@@ -803,6 +824,10 @@ only `HTTP.Request` and `HTTP.Response`.
 - Trailers are decoded, because HPACK state depends on them, and
   then dropped. Responses with a 1xx status are dropped as well.
 
+The `:path` and `:authority` rules repeat a few `priv` functions of
+`Request.Parser`. A shared public function in the standard library
+is a follow-up.
+
 ### Settings and limits
 
 `Settings` holds what this end announces to its peer.
@@ -817,9 +842,13 @@ struct Settings
 end
 ```
 
+A setting takes effect when the peer acknowledges it. Until then the
+connection holds the peer to the default.
+
 A peer can also attack with frames that every setting allows. The
 connection counts these and closes with `ENHANCE_YOUR_CALM` when a
-count passes its cap.
+count passes its cap. The caps are private constants in this
+version, and each is a first value to tune.
 
 - Streams that the peer opens and resets at once (the 2023 rapid
   reset attack).
@@ -829,13 +858,19 @@ count passes its cap.
 
 ### Errors
 
-`receive` does not fail. When the peer breaks the protocol, the
+`read` does not fail. When the peer breaks the protocol, the
 connection still has a frame to send, and a failed call would lose
 the value that holds it.
 
-- A stream error queues RST_STREAM and returns a `Reset` event.
-- A connection error queues GOAWAY and returns a `Closed` event.
-  The owner writes the output and closes the socket.
+- A stream error queues RST_STREAM and returns a `Reset` event. A
+  request that the connection rejects before its `Request` event
+  gets RST_STREAM and no `Reset` event, because the owner never saw
+  the stream.
+- A connection error queues GOAWAY and returns a `Closed` event
+  with that code. The owner writes the output and closes the socket.
+- After a graceful GOAWAY from either end, `Closed(NoError)` comes
+  from the `read` that ends the last open stream. When no stream is
+  open, the connection closes at once.
 
 The functions that send do fail, with an `Error` that says why the
 connection cannot take the message.
@@ -844,6 +879,7 @@ connection cannot take the message.
 enum Error
   Closed
   GoingAway
+  InvalidRequest(String)
   StreamClosed
   StreamsExhausted
   TooManyStreams
@@ -853,7 +889,8 @@ end
 `TooManyStreams` means the peer's stream limit is reached, so a
 client waits or uses another connection. `GoingAway` and
 `StreamsExhausted` mean this connection takes no new streams, so a
-client opens a new one.
+client opens a new one. `InvalidRequest` is a `request` whose `uri`
+has no scheme or no host, and it carries what was wrong.
 
 `ErrorCode` is the fourteen codes from RFC 9113 section 7 and an
 `Unknown(Int)`. When a peer sends GOAWAY, each stream it did not
@@ -1092,7 +1129,7 @@ The worker holds the socket, a `ServerConnection`, and a
 On `IO.Ready` the worker reads until a read with a zero timeout
 finds nothing. A TLS session can hold decrypted bytes that the
 descriptor does not show, so one read for each wakeup is not enough.
-It gives the bytes to `receive`, acts on the events, writes
+It gives the bytes to `read`, acts on the events, writes
 `take_output()`, and watches the descriptor again.
 
 | Event               | The worker                                   |
@@ -1571,7 +1608,7 @@ upload or download, server-sent events, and gRPC.
 Many requests at once on one HTTP/2 connection are not streaming.
 They are in the first version.
 
-The `http2` core is ready for it. `receive` already returns each
+The `http2` core is ready for it. `read` already returns each
 `Data` event as it arrives, and `Collector` is the only part that
 joins them. Sending needs the functions that send a head, then
 pieces, then an end.
@@ -1718,7 +1755,7 @@ sections mark **Open**.
 9. **The cost of a connection value.** A `ServerConnection` holds a
    stream table and an output buffer, and it changes on every frame.
    [GAPS.md](GAPS.md) records that a field write builds a new
-   struct. A benchmark of `receive` must show that this is cheap
+   struct. A benchmark of `read` must show that this is cheap
    enough.
 10. **Several acceptors.** One listener process accepts every
     connection. Ranch and Thousand Island run many acceptors on one
