@@ -696,21 +696,21 @@ Each connection type has its own event enum, nested under it.
 ```koja
 enum ServerConnection.Event
   Closed(ErrorCode)
-  Data((StreamID, Binary))
+  Data{data: Binary, stream: StreamID}
   End(StreamID)
   Pong
-  Request((StreamID, Request))
-  Reset((StreamID, ErrorCode))
-  UnsupportedMethod((StreamID, String))
+  Request{head: Request, stream: StreamID}
+  Reset{code: ErrorCode, stream: StreamID}
+  UnsupportedMethod{method: String, stream: StreamID}
 end
 
 enum ClientConnection.Event
   Closed(ErrorCode)
-  Data((StreamID, Binary))
+  Data{data: Binary, stream: StreamID}
   End(StreamID)
   Pong
-  Reset((StreamID, ErrorCode))
-  Response((StreamID, Response))
+  Reset{code: ErrorCode, stream: StreamID}
+  Response{head: Response, stream: StreamID}
 end
 ```
 
@@ -718,6 +718,11 @@ end
 body. The body follows as `Data` events, and `End` says the peer
 finished the stream. `Reset` says the stream is gone and no more
 events come for it. `Closed` says the same for the connection.
+
+An event that carries a stream and one more value is a struct
+variant, so each value has a name. `head` is the name that `ranger`
+and `scout` already give that value. `data` is the name that the
+DATA frame gives its bytes.
 
 `UnsupportedMethod` is a request whose method is not in `Method`.
 The connection cannot build a `Request` for it, so the owner answers
@@ -732,7 +737,7 @@ connection cuts the body into DATA frames no larger than the peer
 allows. It holds back the bytes that the peer's flow control window
 does not cover and queues them as the window opens.
 
-The functions that send a head, then chunks, then an end land with
+The functions that send a head, then data, then an end land with
 streaming. They add to this surface and change none of it.
 
 ### `Collector` buffers a body once
@@ -743,7 +748,7 @@ is that code.
 
 ```koja
 collector = try collector.start(stream, head)
-collector = try collector.append(stream, chunk)
+collector = try collector.append(stream, data)
 (collector, message) = collector.finish(stream)
 ```
 
@@ -759,7 +764,8 @@ the stream's entry.
 `T` is bound by a protocol, `Collector.Message`, with two functions.
 `declared_length` reads the `content-length` of a head, and
 `with_body` returns the head with a body. `http2` implements it for
-`HTTP.Request` and `HTTP.Response`.
+`HTTP.Request` and `HTTP.Response`. The protocol is public, so an
+owner can implement it for a type of its own.
 
 The collector is the only part of the package that assumes a
 buffered body. A streaming owner skips it and reads the `Data`
@@ -774,9 +780,9 @@ when it has used the bytes, and that function lands with streaming.
 
 One type for each file. A type that no public field and no public
 signature names is `priv`. Koja does not let a public field or
-signature name a `priv` type, so the rest are public with
-`@doc false`, which keeps them out of the docs. No caller should use
-one.
+signature name a `priv` type, so the rest are public. Those that a
+caller has no use for carry `@doc false`, which keeps them out of
+the docs.
 
 - **`Frame`.** Encodes and decodes the ten frame types. The 9-byte
   frame header is one binary pattern.
@@ -801,8 +807,11 @@ match buffer
 end
 ```
 
-HPACK stays private because nothing else would use it. HTTP/3
-compresses headers with QPACK, which is a different format.
+The HPACK codec is public as `HPACK.Decoder`, `HPACK.Encoder`, and
+`HPACK.Field`. A program that reads or writes header blocks itself
+can use it with no connection. The tables and the integer and string
+coding under it stay out of the docs. HTTP/3 compresses headers with
+QPACK, which is a different format, so it does not use this codec.
 
 ### Mapping to `Request` and `Response`
 

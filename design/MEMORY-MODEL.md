@@ -68,10 +68,10 @@ concatenation allocates a new block.
 One uniqueness proof is implemented as consume fusion
 (`koja-ir/src/elaborate/consume.rs`). The pass walks consuming sites, which
 are instructions that can take over their receiver's storage: the
-`List.append`, `Map.put`, and `Set.insert` calls, and `<>` on `String` and
-`Binary`. When the receiver value provably dies at the site, which covers
-`xs = xs.append(x)` and `s = s <> piece` rebinds, chains like
-`s = s <> a <> b`, discarded owned temps, and a receiver read from a slot
+`List.append`, `Map.put`, `Map.remove`, `Set.insert`, and `Set.remove` calls,
+and `<>` on `String` and `Binary`. When the receiver value provably dies at
+the site, which covers `xs = xs.append(x)` and `s = s <> piece` rebinds,
+chains like `s = s <> a <> b`, discarded owned temps, and a receiver read from a slot
 whose next event is its exit `DropLocal` (the accumulator in
 `f(n - 1, acc.append(n))`), the pass rewrites the site into its consuming
 form. A mutator call becomes a consuming twin intrinsic. A concat is flagged

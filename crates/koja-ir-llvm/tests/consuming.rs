@@ -101,3 +101,25 @@ fn hashtable_twins_skip_the_copy_on_write_clone() {
         assert_contains(twin_body, "need_resize");
     }
 }
+
+#[test]
+fn remove_twins_skip_the_copy_on_write_clone() {
+    let source = "
+        m: Map<Int, Int> = Map.new()
+        m = m.remove(1)
+        s: Set<Int> = Set.new()
+        s = s.remove(3)
+        (m.length() + s.length()).print()
+        ";
+
+    let ir_text = emit(source);
+    for collection in ["Map", "Set"] {
+        let twin_body = body_of_define(&ir_text, &[collection, "remove", ".$consume$"]);
+        assert!(
+            !twin_body.contains("cow_entries"),
+            "the consuming `{collection}.remove` twin must not clone the receiver's buffers:\n{twin_body}",
+        );
+        // The backward shift stays, since the hole still has to close.
+        assert_contains(twin_body, "shift_scan");
+    }
+}

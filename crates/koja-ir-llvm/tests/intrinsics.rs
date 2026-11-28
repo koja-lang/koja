@@ -99,6 +99,38 @@ fn set_next_emits_bucket_cursor_scan() {
 }
 
 #[test]
+fn map_remove_shifts_entries_back() {
+    let source = "
+        map: Map<String, Int> = [\"key\": 1]
+        map.remove(\"key\")
+        ";
+
+    let script = lower_as_script(source);
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "shift_scan");
+    assert_contains(&ir_text, "shift_move");
+    assert_contains(&ir_text, "hole_state_ptr");
+}
+
+#[test]
+fn set_remove_shifts_entries_back() {
+    let source = "
+        set: Set<String> = [\"item\"]
+        set.remove(\"item\")
+        ";
+
+    let script = lower_as_script(source);
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "shift_scan");
+    assert_contains(&ir_text, "shift_move");
+    assert_contains(&ir_text, "hole_state_ptr");
+}
+
+#[test]
 fn user_main_runs_stdout_call_then_returns_void() {
     // The script body is a `Unit`-typed `IO.puts(...)` call.
     // `__koja_user_main` is the spawn thunk carrying the user body.

@@ -15,10 +15,11 @@
 //!
 //! Two kinds of [`ConsumingSite`] fuse:
 //!
-//! - **Collection mutators** (`List.append`, `Map.put`, `Set.insert`).
-//!   Collection buffers are deep-copied on `Clone`, so the IR death
-//!   proof alone is enough and the call is rewritten to a consuming
-//!   twin intrinsic that mutates in place unconditionally.
+//! - **Collection mutators** (`List.append`, `Map.put`, `Map.remove`,
+//!   `Set.insert`, `Set.remove`). Collection buffers are deep-copied
+//!   on `Clone`, so the IR death proof alone is enough and the call is
+//!   rewritten to a consuming twin intrinsic that mutates in place
+//!   unconditionally.
 //! - **Byte concat** (`<>` on `String` / `Binary`). Leaf blocks are
 //!   rc-shared on `Clone`, so the IR proof only covers the value. The
 //!   instruction is flagged `consumes_lhs` and the runtime checks
@@ -78,8 +79,8 @@ type EligibleMutators = BTreeMap<String, EligibleMutator>;
 enum ConsumingSite {
     /// `<>` on `String` / `Binary`. Fusing sets `consumes_lhs`.
     Concat { receiver: ValueId, result: ValueId },
-    /// `List.append` / `Map.put` / `Set.insert`. Fusing rewrites the
-    /// callee to its consuming twin.
+    /// A collection mutator from [`consuming_method`]. Fusing rewrites
+    /// the callee to its consuming twin.
     Mutator {
         original: IRSymbol,
         receiver: ValueId,
@@ -185,7 +186,9 @@ fn consuming_method(id: &IRIntrinsicId) -> Option<ConsumingMethod> {
     match id {
         IRIntrinsicId::List(ListMethod::Append) => Some(ConsumingMethod::ListAppend),
         IRIntrinsicId::Map(MapMethod::Put) => Some(ConsumingMethod::MapPut),
+        IRIntrinsicId::Map(MapMethod::Remove) => Some(ConsumingMethod::MapRemove),
         IRIntrinsicId::Set(SetMethod::Insert) => Some(ConsumingMethod::SetInsert),
+        IRIntrinsicId::Set(SetMethod::Remove) => Some(ConsumingMethod::SetRemove),
         _ => None,
     }
 }

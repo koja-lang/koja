@@ -350,7 +350,9 @@ intrinsic_methods! {
 pub enum ConsumingMethod {
     ListAppend,
     MapPut,
+    MapRemove,
     SetInsert,
+    SetRemove,
 }
 
 impl ConsumingMethod {
@@ -359,7 +361,9 @@ impl ConsumingMethod {
         match self {
             Self::ListAppend => "List.append",
             Self::MapPut => "Map.put",
+            Self::MapRemove => "Map.remove",
             Self::SetInsert => "Set.insert",
+            Self::SetRemove => "Set.remove",
         }
     }
 }

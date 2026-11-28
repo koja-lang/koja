@@ -1,7 +1,7 @@
 //! Consuming twins of the collection mutators (`List.append`,
-//! `Map.put`, `Set.insert`), minted by the consume-fusion pass in
-//! `koja_ir::elaborate::consume` when the receiver value is dead at
-//! the call site.
+//! `Map.put`, `Map.remove`, `Set.insert`, `Set.remove`), minted by
+//! the consume-fusion pass in `koja_ir::elaborate::consume` when the
+//! receiver value is dead at the call site.
 //!
 //! Eval values share `Rc`s freely (clone glue is an identity here),
 //! so buffer reuse is gated on true runtime uniqueness rather than
@@ -26,7 +26,9 @@ pub(super) fn dispatch(method: ConsumingMethod, args: &[Value]) -> Result<Value,
     match method {
         ConsumingMethod::ListAppend => append(args),
         ConsumingMethod::MapPut => put(args),
+        ConsumingMethod::MapRemove => map_remove(args),
         ConsumingMethod::SetInsert => insert(args),
+        ConsumingMethod::SetRemove => set_remove(args),
     }
 }
 
@@ -58,6 +60,21 @@ fn put(args: &[Value]) -> Result<Value, RuntimeError> {
     map::put(args)
 }
 
+fn map_remove(args: &[Value]) -> Result<Value, RuntimeError> {
+    if let Some(Value::Map(entries)) = args.first()
+        && Rc::strong_count(entries) == 1
+        && let Some(key) = args.get(1)
+    {
+        let mut entries_mut = entries.borrow_mut();
+        if let Some(index) = entries_mut.iter().position(|(k, _)| k == key) {
+            entries_mut.remove(index);
+        }
+        drop(entries_mut);
+        return Ok(Value::Map(entries.clone()));
+    }
+    map::remove(args)
+}
+
 fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
     if let Some(Value::Set(items)) = args.first()
         && Rc::strong_count(items) == 1
@@ -71,4 +88,19 @@ fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
         return Ok(Value::Set(items.clone()));
     }
     set::insert(args)
+}
+
+fn set_remove(args: &[Value]) -> Result<Value, RuntimeError> {
+    if let Some(Value::Set(items)) = args.first()
+        && Rc::strong_count(items) == 1
+        && let Some(item) = args.get(1)
+    {
+        let mut items_mut = items.borrow_mut();
+        if let Some(index) = items_mut.iter().position(|existing| existing == item) {
+            items_mut.remove(index);
+        }
+        drop(items_mut);
+        return Ok(Value::Set(items.clone()));
+    }
+    set::remove(args)
 }

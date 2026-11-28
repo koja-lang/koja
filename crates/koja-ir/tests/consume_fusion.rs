@@ -1,8 +1,9 @@
 //! Consume-fusion regressions (`elaborate::consume`). Pins that a
-//! `List.append` / `Map.put` / `Set.insert` call whose receiver value
-//! dies at the call site is rewritten to its `.$consume$` twin with
-//! the death deleted (and a `ConsumeLocal` handing over the slot when
-//! the receiver came from one), that the twin registers as an
+//! collection mutator call (`List.append`, `Map.put`, `Map.remove`,
+//! `Set.insert`, `Set.remove`) whose receiver value dies at the call
+//! site is rewritten to its `.$consume$` twin with the death deleted
+//! (and a `ConsumeLocal` handing over the slot when the receiver came
+//! from one), that the twin registers as an
 //! empty-bodied `Consuming` intrinsic next to the original, that a
 //! `String` / `Binary` `<>` whose lhs dies there is flagged
 //! `consumes_lhs`, and that a receiver that stays live keeps the
@@ -36,8 +37,8 @@ fn consuming_callees(blocks: &[IRBasicBlock]) -> Vec<&str> {
         .collect()
 }
 
-/// Copying-intrinsic calls to `method` (an unfused `append` / `put` /
-/// `insert`) across `blocks`.
+/// Copying-intrinsic calls to `method` (an unfused mutator such as
+/// `append` or `remove`) across `blocks`.
 fn copying_calls(blocks: &[IRBasicBlock], method: &str) -> usize {
     callees(blocks)
         .into_iter()
@@ -373,6 +374,53 @@ fn map_put_and_set_insert_rebinds_fuse() {
     );
     assert_twin_registered(&script, "put", ConsumingMethod::MapPut);
     assert_twin_registered(&script, "insert", ConsumingMethod::SetInsert);
+}
+
+#[test]
+fn map_remove_and_set_remove_rebinds_fuse() {
+    let source = "
+        fn prune(n: Int) -> Int
+          m: Map<Int, Int> = Map.new()
+          m = m.remove(n)
+          s: Set<Int> = Set.new()
+          s = s.remove(n)
+          m.length() + s.length()
+        end
+
+        prune(4)
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "prune").blocks;
+    assert_eq!(
+        consuming_callees(blocks).len(),
+        2,
+        "both the map remove and the set remove rebinds should fuse",
+    );
+    assert_eq!(copying_calls(blocks, "remove"), 0);
+    // Each collection has one twin here, so its name picks the twin.
+    assert_twin_registered(&script, "Map_", ConsumingMethod::MapRemove);
+    assert_twin_registered(&script, "Set_", ConsumingMethod::SetRemove);
+}
+
+#[test]
+fn live_remove_receiver_keeps_the_copying_intrinsic() {
+    let source = "
+        fn keep(m: Map<Int, Int>) -> Int
+          rest = m.remove(1)
+          rest.length() + m.length()
+        end
+
+        keep([1: 2])
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "keep").blocks;
+    assert!(
+        consuming_callees(blocks).is_empty(),
+        "a receiver that stays live must not fuse",
+    );
+    assert_eq!(copying_calls(blocks, "remove"), 1);
 }
 
 #[test]

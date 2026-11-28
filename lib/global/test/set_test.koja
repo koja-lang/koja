@@ -20,6 +20,68 @@ test "remove deletes element"
   assert not s.has?(10)
 end
 
+test "remove leaves a copy unchanged"
+  s: Set<String> = ["hello", "world"]
+  copy = s
+  s = s.remove("hello")
+
+  assert s.length() == 1
+  assert copy.length() == 2
+  assert copy.has?("hello")
+end
+
+test "insert after remove keeps one element"
+  s: Set<Int> = Set.new()
+  s = s.insert(1)
+  s = s.insert(3)
+  s = s.insert(5)
+  s = s.insert(7)
+  s = s.remove(1)
+  s = s.insert(7)
+
+  assert s.length() == 3
+  assert s.has?(7)
+end
+
+test "has? misses after many elements come and go"
+  s: Set<Int> = Set.new()
+  item = 0
+
+  while item < 64
+    s = s.insert(item)
+    s = s.remove(item)
+    item += 1
+  end
+
+  assert s.empty?()
+  assert not s.has?(1000)
+end
+
+test "remove keeps the other elements in reach"
+  s: Set<Int> = Set.new()
+  item = 0
+
+  while item < 48
+    s = s.insert(item)
+    item += 1
+  end
+
+  item = 0
+
+  while item < 48
+    s = s.remove(item)
+    item += 3
+  end
+
+  assert s.length() == 32
+  item = 0
+
+  while item < 48
+    assert s.has?(item) == (item % 3 != 0)
+    item += 1
+  end
+end
+
 test "from list deduplicates"
   s: Set<Int> = [1, 2, 3, 2, 1]
 

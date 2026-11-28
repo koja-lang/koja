@@ -20,6 +20,68 @@ test "remove deletes key"
   assert not m.has?("hello")
 end
 
+test "remove leaves a copy unchanged"
+  m: Map<String, Int> = ["hello": 10, "world": 20]
+  copy = m
+  m = m.remove("hello")
+
+  assert m.length() == 1
+  assert copy.length() == 2
+  assert copy.get("hello") == Option.Some(10)
+end
+
+test "put after remove keeps one entry for the key"
+  m: Map<Int, Int> = Map.new()
+  m = m.put(1, 10)
+  m = m.put(3, 30)
+  m = m.put(5, 50)
+  m = m.put(7, 70)
+  m = m.remove(1)
+  m = m.put(7, 71)
+
+  assert m.length() == 3
+  assert m.get(7) == Option.Some(71)
+end
+
+test "get misses after many keys come and go"
+  m: Map<Int, Int> = Map.new()
+  key = 0
+
+  while key < 64
+    m = m.put(key, key)
+    m = m.remove(key)
+    key += 1
+  end
+
+  assert m.empty?()
+  assert m.get(1000) == Option.None
+end
+
+test "remove keeps the other keys in reach"
+  m: Map<Int, Int> = Map.new()
+  key = 0
+
+  while key < 48
+    m = m.put(key, key)
+    key += 1
+  end
+
+  key = 0
+
+  while key < 48
+    m = m.remove(key)
+    key += 3
+  end
+
+  assert m.length() == 32
+  key = 0
+
+  while key < 48
+    assert m.has?(key) == (key % 3 != 0)
+    key += 1
+  end
+end
+
 test "literal syntax"
   m: Map<String, Int> = ["hello": 10, "world": 20]
 

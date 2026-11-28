@@ -1,0 +1,77 @@
+# Map loops around keys that come and go, the shape of a stream table
+# or a set of leases. Two controls come first, 1M inserts and 5M
+# lookups that hit. Then 2M keys pass through a map that holds 16 of
+# them at a time, and 20M lookups miss in that map. The last loop
+# holds 4096 live keys, so each `remove` works on a larger table.
+# BEAM's counterpart uses its built-in maps.
+
+t = Instant.now()
+grown: Map<Int, Int> = [:]
+i = 0
+
+while i < 1000000
+  grown = grown.put(i, i)
+  i += 1
+end
+
+put_elapsed = t.elapsed().to_milliseconds()
+"map_put_ms #{put_elapsed} length #{grown.length()}".print()
+
+t = Instant.now()
+hits = 0
+i = 0
+
+while i < 5000000
+  hits += grown.get(i % 1000000).or(0)
+  i += 1
+end
+
+get_elapsed = t.elapsed().to_milliseconds()
+"map_get_ms #{get_elapsed} sum #{hits}".print()
+
+t = Instant.now()
+window: Map<Int, Int> = [:]
+i = 0
+
+while i < 2000000
+  window = window.put(i, i)
+
+  if i >= 16
+    window = window.remove(i - 16)
+  end
+
+  i += 1
+end
+
+churn_elapsed = t.elapsed().to_milliseconds()
+"map_churn_ms #{churn_elapsed} length #{window.length()}".print()
+
+# Every key from 2M up is one that the map never held.
+t = Instant.now()
+misses = 0
+i = 0
+
+while i < 20000000
+  misses += window.get(i + 2000000).or(1)
+  i += 1
+end
+
+miss_elapsed = t.elapsed().to_milliseconds()
+"map_miss_ms #{miss_elapsed} sum #{misses}".print()
+
+t = Instant.now()
+wide: Map<Int, Int> = [:]
+i = 0
+
+while i < 2000000
+  wide = wide.put(i, i)
+
+  if i >= 4096
+    wide = wide.remove(i - 4096)
+  end
+
+  i += 1
+end
+
+wide_elapsed = t.elapsed().to_milliseconds()
+"map_wide_ms #{wide_elapsed} length #{wide.length()}".print()
