@@ -70,7 +70,7 @@ pub(super) fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Set(Rc::new(RefCell::new(items))))
 }
 
-fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
     let set = helpers::arg_set(args, 0, "Set.remove")?;
     let item = helpers::arg(args, 1, "Set.remove")?.clone();
     let mut items = set.borrow().clone();

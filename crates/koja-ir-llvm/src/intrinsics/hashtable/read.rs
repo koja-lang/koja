@@ -15,16 +15,13 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::byte_offset_ptr;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::{ElementOp, acquire_value, apply_in_slot};
-use crate::intrinsics::util::{
-    build_table_struct, expect_enum_symbol, extract_int, extract_pointer, nth_param, nth_struct,
-    ret,
-};
+use crate::intrinsics::util::{build_table_struct, expect_enum_symbol, nth_param, ret};
 use crate::types::ir_basic_type;
 
 use super::shift::emit_shift_back;
 use super::util::{
-    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table, entry_pointer,
-    extract_table_fields, resolve_key_hash_ops,
+    ProbeInputs, advance_slot, call_eq, call_hash, entry_pointer, extract_table_fields,
+    resolve_key_hash_ops, writable_table,
 };
 use super::{HashtableLayout, STATE_EMPTY};
 use crate::intrinsics::option;
@@ -172,19 +169,10 @@ pub(crate) fn emit_remove<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
+    consume_receiver: bool,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    // emit_remove keeps the manual 4-step extract because it needs
-    // `self_val` for the not-found return, and `extract_table_fields`
-    // discards the original struct.
-    let self_val = nth_struct(function, llvm_function, 0, "self");
-    let original = TableSnapshot {
-        entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
-        states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
-        length: extract_int(ctx, self_val, 2, "len")?,
-        capacity: extract_int(ctx, self_val, 3, "cap")?,
-    };
-    let table = clone_table(ctx, llvm_function, layout, &original, ElementOp::Acquire)?;
+    let table = writable_table(ctx, function, llvm_function, layout, consume_receiver)?;
     let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
@@ -199,9 +187,9 @@ pub(crate) fn emit_remove<'ctx>(
         },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
-    // The clone acquired this bucket's key (and value). The remove
-    // drops it from the table, so release that reference now,
-    // otherwise the slot's payload leaks once the table is reclaimed.
+    // The table owns a reference to this bucket's key (and value).
+    // The remove drops the bucket from the table, so release that
+    // reference now. Nothing else would release it later.
     apply_in_slot(ctx, ElementOp::Release, layout.key_ty, probe.e_ptr)?;
     if let Some(value_ty) = layout.value_ty {
         let value_ptr = byte_offset_ptr(ctx, probe.e_ptr, layout.key_size, "val_ptr")?;
@@ -221,8 +209,8 @@ pub(crate) fn emit_remove<'ctx>(
     )?;
     ret(ctx, removed.into())?;
 
-    // Not found. Return the untouched clone made above rather than
-    // `self_val`, which the caller drops.
+    // Not found. Return the writable table as it is. In copying mode
+    // that is the clone made above, since the caller drops `self`.
     ctx.builder.position_at_end(probe.not_found_bb);
     let unchanged = build_table_struct(
         ctx,

@@ -63,7 +63,7 @@ t = Instant.now()
 wide: Map<Int, Int> = [:]
 i = 0
 
-while i < 60000
+while i < 2000000
   wide = wide.put(i, i)
 
   if i >= 4096

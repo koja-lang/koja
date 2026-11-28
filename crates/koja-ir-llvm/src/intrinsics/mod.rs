@@ -86,7 +86,9 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
                 list::emit_append_consuming(ctx, function, llvm_function)
             }
             ConsumingMethod::MapPut => map::emit_put_consuming(ctx, function, llvm_function),
+            ConsumingMethod::MapRemove => map::emit_remove_consuming(ctx, function, llvm_function),
             ConsumingMethod::SetInsert => set::emit_insert_consuming(ctx, function, llvm_function),
+            ConsumingMethod::SetRemove => set::emit_remove_consuming(ctx, function, llvm_function),
         },
         IRIntrinsicId::Debug(impl_) => debug::emit_format(ctx, function, llvm_function, impl_),
         IRIntrinsicId::Equality(impl_) => equality::emit_eq(ctx, function, llvm_function, impl_),

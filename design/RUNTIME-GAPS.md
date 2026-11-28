@@ -164,8 +164,8 @@ stacks:
 
 `List`, `Map`, and `Set` buffers are deep-ownership with no reference
 count, so every copy is O(n). The consume-fusion pass
-(`koja-ir/src/elaborate/consume.rs`) makes `append` / `put` / `insert`
-reuse the receiver's buffer when the receiver value provably dies at
+(`koja-ir/src/elaborate/consume.rs`) makes `append` / `put` / `insert` /
+`remove` reuse the receiver's buffer when the receiver value provably dies at
 the call site, which covers `x = x.append(y)` rebind loops and
 discarded owned temps. Every mutator call outside those shapes still
 clones the whole backing buffer. The fusion is the tactical fix for

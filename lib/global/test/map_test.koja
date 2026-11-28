@@ -20,6 +20,16 @@ test "remove deletes key"
   assert not m.has?("hello")
 end
 
+test "remove leaves a copy unchanged"
+  m: Map<String, Int> = ["hello": 10, "world": 20]
+  copy = m
+  m = m.remove("hello")
+
+  assert m.length() == 1
+  assert copy.length() == 2
+  assert copy.get("hello") == Option.Some(10)
+end
+
 test "put after remove keeps one entry for the key"
   m: Map<Int, Int> = Map.new()
   m = m.put(1, 10)

@@ -45,7 +45,7 @@ elision pass, process-boundary move inference, or cross-process shared
 immutable block today. Two targeted ownership optimizations exist. The
 tail-call rewrite transfers argument ownership across the loop back edge.
 Consume fusion reuses a dead collection receiver in compiled `append`, `put`,
-and `insert` calls.
+`insert`, and `remove` calls.
 
 ## Measured baseline
 
@@ -97,9 +97,10 @@ Copying `List`, `Map`, or `Set` is proportional to the collection size because
 native clone glue allocates a fresh buffer and acquires every managed element.
 This is a larger cost than the phrase "cheap value copy" suggests.
 
-Consume fusion removes this cost when a compiled `List.append`, `Map.put`, or
-`Set.insert` receiver dies at the call site. It covers common rebind loops and
-owned temporary chains. Other mutators and unfused call shapes still copy.
+Consume fusion removes this cost when a compiled `List.append`, `Map.put`,
+`Map.remove`, `Set.insert`, or `Set.remove` receiver dies at the call site. It
+covers common rebind loops and owned temporary chains. Other mutators and
+unfused call shapes still copy.
 
 Remaining improvements include:
 

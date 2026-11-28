@@ -23,7 +23,7 @@ main() ->
   M1 = erlang:monotonic_time(microsecond),
   io:format("map_miss_ms ~p sum ~p~n", [(M1 - M0) div 1000, Misses]),
   W0 = erlang:monotonic_time(microsecond),
-  Wide = churn(#{}, 0, 60000, 4096),
+  Wide = churn(#{}, 0, 2000000, 4096),
   W1 = erlang:monotonic_time(microsecond),
   io:format("map_wide_ms ~p length ~p~n", [(W1 - W0) div 1000, maps:size(Wide)]).
 

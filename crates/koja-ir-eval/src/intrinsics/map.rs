@@ -94,7 +94,7 @@ pub(super) fn put(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Map(Rc::new(RefCell::new(entries))))
 }
 
-fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
     let map = helpers::arg_map(args, 0, "Map.remove")?;
     let key = helpers::arg(args, 1, "Map.remove")?.clone();
     let mut entries = map.borrow().clone();

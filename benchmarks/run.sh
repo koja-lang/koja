@@ -80,7 +80,7 @@ stat_of() {
 }
 
 LABELS=(loop_ms recursion_ms tail_scan_ms concat_ms interp_ms map_put_ms map_get_ms map_churn_ms map_miss_ms map_wide_ms msg_ms spawn_ms storm_ms)
-NAMES=("Tight loop (200M)" "Recursive fib(35)" "Tail scan (200M)" "String concat (10M)" "String interp (10M)" "Map put (1M)" "Map get (5M)" "Map churn (2M)" "Map miss (20M)" "Wide map churn (60k)" "Msg round-trip (1M)" "Spawn + reply (100k)" "10k process storm")
+NAMES=("Tight loop (200M)" "Recursive fib(35)" "Tail scan (200M)" "String concat (10M)" "String interp (10M)" "Map put (1M)" "Map get (5M)" "Map churn (2M)" "Map miss (20M)" "Wide map churn (2M)" "Msg round-trip (1M)" "Spawn + reply (100k)" "10k process storm")
 
 printf '\n%-22s %14s %14s %12s\n' "Benchmark" "Koja med (ms)" "BEAM med (ms)" "Koja/BEAM"
 printf '%s\n' "--------------------------------------------------------------------"

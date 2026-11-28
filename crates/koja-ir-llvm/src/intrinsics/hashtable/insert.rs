@@ -17,8 +17,8 @@ use crate::intrinsics::util::{build_table_struct, nth_param, ret};
 
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table, entry_pointer,
-    extract_table_fields, resolve_key_hash_ops,
+    ProbeInputs, advance_slot, call_eq, call_hash, entry_pointer, resolve_key_hash_ops,
+    writable_table,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
@@ -155,25 +155,6 @@ pub(crate) fn emit_set_insert<'ctx>(
         post.capacity,
     )?;
     ret(ctx, inserted.into())
-}
-
-/// The table a write path mutates. Copying mode clones the receiver's
-/// buffers first (copy-on-write). Consuming mode (`.$consume$` twins,
-/// see `koja_ir::elaborate::consume`) writes into the receiver's own
-/// buffers, since the receiver value is dead at the call site and its
-/// buffers would otherwise be freed there.
-fn writable_table<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    layout: &HashtableLayout<'_>,
-    consume_receiver: bool,
-) -> Result<TableSnapshot<'ctx>, LlvmError> {
-    let original = extract_table_fields(ctx, function, llvm_function)?;
-    if consume_receiver {
-        return Ok(original);
-    }
-    clone_table(ctx, llvm_function, layout, &original, ElementOp::Acquire)
 }
 
 /// Output of [`emit_insert_probe`]: which `update` vs `insert` block

@@ -30,7 +30,7 @@ pub(super) fn emit_set<'ctx>(
         SetMethod::Length => hashtable::emit_length(ctx, function, llvm_function),
         SetMethod::New => hashtable::emit_new(ctx, layout.entry_size),
         SetMethod::Next => hashtable::emit_next(ctx, function, llvm_function, &layout),
-        SetMethod::Remove => hashtable::emit_remove(ctx, function, llvm_function, &layout),
+        SetMethod::Remove => hashtable::emit_remove(ctx, function, llvm_function, &layout, false),
     }
 }
 
@@ -44,6 +44,18 @@ pub(super) fn emit_insert_consuming<'ctx>(
 ) -> Result<(), LlvmError> {
     let layout = set_layout(ctx, SetMethod::Insert, function)?;
     hashtable::emit_set_insert(ctx, function, llvm_function, &layout, true)
+}
+
+/// The consume-fusion twin of `remove`. The receiver value is dead at
+/// the call site, so the item leaves the receiver's own buffers
+/// instead of a clone of them.
+pub(super) fn emit_remove_consuming<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let layout = set_layout(ctx, SetMethod::Remove, function)?;
+    hashtable::emit_remove(ctx, function, llvm_function, &layout, true)
 }
 
 fn set_layout<'ctx, 'ty>(

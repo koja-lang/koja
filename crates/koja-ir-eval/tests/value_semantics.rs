@@ -112,3 +112,17 @@ fn fused_map_and_set_rebinds_preserve_aliases() {
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2121));
 }
+
+#[test]
+fn fused_remove_rebinds_preserve_aliases() {
+    let source = "
+        m: Map<Int, Int> = [1: 10, 2: 20]
+        m2 = m
+        m = m.remove(1)
+        s: Set<Int> = [1, 2]
+        s2 = s
+        s = s.remove(1)
+        m.length() * 1000 + m2.length() * 100 + s.length() * 10 + s2.length()
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(1212));
+}

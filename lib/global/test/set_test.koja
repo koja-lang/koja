@@ -20,6 +20,16 @@ test "remove deletes element"
   assert not s.has?(10)
 end
 
+test "remove leaves a copy unchanged"
+  s: Set<String> = ["hello", "world"]
+  copy = s
+  s = s.remove("hello")
+
+  assert s.length() == 1
+  assert copy.length() == 2
+  assert copy.has?("hello")
+end
+
 test "insert after remove keeps one element"
   s: Set<Int> = Set.new()
   s = s.insert(1)

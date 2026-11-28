@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `map = map.remove(key)` and `set = set.remove(item)` are faster, most of all on a large table.
+
 ### Fixed
 
 - A binary pattern with an integer segment that does not sit on byte boundaries compiles under `--backend=llvm`. `<<reserved::1, stream::31>>` binds both fields, and `<<5::3, rest::5>>` tests the literal.
