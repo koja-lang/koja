@@ -4,8 +4,8 @@
 //! Entries live off-heap behind `entries_ptr` as a flat
 //! `[Entry; capacity]` where each `Entry` is a `(K, V)` pair laid out
 //! by ABI. `states_ptr` is `[u8; capacity]` (`0` empty / `1`
-//! occupied / `2` tombstone). Both buffers malloc on `new`, realloc
-//! on resize, and free on drop.
+//! occupied). Both buffers malloc on `new`, realloc on resize, and
+//! free on drop.
 
 use koja_ir::{IRFunction, IRType, MapMethod};
 

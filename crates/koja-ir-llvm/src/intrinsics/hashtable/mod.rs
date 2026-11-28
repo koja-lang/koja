@@ -22,6 +22,8 @@
 //!   `remove` tails that consume it.
 //! - [`resize`]: the load-factor check and rehash loop reused by
 //!   every write path.
+//! - [`shift`]: the backward shift that closes the hole a `remove`
+//!   leaves.
 //! - [`insert`]: the write-side probe and the `Map.put` / `Set.insert`
 //!   tails.
 //! - [`from_list`]: `Set.from_list` and the inline `Set.insert` call
@@ -40,6 +42,7 @@ mod insert;
 mod lifecycle;
 mod read;
 mod resize;
+mod shift;
 mod util;
 
 pub(super) use cursor::emit_next;
@@ -57,12 +60,11 @@ pub(super) const INITIAL_CAPACITY: u64 = 8;
 /// Per-byte state of a single bucket. `STATE_EMPTY` is `memset`-
 /// produced (`0`) so a fresh malloc + memset routes through one
 /// runtime call. `STATE_OCCUPIED` is "live entry, probe match
-/// considers it". `STATE_TOMBSTONE` is "deleted entry, probe must
-/// advance past it", used by `remove` to keep the linear-probe
-/// chain intact without back-shifting.
+/// considers it". There is no state for a removed entry. `remove`
+/// shifts the entries after it back (see [`shift`]), so a probe that
+/// reaches an EMPTY slot has seen every entry it could match.
 pub(super) const STATE_EMPTY: u64 = 0;
 pub(super) const STATE_OCCUPIED: u64 = 1;
-pub(super) const STATE_TOMBSTONE: u64 = 2;
 
 /// Per-instantiation layout knob for the per-method emitters. Set
 /// passes `value_ty: None` (the entry is just `T`). Map passes

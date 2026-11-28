@@ -2,11 +2,12 @@
 //! `Map.has?` / `Set.has?`, and `Map.remove` / `Set.remove`. The
 //! probe walks slots until it lands on a state-EMPTY (miss) or
 //! finds an OCCUPIED slot whose key compares equal. The per-method
-//! tails branch off the same `found_bb` / `not_found_bb` pair.
+//! tails branch off the same `found_bb` / `not_found_bb` pair. The
+//! `remove` tail then closes the hole with [`emit_shift_back`].
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{FunctionValue, PointerValue};
+use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
@@ -20,21 +21,22 @@ use crate::intrinsics::util::{
 };
 use crate::types::ir_basic_type;
 
+use super::shift::emit_shift_back;
 use super::util::{
     ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table, entry_pointer,
     extract_table_fields, resolve_key_hash_ops,
 };
-use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE};
+use super::{HashtableLayout, STATE_EMPTY};
 use crate::intrinsics::option;
 
 /// Output of [`emit_read_only_probe`]. Caller positions at
 /// `found_bb` or `not_found_bb` to emit the per-method outcome.
-/// `s_ptr` / `e_ptr` are valid in `found_bb`.
+/// `e_ptr` / `pidx` are valid in `found_bb`.
 struct ReadOnlyProbe<'ctx> {
     e_ptr: PointerValue<'ctx>,
     found_bb: BasicBlock<'ctx>,
     not_found_bb: BasicBlock<'ctx>,
-    s_ptr: PointerValue<'ctx>,
+    pidx: IntValue<'ctx>,
 }
 
 /// Emit the read-only probe loop used by `get` / `has?` / `remove`.
@@ -77,7 +79,6 @@ fn emit_read_only_probe<'ctx>(
         .or_ice()?;
 
     let probe_bb = ctx.context.append_basic_block(llvm_function, "probe");
-    let check_bb = ctx.context.append_basic_block(llvm_function, "check");
     let cmp_bb = ctx.context.append_basic_block(llvm_function, "cmp");
     let found_bb = ctx.context.append_basic_block(llvm_function, "found");
     let not_found_bb = ctx.context.append_basic_block(llvm_function, "not_found");
@@ -110,22 +111,9 @@ fn emit_read_only_probe<'ctx>(
             "is_empty",
         )
         .or_ice()?;
+    // A slot that is not EMPTY holds a live entry.
     ctx.builder
-        .build_conditional_branch(is_empty, not_found_bb, check_bb)
-        .or_ice()?;
-
-    ctx.builder.position_at_end(check_bb);
-    let is_occ = ctx
-        .builder
-        .build_int_compare(
-            IntPredicate::EQ,
-            s_val,
-            i8_ty.const_int(STATE_OCCUPIED, false),
-            "is_occ",
-        )
-        .or_ice()?;
-    ctx.builder
-        .build_conditional_branch(is_occ, cmp_bb, advance_bb)
+        .build_conditional_branch(is_empty, not_found_bb, cmp_bb)
         .or_ice()?;
 
     ctx.builder.position_at_end(cmp_bb);
@@ -148,7 +136,7 @@ fn emit_read_only_probe<'ctx>(
         e_ptr,
         found_bb,
         not_found_bb,
-        s_ptr,
+        pidx,
     })
 }
 
@@ -185,7 +173,6 @@ pub(crate) fn emit_remove<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
 ) -> Result<(), LlvmError> {
-    let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     // emit_remove keeps the manual 4-step extract because it needs
     // `self_val` for the not-found return, and `extract_table_fields`
@@ -212,7 +199,7 @@ pub(crate) fn emit_remove<'ctx>(
         },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
-    // The clone acquired this bucket's key (and value). Tombstoning
+    // The clone acquired this bucket's key (and value). The remove
     // drops it from the table, so release that reference now,
     // otherwise the slot's payload leaks once the table is reclaimed.
     apply_in_slot(ctx, ElementOp::Release, layout.key_ty, probe.e_ptr)?;
@@ -220,9 +207,7 @@ pub(crate) fn emit_remove<'ctx>(
         let value_ptr = byte_offset_ptr(ctx, probe.e_ptr, layout.key_size, "val_ptr")?;
         apply_in_slot(ctx, ElementOp::Release, value_ty, value_ptr)?;
     }
-    ctx.builder
-        .build_store(probe.s_ptr, i8_ty.const_int(STATE_TOMBSTONE, false))
-        .or_ice()?;
+    emit_shift_back(ctx, llvm_function, layout, &table, &key_ops, probe.pidx)?;
     let new_len = ctx
         .builder
         .build_int_sub(table.length, i64_ty.const_int(1, false), "new_len")

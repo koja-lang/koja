@@ -158,7 +158,7 @@ pub(crate) fn list_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx>
 /// Open-addressed hash table with linear probing. `entries_ptr` is
 /// `[Entry; capacity]` (a `Map` entry is a key-value pair, a `Set`
 /// entry is just the element), `states_ptr` is `[u8; capacity]`
-/// (`0` empty / `1` occupied / `2` tombstone). Both buffers live
+/// (`0` empty / `1` occupied). Both buffers live
 /// off the GC-rooted heap. The struct itself is anonymous so every
 /// `IRType::Map { .. }` and `IRType::Set(_)` shares a single LLVM
 /// type. Element / entry size only enters when an emitter

@@ -1,7 +1,7 @@
 //! Write-side probe + per-method tails: `Map.put` overwrites or
 //! inserts a `(K, V)` pair, `Set.insert` is its single-payload twin.
 //! Both share [`emit_insert_probe`], which walks slots until the
-//! key matches (-> `update_bb`) or an EMPTY/TOMBSTONE slot is hit
+//! key matches (-> `update_bb`) or an EMPTY slot is hit
 //! (-> `insert_bb`).
 
 use inkwell::IntPredicate;
@@ -69,10 +69,8 @@ pub(crate) fn emit_map_put<'ctx>(
     )?;
     ret(ctx, updated.into())?;
 
-    // Insert path (empty or tombstone slot). Write key+value + state.
-    // Both payloads are acquired so the table owns independent
-    // references (the stale bytes a tombstone carries were never
-    // acquired, so the overwrite needs no release).
+    // Insert path (empty slot). Write key+value + state. Both
+    // payloads are acquired so the table owns independent references.
     ctx.builder.position_at_end(probe.insert_bb);
     let ins_ptr = entry_pointer(ctx, post.entries_ptr, probe.pidx, layout.entry_size)?;
     let insert_key = acquire_value(ctx, layout.key_ty, key_val)?;
@@ -136,9 +134,8 @@ pub(crate) fn emit_set_insert<'ctx>(
     )?;
     ret(ctx, already.into())?;
 
-    // Insert path (empty or tombstone slot). Write entry + state. The
-    // item is acquired so the set owns an independent reference (a
-    // tombstone's stale bytes were never acquired, so no release).
+    // Insert path (empty slot). Write entry + state. The item is
+    // acquired so the set owns an independent reference.
     ctx.builder.position_at_end(probe.insert_bb);
     let ins_ptr = entry_pointer(ctx, post.entries_ptr, probe.pidx, layout.entry_size)?;
     let insert_item = acquire_value(ctx, layout.key_ty, item_val)?;
@@ -192,7 +189,7 @@ pub(super) struct InsertProbe<'ctx> {
 
 /// Emit a probe loop that returns to the caller at either
 /// `update_bb` (existing key hit, caller decides what to do) or
-/// `insert_bb` (empty/tombstone slot, caller writes the new
+/// `insert_bb` (empty slot, caller writes the new
 /// entry). On entry the builder must sit at a single predecessor.
 /// On return it sits at an unspecified position and the caller
 /// branches to `update_bb` / `insert_bb` via `position_at_end`.
@@ -227,7 +224,6 @@ pub(super) fn emit_insert_probe<'ctx>(
         .or_ice()?;
 
     let probe_loop_bb = ctx.context.append_basic_block(llvm_function, "probe_loop");
-    let check_occ_bb = ctx.context.append_basic_block(llvm_function, "check_occ");
     let compare_key_bb = ctx.context.append_basic_block(llvm_function, "compare_key");
     let update_bb = ctx.context.append_basic_block(llvm_function, "update");
     let insert_bb = ctx.context.append_basic_block(llvm_function, "insert");
@@ -262,22 +258,11 @@ pub(super) fn emit_insert_probe<'ctx>(
             "is_empty",
         )
         .or_ice()?;
+    // A slot that is not EMPTY holds a live entry. The probe compares
+    // every entry of the run before it takes the EMPTY slot, so a key
+    // never lands in the table twice.
     ctx.builder
-        .build_conditional_branch(is_empty, insert_bb, check_occ_bb)
-        .or_ice()?;
-
-    ctx.builder.position_at_end(check_occ_bb);
-    let is_occ = ctx
-        .builder
-        .build_int_compare(
-            IntPredicate::EQ,
-            s_val,
-            i8_ty.const_int(STATE_OCCUPIED, false),
-            "is_occ",
-        )
-        .or_ice()?;
-    ctx.builder
-        .build_conditional_branch(is_occ, compare_key_bb, insert_bb)
+        .build_conditional_branch(is_empty, insert_bb, compare_key_bb)
         .or_ice()?;
 
     ctx.builder.position_at_end(compare_key_bb);
