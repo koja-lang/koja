@@ -25,9 +25,8 @@ use common::{
 fn binary_match_int_literal_emits_byte_extract_and_eq() {
     // Byte-literal patterns walk the byte-shift extract loop and
     // emit per-segment `icmp eq` against the masked extracted bits.
-    // The length check uses `icmp eq` (no greedy tail) and pins the
-    // running `bin_pat_byte_len` SSA name from
-    // `emit_binary_match::shift_right_by_three`.
+    // The length check uses `icmp eq` (no greedy tail) on the
+    // `bin_pat_bit_len` SSA name.
     let source = "
         data = <<0x01, 0x02, 0x03>>
         match data
@@ -113,6 +112,73 @@ fn binary_match_unsigned_binding_skips_sign_extend() {
 }
 
 #[test]
+fn binary_match_sub_byte_binding_emits_shift_and_mask() {
+    // A binding that does not sit on byte boundaries reads the bytes
+    // that cover it, moves each to its place, and masks the result
+    // to its width. `flag` is the top bit of byte 0, so the byte
+    // shifts right by 7. `id` runs to the end of byte 3, so its
+    // bytes only shift left.
+    let source = "
+        data = <<0x80, 0x00, 0x00, 0x07>>
+        match data
+          <<flag::1, id::31>> -> flag + id
+          _ -> 0
+        end
+    ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "bits_lshr");
+    assert_contains(&ir_text, "bits_shl");
+    assert_contains(&ir_text, "bits_mask");
+}
+
+#[test]
+fn binary_match_sub_byte_literal_emits_mask_and_eq() {
+    // A literal that does not sit on byte boundaries reads its bits
+    // the way a binding does and compares them in the test phase.
+    let source = "
+        data = <<0x80, 0x00, 0x00, 0x07>>
+        match data
+          <<1::1, id::31>> -> id
+          _ -> 0
+        end
+    ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "bits_mask");
+    assert_contains(&ir_text, "lit_eq");
+}
+
+#[test]
+fn binary_match_length_check_counts_bits() {
+    // The length check compares the bit length of the subject with
+    // the fixed bits of the pattern. A check on whole bytes would let
+    // a pattern of 12 bits match a subject of 8 and read past it.
+    let source = "
+        data = <<0xAB, 0xCD>>
+        match data
+          <<high::12, low::4>> -> high + low
+          _ -> 0
+        end
+    ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "icmp eq i64 %bin_pat_bit_len, 16");
+}
+
+#[test]
 fn binary_match_greedy_tail_emits_malloc_and_memcpy() {
     // Greedy `: Binary` allocates a fresh `[i64 rc][i64 bit_length][payload]`
     // block via the shared `init_heap_block` helper and `memcpy`s the
@@ -135,6 +201,29 @@ fn binary_match_greedy_tail_emits_malloc_and_memcpy() {
     assert_contains(&ir_text, "tail_len");
     assert_contains(&ir_text, "tail_cpy");
     assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
+}
+
+#[test]
+fn binary_match_greedy_tail_rounds_its_byte_count_up() {
+    // The tail of a `Bits` subject can end in a partial byte. The
+    // byte count for the allocation and the copy comes from the
+    // remaining bits and rounds up. A count that rounds down leaves
+    // that byte out of the block, and each later read goes past it.
+    let source = "
+        data = <<0xAA, 5::4>>
+        match data
+          <<head::8, rest: Bits>> -> head
+          _ -> 0
+        end
+    ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "%tail_bytes_rounded = add i64 %tail_bits, 7");
+    assert_contains(&ir_text, "%tail_bytes = lshr i64 %tail_bytes_rounded, 3");
 }
 
 #[test]

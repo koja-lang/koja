@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A binary pattern with an integer segment that does not sit on byte boundaries compiles under `--backend=llvm`. `<<reserved::1, stream::31>>` binds both fields, and `<<5::3, rest::5>>` tests the literal.
+- A binary pattern under `--backend=llvm` matches a `Bits` value by its bit length, as the interpreter does. `<<first::8>>` does not match a value of 12 bits.
+- A `: Bits` rest segment under `--backend=llvm` keeps the partial last byte of the value. For `<<0xAA, 5::4>>`, the arm `<<head::8, rest: Bits>>` binds `rest` to `<<5::4>>`.
+
 ## [0.21.1] - 2026-11-27
 
 ### Added
